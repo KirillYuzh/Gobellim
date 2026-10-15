@@ -24,6 +24,15 @@ type ChatEngine interface {
 	Ask(ctx context.Context, req ChatRequest) (domain.Answer, error)
 }
 
+type KnowledgeBase interface {
+	List(ctx context.Context, p domain.Principal) ([]domain.KnowledgeDoc, error)
+	Get(ctx context.Context, p domain.Principal, id string) (domain.KnowledgeDoc, error)
+	Create(ctx context.Context, p domain.Principal, doc domain.KnowledgeDoc) error
+	Update(ctx context.Context, p domain.Principal, doc domain.KnowledgeDoc) error
+	Delete(ctx context.Context, p domain.Principal, id string) error
+	Search(ctx context.Context, p domain.Principal, query string, topK int) ([]domain.KnowledgeHit, error)
+}
+
 type ChatRequest struct {
 	Principal domain.Principal
 	System    string

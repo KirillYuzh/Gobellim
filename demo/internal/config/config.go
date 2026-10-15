@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -11,6 +12,12 @@ type Config struct {
 	Addr            string
 	ESURL           string
 	WeatherBaseURL  string
+	EmbedBaseURL    string
+	EmbedModel      string
+	EmbedDim        int
+	ModelsDir       string
+	GLiNERModel     string
+	SeedKB          bool
 	PolicyPath      string
 	Credentials     string
 	GigaChatBaseURL string
@@ -30,6 +37,12 @@ func Load() (Config, error) {
 		Addr:            env("KIT_ADDR", ":8080"),
 		ESURL:           env("KIT_ES_URL", "http://localhost:9200"),
 		WeatherBaseURL:  env("WEATHER_BASE_URL", "https://wttr.in"),
+		EmbedBaseURL:    env("EMBED_BASE_URL", "http://localhost:8088/v1"),
+		EmbedModel:      env("EMBED_MODEL", "intfloat/multilingual-e5-small"),
+		EmbedDim:        envInt("EMBED_DIM", 384),
+		ModelsDir:       env("KIT_MODELS_DIR", "models"),
+		GLiNERModel:     env("GLINER_MODEL", "hivetrace__gliner-guard-omni"),
+		SeedKB:          envBool("SEED_KB", true),
 		PolicyPath:      env("KIT_POLICY", "demo/policy.yaml"),
 		Credentials:     env("GIGACHAT_CREDENTIALS", ""),
 		GigaChatBaseURL: env("GIGACHAT_BASE_URL", ""),
@@ -88,4 +101,24 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+func envInt(key string, fallback int) int {
+	n, err := strconv.Atoi(os.Getenv(key))
+	if err != nil {
+		return fallback
+	}
+	return n
+}
+
+func envBool(key string, fallback bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return fallback
+	}
+	return b
 }

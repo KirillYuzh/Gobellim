@@ -22,7 +22,7 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (i
 		return 0, nil, err
 	}
 	if body != nil {
-		if strings.HasSuffix(path, "_bulk") || strings.HasSuffix(path, "_msearch") {
+		if strings.Contains(path, "_bulk") || strings.Contains(path, "_msearch") {
 			req.Header.Set("Content-Type", "application/x-ndjson")
 		} else {
 			req.Header.Set("Content-Type", "application/json")
