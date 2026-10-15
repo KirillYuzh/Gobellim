@@ -33,6 +33,16 @@ services:
       elasticsearch:
         condition: service_healthy
 
+  embeddings:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8
+    # TEI publishes amd64 only; on Apple Silicon this runs under emulation.
+    platform: linux/amd64
+    command: ["--model-id", "intfloat/multilingual-e5-small", "--port", "80"]
+    ports:
+      - "8088:80"
+    volumes:
+      - tei-data:/data
+
   bot:
     build:
       context: ..
@@ -43,12 +53,18 @@ services:
       - KIT_ADDR=:8080
       - KIT_ES_URL=http://elasticsearch:9200
       - KIT_POLICY=/etc/kit/policy.yaml
+      - EMBED_BASE_URL=http://embeddings:80/v1
+      - EMBED_MODEL=intfloat/multilingual-e5-small
+      - EMBED_DIM=384
       - GIGACHAT_CREDENTIALS=${GIGACHAT_CREDENTIALS:-}
-      - GIGACHAT_MODEL=${GIGACHAT_MODEL:-GigaChat}
+      - GIGACHAT_MODEL=${GIGACHAT_MODEL:-GigaChat-2}
     read_only: true
     depends_on:
       elasticsearch:
         condition: service_healthy
+      embeddings:
+        condition: service_started
 
 volumes:
   es-data:
+  tei-data:

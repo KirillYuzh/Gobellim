@@ -28,6 +28,12 @@ go.work.sum
 # env file
 .env
 
+# Local model weights and native ONNX Runtime libraries
+models/
+.ort/
+
 # Editor/IDE
 # .idea/
 # .vscode/
+
+docs/internals

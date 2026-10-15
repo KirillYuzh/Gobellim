@@ -1,4 +1,4 @@
-# bot image (docs/01-architecture.md §4).
+# bot image (docs/internals/architecture.md).
 #
 # Default build: pure Go, CGO disabled, no native libraries required.
 # ORT build (ML guard + local ONNX embeddings): pass -tags ort AND enable cgo,

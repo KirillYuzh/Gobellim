@@ -1,5 +1,3 @@
-// Package store builds and parses Elasticsearch payloads; the ES client is
-// supplied by the caller.
 package store
 
 import (

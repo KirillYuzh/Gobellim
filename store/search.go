@@ -15,9 +15,8 @@ type Hit struct {
 	Source json.RawMessage
 }
 
-// ACLFilter is the deny-by-default ACL clause: the document tenant must match
-// the principal tenant and its acl list must contain one of the principal's
-// roles. An empty role list matches nothing.
+// ACLFilter is the deny-by-default ACL clause: the document tenant must match the principal tenant
+// and its acl list must contain one of the principal's roles. An empty role list matches nothing.
 func ACLFilter(p core.Principal) map[string]any {
 	roles := p.Roles
 	if roles == nil {
@@ -61,8 +60,8 @@ func (q SearchQuery) normalized() SearchQuery {
 	return q
 }
 
-// MSearchNDJSON renders the _msearch body: a kNN query followed by a BM25
-// query, both carrying the principal ACL filter.
+// MSearchNDJSON renders the _msearch body: a kNN query followed by a BM25 query,
+// both carrying the principal ACL filter.
 func MSearchNDJSON(q SearchQuery) ([]byte, error) {
 	q = q.normalized()
 	source := []string{"doc_id", TextField, "position"}

@@ -436,10 +436,14 @@ func (a *App) Ingest(ctx context.Context, doc Doc) (err error) {
 		indexed++
 	}
 
-	if _, err := a.esDo(ctx, call.Req{
+	resp, err := a.esDo(ctx, call.Req{
 		Kind: call.KindIngest, Name: store.IndexChunks, Permission: authz.PermIngest, TraceID: traceID,
-	}, http.MethodPost, "/_bulk", func() ([]byte, error) { return store.ChunksBulkBody(chunks) }); err != nil {
+	}, http.MethodPost, "/_bulk?refresh=wait_for", func() ([]byte, error) { return store.ChunksBulkBody(chunks) })
+	if err != nil {
 		return err
+	}
+	if err := store.BulkErrors(resp); err != nil {
+		return fmt.Errorf("kit: ingest: %w: %w", err, core.ErrProvider)
 	}
 	return nil
 }
@@ -539,7 +543,7 @@ func (a *App) Delete(ctx context.Context, docID string) error {
 	}}}}
 	_, err = a.esDo(ctx, call.Req{
 		Kind: call.KindIngest, Name: store.IndexChunks, Permission: authz.PermDelete,
-	}, http.MethodPost, "/"+store.IndexChunks+"/_delete_by_query", func() ([]byte, error) {
+	}, http.MethodPost, "/"+store.IndexChunks+"/_delete_by_query?refresh=true", func() ([]byte, error) {
 		return json.Marshal(query)
 	})
 	return err

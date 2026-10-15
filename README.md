@@ -28,9 +28,10 @@ again when the tool runs.
 in every chunk, so BM25 and kNN search always filter by the caller — never after
 the fact.
 
-**Safety fails closed.** Deterministic rules — patterns and checksums of Russian
-personal IDs — run before the model, over inputs, tool results and outputs. A
-guard error rejects the request instead of passing it through.
+**Safety fails closed.** Two layers run before the model, over inputs, tool
+results and outputs: deterministic rules (patterns and checksums of Russian
+personal IDs) and an ONNX GLiNER guard that masks PII and rejects unsafe
+messages. A guard error rejects the request instead of passing it through.
 
 **Bounded by construction.** Max steps, per-tool limits, tool timeouts and
 argument size are enforced by the runtime, not asked for in a prompt. No
@@ -97,6 +98,25 @@ hits, err := app.Search(ctx, kit.SearchRequest{Query: "refund policy", TopK: 5})
 err = app.Delete(ctx, "policy-1")
 err = app.Score(ctx, trace.Score{TraceID: traceID, Name: "helpful", Value: 1})
 ```
+
+## Try it
+
+The [demo](./demo) is an authorized support bot with a seeded knowledge base. It
+answers these right after `docker compose up -d`:
+
+| Ask                                      | Answer                         |
+| ---------------------------------------- | ------------------------------ |
+| «Сколько дней даётся на возврат товара?» | 14 календарных дней            |
+| «Сколько идёт доставка в другой город?»  | 2–5 рабочих дней, 400 ₽        |
+| «Какова гарантия на электронику?»        | 12 месяцев                     |
+| «Можно ли купить в рассрочку?»           | да, «0-0-6» от 3000 ₽          |
+| «Как связаться с поддержкой?»            | 8 800 555-35-35, круглосуточно |
+| «Как получить 5% кэшбэка?»               | от 50 000 ₽                    |
+| «Какая погода в Москве?»                 | real weather — `admin` only    |
+
+`user` never sees the weather tool: it is removed from the schema before the
+model runs. Ask from the [TUI or curl](./demo), or run the
+[Postman collection](./demo/postman).
 
 ## Learn more
 
