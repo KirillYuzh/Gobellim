@@ -1,0 +1,8 @@
+version: 1
+default: deny
+roles:
+  support:
+    permissions:
+      - search
+      - ingest
+      - tool:get_ticket

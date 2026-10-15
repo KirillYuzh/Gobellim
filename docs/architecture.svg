@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="700" viewBox="0 0 1160 700" role="img" aria-label="Gobellim architecture: your service calls the kit facade, every operation passes one gate, and the framework talks to the Elasticsearch, model, embedder and policy you provide.">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#94A3B8"/>
+    </marker>
+    <style>
+      .h{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+      .lbl{font-size:13px;font-weight:600;letter-spacing:1.4px;fill:#64748B}
+      .ttl{font-size:22px;font-weight:700;fill:#0F172A}
+      .sub{font-size:13px;fill:#64748B}
+      .nm{font-size:18px;font-weight:650;fill:#0F172A}
+      .ns{font-size:13px;fill:#475569}
+      .op{font-size:17px;font-weight:600;fill:#0F172A}
+      .gn{font-size:16px;font-weight:650;fill:#312E81}
+      .gs{font-size:11px;fill:#4338CA}
+      .cn{font-size:16px;font-weight:650;fill:#0F172A}
+      .cs{font-size:12px;fill:#64748B}
+      .cap{font-size:12px;font-style:italic;fill:#6D28D9}
+      .ln{font-size:13px;fill:#334155}
+    </style>
+  </defs>
+
+  <rect width="1160" height="700" fill="#FFFFFF"/>
+
+  <text class="h lbl" x="24" y="32">YOU WRITE</text>
+  <text class="h lbl" x="904" y="32">YOU PROVIDE</text>
+
+  <!-- left: your code -->
+  <rect x="24" y="48" width="252" height="96" rx="12" fill="#F0FDF4" stroke="#86EFAC" stroke-width="1.6"/>
+  <text class="h nm" x="36" y="84">HTTP handler / job</text>
+  <text class="h ns" x="36" y="110">calls kit operations</text>
+
+  <rect x="24" y="248" width="252" height="96" rx="12" fill="#F0FDF4" stroke="#86EFAC" stroke-width="1.6"/>
+  <text class="h nm" x="36" y="284">Your tools</text>
+  <text class="h ns" x="36" y="310">typed Go functions</text>
+
+  <rect x="24" y="448" width="252" height="96" rx="12" fill="#F0FDF4" stroke="#86EFAC" stroke-width="1.6"/>
+  <text class="h nm" x="36" y="484">Principal per request</text>
+  <text class="h ns" x="36" y="510">user · roles · tenant</text>
+
+  <!-- right: what you provide -->
+  <rect x="904" y="48" width="232" height="96" rx="12" fill="#FFF7ED" stroke="#FDBA74" stroke-width="1.6"/>
+  <text class="h nm" x="916" y="84">Elasticsearch</text>
+  <text class="h ns" x="916" y="110">documents · vectors · traces</text>
+
+  <rect x="904" y="200" width="232" height="96" rx="12" fill="#FFF7ED" stroke="#FDBA74" stroke-width="1.6"/>
+  <text class="h nm" x="916" y="236">LLM provider</text>
+  <text class="h ns" x="916" y="258">vLLM · Ollama ·</text>
+  <text class="h ns" x="916" y="276">OpenAI-compatible · GigaChat</text>
+
+  <rect x="904" y="352" width="232" height="96" rx="12" fill="#FFF7ED" stroke="#FDBA74" stroke-width="1.6"/>
+  <text class="h nm" x="916" y="388">Embedder (optional)</text>
+  <text class="h ns" x="916" y="414">ONNX or /v1/embeddings</text>
+
+  <rect x="904" y="504" width="232" height="96" rx="12" fill="#FFF7ED" stroke="#FDBA74" stroke-width="1.6"/>
+  <text class="h nm" x="916" y="540">policy.yaml</text>
+  <text class="h ns" x="916" y="566">roles → permissions</text>
+
+  <!-- center: the framework -->
+  <rect x="300" y="40" width="580" height="600" rx="18" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="1.8"/>
+  <text class="h ttl" x="324" y="78">Gobellim</text>
+  <text class="h sub" x="856" y="78" text-anchor="end">one import — the security and runtime layer</text>
+
+  <!-- app operations -->
+  <rect x="324" y="96" width="532" height="62" rx="12" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.4"/>
+  <text class="h lbl" x="340" y="120" style="font-size:11px">APP OPERATIONS</text>
+  <text class="h op" x="590" y="144" text-anchor="middle">Chat · Ingest · Search · Delete · Score · Generate</text>
+
+  <!-- the gate -->
+  <rect x="324" y="182" width="532" height="168" rx="14" fill="#EEF2FF" stroke="#818CF8" stroke-width="1.8"/>
+  <text class="h lbl" x="340" y="208" style="font-size:11px;fill:#4338CA">THE SINGLE CALL GATE</text>
+
+  <rect x="340" y="222" width="116" height="60" rx="10" fill="#FFFFFF" stroke="#6366F1" stroke-width="1.5"/>
+  <text class="h gn" x="398" y="247" text-anchor="middle">authz</text>
+  <text class="h gs" x="398" y="267" text-anchor="middle">role → permission</text>
+
+  <line x1="456" y1="252" x2="469" y2="252" stroke="#94A3B8" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <rect x="469" y="222" width="112" height="60" rx="10" fill="#FFFFFF" stroke="#6366F1" stroke-width="1.5"/>
+  <text class="h gn" x="525" y="247" text-anchor="middle">guard</text>
+  <text class="h gs" x="525" y="267" text-anchor="middle">L0 → L1 → L2</text>
+
+  <line x1="581" y1="252" x2="594" y2="252" stroke="#94A3B8" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <rect x="594" y="222" width="100" height="60" rx="10" fill="#FFFFFF" stroke="#6366F1" stroke-width="1.5"/>
+  <text class="h gn" x="644" y="247" text-anchor="middle">span</text>
+  <text class="h gs" x="644" y="267" text-anchor="middle">trace</text>
+
+  <line x1="694" y1="252" x2="707" y2="252" stroke="#94A3B8" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <rect x="707" y="222" width="132" height="60" rx="10" fill="#FFFFFF" stroke="#6366F1" stroke-width="1.5"/>
+  <text class="h gn" x="773" y="247" text-anchor="middle">fn</text>
+  <text class="h gs" x="773" y="267" text-anchor="middle">your code</text>
+
+  <text class="h cap" x="340" y="318">one path for every operation — no middleware, no bypass</text>
+
+  <!-- subsystems -->
+  <text class="h lbl" x="324" y="386" style="font-size:11px">SUBSYSTEMS</text>
+
+  <rect x="324" y="400" width="168" height="64" rx="10" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.4"/>
+  <text class="h cn" x="408" y="426" text-anchor="middle">tools</text>
+  <text class="h cs" x="408" y="448" text-anchor="middle">typed + validated</text>
+
+  <rect x="506" y="400" width="168" height="64" rx="10" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.4"/>
+  <text class="h cn" x="590" y="426" text-anchor="middle">model</text>
+  <text class="h cs" x="590" y="448" text-anchor="middle">provider clients</text>
+
+  <rect x="688" y="400" width="168" height="64" rx="10" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.4"/>
+  <text class="h cn" x="772" y="426" text-anchor="middle">embed</text>
+  <text class="h cs" x="772" y="448" text-anchor="middle">query · passages</text>
+
+  <rect x="324" y="478" width="168" height="64" rx="10" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.4"/>
+  <text class="h cn" x="408" y="504" text-anchor="middle">chunk</text>
+  <text class="h cs" x="408" y="526" text-anchor="middle">overlapping windows</text>
+
+  <rect x="506" y="478" width="168" height="64" rx="10" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.4"/>
+  <text class="h cn" x="590" y="504" text-anchor="middle">store</text>
+  <text class="h cs" x="590" y="526" text-anchor="middle">payloads + ACL</text>
+
+  <rect x="688" y="478" width="168" height="64" rx="10" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.4"/>
+  <text class="h cn" x="772" y="504" text-anchor="middle">trace</text>
+  <text class="h cs" x="772" y="526" text-anchor="middle">Langfuse shape</text>
+
+  <!-- bounded tool loop -->
+  <rect x="324" y="566" width="532" height="48" rx="12" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.4"/>
+  <text class="h ln" x="590" y="596" text-anchor="middle">Chat runs a bounded tool loop — max steps · per-tool limit · timeout</text>
+
+  <!-- wiring -->
+  <line x1="276" y1="96" x2="300" y2="96" stroke="#94A3B8" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <line x1="276" y1="296" x2="300" y2="296" stroke="#94A3B8" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <line x1="276" y1="496" x2="300" y2="496" stroke="#94A3B8" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <line x1="880" y1="96" x2="904" y2="96" stroke="#94A3B8" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <line x1="880" y1="248" x2="904" y2="248" stroke="#94A3B8" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <line x1="880" y1="400" x2="904" y2="400" stroke="#94A3B8" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <line x1="904" y1="552" x2="880" y2="552" stroke="#94A3B8" stroke-width="1.6" marker-end="url(#arrow)"/>
+</svg>

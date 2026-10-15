@@ -1,0 +1,18 @@
+# RBAC policy of the bot service. Only version 1 and a "deny" default are
+# supported; unknown fields are rejected at startup.
+version: 1
+default: deny
+
+roles:
+  # a regular user: weather only
+  user:
+    permissions:
+      - tool:get_weather
+
+  # an administrator: every permission, including tool:get_user_role
+  admin:
+    permissions:
+      - "*"
+
+# To watch RBAC work, remove "tool:get_weather" from the user role above and ask
+# the bot about the weather: the tool disappears from the schema the model sees.
