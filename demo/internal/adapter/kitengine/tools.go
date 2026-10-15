@@ -8,6 +8,8 @@ import (
 	"github.com/gobellim/kit/demo/internal/domain"
 )
 
+const kbToolTopK = 3
+
 type weatherIn struct {
 	City string `json:"city"`
 }
@@ -32,19 +34,32 @@ func (e *Engine) getWeather(ctx context.Context, in weatherIn) (weatherOut, erro
 	}, nil
 }
 
-type userRoleIn struct{}
-
-type userRoleOut struct {
-	Role string `json:"role"`
+type kbSearchIn struct {
+	Query string `json:"query"`
 }
 
-func (e *Engine) getUserRole(ctx context.Context, _ userRoleIn) (userRoleOut, error) {
+type kbSearchOut struct {
+	Results []kbSearchResult `json:"results"`
+}
+
+type kbSearchResult struct {
+	DocID string `json:"doc_id"`
+	Title string `json:"title"`
+	Text  string `json:"text"`
+}
+
+func (e *Engine) kbSearch(ctx context.Context, in kbSearchIn) (kbSearchOut, error) {
 	principal, ok := kit.PrincipalFrom(ctx)
 	if !ok {
-		return userRoleOut{}, fmt.Errorf("no principal in tool context: %w", domain.ErrUnauthorized)
+		return kbSearchOut{}, fmt.Errorf("no principal in tool context: %w", domain.ErrUnauthorized)
 	}
-	if len(principal.Roles) == 0 {
-		return userRoleOut{}, fmt.Errorf("principal has no role: %w", domain.ErrNotFound)
+	hits, err := e.Search(ctx, domainPrincipal(principal), in.Query, kbToolTopK)
+	if err != nil {
+		return kbSearchOut{}, err
 	}
-	return userRoleOut{Role: principal.Roles[0]}, nil
+	out := kbSearchOut{Results: make([]kbSearchResult, 0, len(hits))}
+	for _, h := range hits {
+		out.Results = append(out.Results, kbSearchResult{DocID: h.DocID, Title: h.Title, Text: h.Text})
+	}
+	return out, nil
 }

@@ -43,8 +43,26 @@ type Weather struct {
 	Description  string
 }
 
+type KnowledgeDoc struct {
+	ID     string
+	Title  string
+	Text   string
+	ACL    []string
+	Chunks int
+}
+
+type KnowledgeHit struct {
+	DocID    string
+	Title    string
+	Text     string
+	Position int
+}
+
+const Tenant = "bot"
+
 var (
 	ErrUnauthorized = errors.New("unauthorized")
+	ErrForbidden    = errors.New("forbidden")
 	ErrInvalidInput = errors.New("invalid input")
 	ErrNotFound     = errors.New("not found")
 	ErrUnavailable  = errors.New("upstream unavailable")

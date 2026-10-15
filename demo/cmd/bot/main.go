@@ -15,13 +15,16 @@ import (
 
 	"github.com/gobellim/kit/authz"
 	"github.com/gobellim/kit/demo/internal/adapter/elastic"
+	"github.com/gobellim/kit/demo/internal/adapter/guardrail"
 	"github.com/gobellim/kit/demo/internal/adapter/httpapi"
 	"github.com/gobellim/kit/demo/internal/adapter/kitengine"
 	"github.com/gobellim/kit/demo/internal/adapter/memory"
 	"github.com/gobellim/kit/demo/internal/adapter/weather"
 	"github.com/gobellim/kit/demo/internal/config"
 	"github.com/gobellim/kit/demo/internal/domain"
+	"github.com/gobellim/kit/demo/internal/seed"
 	"github.com/gobellim/kit/demo/internal/usecase"
+	"github.com/gobellim/kit/embed"
 	"github.com/gobellim/kit/model"
 )
 
@@ -57,16 +60,27 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	embedder, err := embed.NewOpenAI(embed.OpenAIConfig{
+		BaseURL:    cfg.EmbedBaseURL,
+		Model:      cfg.EmbedModel,
+		Dim:        cfg.EmbedDim,
+		HTTPClient: client,
+	})
+	if err != nil {
+		return err
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	engine, err := kitengine.New(ctx, kitengine.Config{
-		ES:      elastic.New(cfg.ESURL, client),
-		LLM:     llm,
-		Policy:  policy,
-		Weather: weather.New(client, cfg.WeatherBaseURL),
-		Logger:  log,
+		ES:       elastic.New(cfg.ESURL, client),
+		LLM:      llm,
+		Embedder: embedder,
+		Policy:   policy,
+		GuardL2:  guardrail.New(cfg.ModelsDir, cfg.GLiNERModel, log),
+		Weather:  weather.New(client, cfg.WeatherBaseURL),
+		Logger:   log,
 	})
 	if err != nil {
 		return err
@@ -83,10 +97,24 @@ func run() error {
 	})
 	auth := usecase.NewAuth(directory, memory.NewTokens(), cfg.TokenTTL)
 	bot := usecase.NewBot(engine)
+	kb := usecase.NewKnowledge(engine)
+
+	if cfg.SeedKB {
+		docs, err := seed.Docs()
+		if err != nil {
+			return err
+		}
+		created, err := kb.Seed(ctx, docs)
+		if err != nil {
+			log.Warn("knowledge base not seeded", "err", err)
+		} else {
+			log.Info("knowledge base ready", "seeded", created, "documents", len(docs))
+		}
+	}
 
 	server := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(auth, bot, log),
+		Handler:           httpapi.New(auth, bot, kb, log),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {
@@ -96,7 +124,9 @@ func run() error {
 		_ = server.Shutdown(shutdownCtx)
 	}()
 
-	log.Info("bot listening", "addr", cfg.Addr, "elasticsearch", cfg.ESURL, "policy", cfg.PolicyPath)
+	log.Info("bot listening",
+		"addr", cfg.Addr, "elasticsearch", cfg.ESURL, "embeddings", cfg.EmbedBaseURL,
+		"policy", cfg.PolicyPath, "guard_l2", engine.GuardL2())
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

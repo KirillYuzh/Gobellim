@@ -29,6 +29,8 @@ func statusOf(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, domain.ErrUnauthorized):
 		return http.StatusUnauthorized
+	case errors.Is(err, domain.ErrForbidden):
+		return http.StatusForbidden
 	case errors.Is(err, domain.ErrNotFound):
 		return http.StatusNotFound
 	case errors.Is(err, domain.ErrUnavailable):
@@ -44,6 +46,8 @@ func messageOf(err error) string {
 		return "invalid request"
 	case errors.Is(err, domain.ErrUnauthorized):
 		return "unauthorized"
+	case errors.Is(err, domain.ErrForbidden):
+		return "forbidden"
 	case errors.Is(err, domain.ErrNotFound):
 		return "not found"
 	case errors.Is(err, domain.ErrUnavailable):

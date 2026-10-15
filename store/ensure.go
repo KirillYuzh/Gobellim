@@ -14,8 +14,8 @@ type step struct {
 }
 
 // EnsureSchema creates the ILM policy, the trace/observation data stream
-// templates and, when dims is positive, the chunks index. It is idempotent: an
-// "already exists" response is treated as success.
+// templates and, when dims is positive, the chunks index.
+// It is idempotent: an "already exists" response is treated as success.
 func EnsureSchema(ctx context.Context, es ES, dims int) error {
 	ilm, err := ILMPolicyBody(DefaultILMDays)
 	if err != nil {

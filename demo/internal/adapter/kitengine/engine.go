@@ -10,39 +10,49 @@ import (
 	"github.com/gobellim/kit/authz"
 	"github.com/gobellim/kit/demo/internal/domain"
 	"github.com/gobellim/kit/demo/internal/usecase"
+	"github.com/gobellim/kit/embed"
+	"github.com/gobellim/kit/guard"
 	"github.com/gobellim/kit/model"
 	"github.com/gobellim/kit/store"
 )
 
 type Config struct {
-	ES      store.ES
-	LLM     model.Client
-	Policy  *authz.Policy
-	Weather usecase.WeatherProvider
-	Logger  *slog.Logger
+	ES       store.ES
+	LLM      model.Client
+	Embedder embed.Embedder
+	Policy   *authz.Policy
+	GuardL2  guard.Detector
+	Weather  usecase.WeatherProvider
+	Logger   *slog.Logger
 }
 
 type Engine struct {
 	app     *kit.App
+	es      store.ES
 	weather usecase.WeatherProvider
+	guardL2 bool
 }
 
 func New(ctx context.Context, cfg Config) (*Engine, error) {
 	app, err := kit.New(ctx, kit.Config{
-		ES:     cfg.ES,
-		LLM:    cfg.LLM,
-		Policy: cfg.Policy,
-		Logger: cfg.Logger,
+		ES:       cfg.ES,
+		LLM:      cfg.LLM,
+		Embedder: cfg.Embedder,
+		Policy:   cfg.Policy,
+		GuardL2:  cfg.GuardL2,
+		Logger:   cfg.Logger,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	e := &Engine{app: app, weather: cfg.Weather}
-	if _, err := kit.Tool(app, "get_weather", e.getWeather, kit.Desc("Return the current weather for a city.")); err != nil {
+	e := &Engine{app: app, es: cfg.ES, weather: cfg.Weather, guardL2: cfg.GuardL2 != nil}
+	if _, err := kit.Tool(app, "kb_search", e.kbSearch,
+		kit.Desc("Поиск по базе знаний поддержки: возврат и обмен, доставка, гарантия, оплата и рассрочка, поддержка, программа лояльности. Для погоды этот инструмент не подходит.")); err != nil {
 		return nil, err
 	}
-	if _, err := kit.Tool(app, "get_user_role", e.getUserRole, kit.Desc("Return the caller's role in the system.")); err != nil {
+	if _, err := kit.Tool(app, "get_weather", e.getWeather,
+		kit.Desc("Текущая погода в городе.")); err != nil {
 		return nil, err
 	}
 	return e, nil
@@ -50,14 +60,12 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 
 func (e *Engine) Setup(ctx context.Context) error { return e.app.Setup(ctx) }
 
+func (e *Engine) GuardL2() bool { return e.guardL2 }
+
 func (e *Engine) Close(ctx context.Context) error { return e.app.Close(ctx) }
 
 func (e *Engine) Ask(ctx context.Context, req usecase.ChatRequest) (domain.Answer, error) {
-	ctx = kit.WithPrincipal(ctx, kit.Principal{
-		UserID: req.Principal.UserID,
-		Roles:  []string{string(req.Principal.Role)},
-		Tenant: req.Principal.Tenant,
-	})
+	ctx = kit.WithPrincipal(ctx, kitPrincipal(req.Principal))
 
 	answer, err := e.app.Chat(ctx, kit.ChatRequest{
 		System:   req.System,
@@ -67,6 +75,18 @@ func (e *Engine) Ask(ctx context.Context, req usecase.ChatRequest) (domain.Answe
 		return domain.Answer{}, translate(err)
 	}
 	return domain.Answer{Content: answer.Content}, nil
+}
+
+func kitPrincipal(p domain.Principal) kit.Principal {
+	return kit.Principal{UserID: p.UserID, Roles: []string{string(p.Role)}, Tenant: p.Tenant}
+}
+
+func domainPrincipal(p kit.Principal) domain.Principal {
+	role := domain.RoleUser
+	if len(p.Roles) > 0 {
+		role = domain.Role(p.Roles[0])
+	}
+	return domain.Principal{UserID: p.UserID, Role: role, Tenant: p.Tenant}
 }
 
 func translate(err error) error {

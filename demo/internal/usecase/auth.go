@@ -17,7 +17,7 @@ type Auth struct {
 }
 
 func NewAuth(directory Directory, tokens TokenIssuer, ttl time.Duration) *Auth {
-	return &Auth{directory: directory, tokens: tokens, ttl: ttl, tenant: "bot"}
+	return &Auth{directory: directory, tokens: tokens, ttl: ttl, tenant: domain.Tenant}
 }
 
 func (a *Auth) Login(ctx context.Context, login string) (domain.Session, error) {

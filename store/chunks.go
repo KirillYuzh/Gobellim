@@ -43,8 +43,8 @@ func bulkBody(op, index string, docs []Doc) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Chunk is one indexed passage; the ACL is computed at write time and stored
-// in the document.
+// Chunk is one indexed passage;
+// the ACL is computed at write time and stored in the document.
 type Chunk struct {
 	ID         string
 	DocID      string
