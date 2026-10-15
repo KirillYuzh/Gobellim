@@ -6,23 +6,24 @@ An authorized bot built on the GigaChat API.
 
 The bot has two tools:
 
-- `kb_search`: search over the knowledge base (user, admin)
-- `get_weather`: current weather in a city (admin)
+- `kb_search`: search over the knowledge base (alice, root)
+- `get_weather`: current weather in a city (root)
 
 ## What it answers out of the box
 
 The knowledge base is seeded on start, so these work right after
 `docker compose up -d`:
 
-| Ask                                                     | Answer                         |
-| ------------------------------------------------------- | ------------------------------ |
-| «Сколько дней даётся на возврат товара?»                | 14 календарных дней            |
-| «Сколько идёт доставка в другой город и сколько стоит?» | 2–5 рабочих дней, 400 ₽        |
-| «Какова гарантия на электронику?»                       | 12 месяцев                     |
-| «Можно ли купить в рассрочку?»                          | да, «0-0-6» от 3000 ₽          |
-| «Как связаться с поддержкой?»                           | 8 800 555-35-35, круглосуточно |
-| «Как получить 5% кэшбэка?»                              | от 50 000 ₽                    |
-| «Какая погода в Москве?»                                | real weather — `admin` only    |
+| Ask                                            | Answer                   |
+| ---------------------------------------------- | ------------------------ |
+| "How many days do I have to return an item?"   | 14 calendar days         |
+| "How long does delivery to another city take?" | 2–5 business days, ₽400  |
+| "What is the warranty on electronics?"         | 12 months                |
+| "Can I buy in installments?"                   | yes, "0-0-6" from ₽3,000 |
+| "How can I contact support?"                   | 8 800 555-35-35, 24/7    |
+| "How do I get 5% cashback?"                    | from ₽50,000             |
+
+The seeded sources are Russian, so the bot may answer in Russian.
 
 ## Layers
 
@@ -89,17 +90,14 @@ TOKEN=$(curl -s localhost:8080/auth/login -d '{"login":"root"}' | sed 's/.*"toke
 curl -s localhost:8080/auth/me -H "Authorization: Bearer $TOKEN"
 
 curl -s localhost:8080/bot/ask -H "Authorization: Bearer $TOKEN" \
-  -d '{"prompt":"Сколько дней даётся на возврат товара?"}'
+  -d '{"prompt":"How many days do I have to return an item?"}'
 
 curl -s localhost:8080/bot/ask -H "Authorization: Bearer $TOKEN" \
-  -d '{"prompt":"Какая погода в Москве?"}'
-
-curl -s localhost:8080/bot/ask -H "Authorization: Bearer $TOKEN" \
-  -d '{"prompt":"Расскажи анекдот"}'      # no tool needed
+  -d '{"prompt":"Tell me a joke"}'      # no tool needed
 ```
 
-`alice` gets the same answer about returns, but answers the weather question with
-a refusal — the tool is not in her schema.
+`alice` gets the same answers; asking her for the weather returns a refusal,
+because the tool is not in her schema.
 
 ## Guardrails
 

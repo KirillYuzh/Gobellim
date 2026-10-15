@@ -5,7 +5,7 @@
 ![Go](https://img.shields.io/badge/Go-1.24-00ADD8?logo=go&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-_Secure LLM primitives for Go._ RAG, вызов инструментов и guardrails за одним
+_Безопасные LLM-примитивы для Go._ RAG, вызов инструментов и guardrails за одним
 проверяющим права путём вызова.
 
 ![Архитектура Gobellim](docs/architecture.svg)
@@ -79,7 +79,7 @@ answer, err := app.Chat(ctx, kit.ChatRequest{
 ```
 
 ```go
-// Structured output: JSON Schema выводится из типа Go.
+// Структурированный вывод: JSON Schema выводится из типа Go.
 type Ticket struct {
 	Severity int    `json:"severity"`
 	Summary  string `json:"summary"`

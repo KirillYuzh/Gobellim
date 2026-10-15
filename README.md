@@ -8,7 +8,7 @@
 _Secure LLM primitives for Go._ Retrieval, tool calling and guardrails behind one
 authorization-checked call path.
 
-![Gobellim architecture](docs/architecture.svg)
+![Gobellim architecture](docs/architecture.en.svg)
 
 ## Why Gobellim?
 
@@ -104,18 +104,18 @@ err = app.Score(ctx, trace.Score{TraceID: traceID, Name: "helpful", Value: 1})
 The [demo](./demo) is an authorized support bot with a seeded knowledge base. It
 answers these right after `docker compose up -d`:
 
-| Ask                                      | Answer                         |
-| ---------------------------------------- | ------------------------------ |
-| «Сколько дней даётся на возврат товара?» | 14 календарных дней            |
-| «Сколько идёт доставка в другой город?»  | 2–5 рабочих дней, 400 ₽        |
-| «Какова гарантия на электронику?»        | 12 месяцев                     |
-| «Можно ли купить в рассрочку?»           | да, «0-0-6» от 3000 ₽          |
-| «Как связаться с поддержкой?»            | 8 800 555-35-35, круглосуточно |
-| «Как получить 5% кэшбэка?»               | от 50 000 ₽                    |
-| «Какая погода в Москве?»                 | real weather — `admin` only    |
+| Ask                                            | Answer                   |
+| ---------------------------------------------- | ------------------------ |
+| "How many days do I have to return an item?"   | 14 calendar days         |
+| "How long does delivery to another city take?" | 2–5 business days, ₽400  |
+| "What is the warranty on electronics?"         | 12 months                |
+| "Can I buy in installments?"                   | yes, "0-0-6" from ₽3,000 |
+| "How can I contact support?"                   | 8 800 555-35-35, 24/7    |
+| "How do I get 5% cashback?"                    | from ₽50,000             |
 
-`user` never sees the weather tool: it is removed from the schema before the
-model runs. Ask from the [TUI or curl](./demo), or run the
+The seeded sources are Russian, so the bot may answer in Russian. `admin` can
+additionally ask for the weather; `user` never sees that tool: it is removed from
+the schema before the model runs. Ask from the [TUI or curl](./demo), or run the
 [Postman collection](./demo/postman).
 
 ## Learn more

@@ -27,7 +27,7 @@
 ## Слои
 
 ```
-cmd/bot            composition root: конфигурация, адаптеры, HTTP-сервер
+cmd/bot            корень композиции: конфигурация, адаптеры, HTTP-сервер
 cmd/tui            терминальный клиент для бота
 internal/
   domain           сущности, ошибки, principal в контексте — не импортирует ничего
@@ -35,10 +35,10 @@ internal/
   config           .env + переменные окружения
   seed             база знаний, поставляемая с демо
   adapter/
-    httpapi        транспорт: маршруты, bearer-auth, ошибки домена → HTTP
+    httpapi        транспорт: маршруты, авторизация bearer, ошибки домена → HTTP
     kitengine      чат, база знаний и два инструмента поверх kit
     weather        провайдер за инструментом get_weather
-    memory         mock Directory и выдача bearer-токенов
+    memory         заглушка Directory и выдача bearer-токенов
     elastic        клиент Elasticsearch, который получает kit
 postman            коллекция и окружение для всех эндпоинтов
 policy.yaml        RBAC: user → база знаний, admin → база знаний + погода
@@ -70,18 +70,18 @@ go run ./demo/cmd/bot
 
 ## Эндпоинты
 
-| Метод    | Путь          | Auth   | Тело                          | Ответ                                             |
-| -------- | ------------- | ------ | ----------------------------- | ------------------------------------------------- |
-| `GET`    | `/healthz`    | —      | —                             | `{"status":"ok"}`                                 |
-| `POST`   | `/auth/login` | —      | `{"login":"alice"}`           | `{"token","user_id","login","role","expires_at"}` |
-| `GET`    | `/auth/me`    | bearer | —                             | `{"user_id","login","role","tenant"}`             |
-| `POST`   | `/bot/ask`    | bearer | `{"prompt":"…"}`              | `{"answer":"…"}`                                  |
-| `GET`    | `/kb`         | admin  | —                             | `{"documents":[{"id","title","chunks"}]}`         |
-| `POST`   | `/kb`         | admin  | `{"id","title","text","acl"}` | `{"id","title"}`                                  |
-| `GET`    | `/kb/{id}`    | admin  | —                             | `{"id","title","text","acl","chunks"}`            |
-| `PUT`    | `/kb/{id}`    | admin  | `{"title","text","acl"}`      | `{"id","title"}`                                  |
-| `DELETE` | `/kb/{id}`    | admin  | —                             | `204`                                             |
-| `POST`   | `/kb/search`  | bearer | `{"query":"…","top_k":3}`     | `{"hits":[{"doc_id","title","text","position"}]}` |
+| Метод    | Путь          | Авторизация | Тело                          | Ответ                                             |
+| -------- | ------------- | ----------- | ----------------------------- | ------------------------------------------------- |
+| `GET`    | `/healthz`    | —           | —                             | `{"status":"ok"}`                                 |
+| `POST`   | `/auth/login` | —           | `{"login":"alice"}`           | `{"token","user_id","login","role","expires_at"}` |
+| `GET`    | `/auth/me`    | bearer      | —                             | `{"user_id","login","role","tenant"}`             |
+| `POST`   | `/bot/ask`    | bearer      | `{"prompt":"…"}`              | `{"answer":"…"}`                                  |
+| `GET`    | `/kb`         | admin       | —                             | `{"documents":[{"id","title","chunks"}]}`         |
+| `POST`   | `/kb`         | admin       | `{"id","title","text","acl"}` | `{"id","title"}`                                  |
+| `GET`    | `/kb/{id}`    | admin       | —                             | `{"id","title","text","acl","chunks"}`            |
+| `PUT`    | `/kb/{id}`    | admin       | `{"title","text","acl"}`      | `{"id","title"}`                                  |
+| `DELETE` | `/kb/{id}`    | admin       | —                             | `204`                                             |
+| `POST`   | `/kb/search`  | bearer      | `{"query":"…","top_k":3}`     | `{"hits":[{"doc_id","title","text","position"}]}` |
 
 ```sh
 TOKEN=$(curl -s localhost:8080/auth/login -d '{"login":"root"}' | sed 's/.*"token":"\([^"]*\)".*/\1/')
@@ -170,4 +170,4 @@ npx --yes newman run demo/postman/kit-demo.postman_collection.json \
 | `GIGACHAT_AUTH_URL`    | значение Сбера                   | URL OAuth GigaChat                            |
 | `GIGACHAT_CA_FILE`     | —                                | дополнительный корневой CA                    |
 | `KIT_HTTP_TIMEOUT`     | `60s`                            | таймаут HTTP к провайдерам                    |
-| `KIT_TOKEN_TTL`        | `12h`                            | время жизни mock-токена                       |
+| `KIT_TOKEN_TTL`        | `12h`                            | время жизни токена-заглушки                   |

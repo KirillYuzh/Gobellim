@@ -26,3 +26,4 @@ This repository is **kit**. The documentation is the specification: read it befo
 | `internal/`                                                    | call primitive, core types, ORT pool, shared helpers                                       |
 | `authz/` `guard/` `model/` `embed/` `chunk/` `store/` `trace/` | the subsystems                                                                             |
 | `cmd/kitctl/`, `demo/`, `deploy/`                              | CLI, integration example, local stack                                                      |
+| `tools/gliner/`                                                | L2 model export (`export.py`) + pipeline/graph spec; generates `models/` (gitignored)      |
