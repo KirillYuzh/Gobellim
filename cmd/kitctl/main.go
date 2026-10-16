@@ -1,4 +1,3 @@
-// Command kitctl manages local models and validates policy files.
 package main
 
 import (
@@ -26,6 +25,8 @@ func main() {
 		os.Exit(runPolicy(os.Args[2:]))
 	case "model":
 		os.Exit(runModel(os.Args[2:]))
+	case "verify":
+		os.Exit(runVerify(os.Args[2:]))
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -39,6 +40,14 @@ func usage() {
 	fmt.Fprint(os.Stderr, `kitctl commands:
   policy check <file>                 validate policy.yaml in strict mode
   model pull <org/name> [--dir DIR]   download model files into ./models
+  verify window [--model-context N] [--guard-max-chars M] [--policy FILE]
+                                      check the I-06 guard/model window rule
+  verify models [--dir DIR] [--guard-model NAME] [--embed-model NAME]
+                                      validate the local guard and embedder models
+  verify parity --dir DIR [--fixtures DIR] [--min-agreement 1.0]
+                                      run the guard parity gate over fixtures
+  verify latency --dir DIR [--iterations 200] [--warmup 20] [--max-chars 8000]
+                                      measure guard pipeline latency (L1 and L1+L2)
 `)
 }
 
