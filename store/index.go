@@ -21,7 +21,7 @@ func ChunksIndexBody(dims int) ([]byte, error) {
 				"doc_id":      map[string]any{"type": "keyword"},
 				TenantField:   map[string]any{"type": "keyword"},
 				ACLField:      map[string]any{"type": "keyword"},
-				TextField:     map[string]any{"type": "text"},
+				TextField:     textField(),
 				VectorField:   map[string]any{"type": "dense_vector", "dims": dims, "index": true, "similarity": "cosine"},
 				"position":    map[string]any{"type": "integer"},
 				"source":      map[string]any{"type": "keyword"},
@@ -29,8 +29,6 @@ func ChunksIndexBody(dims int) ([]byte, error) {
 				"doc_version": map[string]any{"type": "long"},
 				"quarantined": map[string]any{"type": "boolean"},
 
-				// EmbedModelField records which embedder produced the vector, so a
-				// search can never mix vectors from different models.
 				EmbedModelField: map[string]any{"type": "keyword"},
 			},
 		},
@@ -40,13 +38,14 @@ func ChunksIndexBody(dims int) ([]byte, error) {
 
 func MemoryMessagesIndexBody(dims int) []byte {
 	props := map[string]any{
-		ThreadField:  map[string]any{"type": "keyword"},
-		TenantField:  map[string]any{"type": "keyword"},
-		UserIDField:  map[string]any{"type": "keyword"},
-		RoleField:    map[string]any{"type": "keyword"},
-		ContentField: map[string]any{"type": "text"},
-		"seq":        map[string]any{"type": "long"},
-		"created_at": map[string]any{"type": "date"},
+		ThreadField:    map[string]any{"type": "keyword"},
+		TenantField:    map[string]any{"type": "keyword"},
+		UserIDField:    map[string]any{"type": "keyword"},
+		RoleField:      map[string]any{"type": "keyword"},
+		ContentField:   textField(),
+		UntrustedField: map[string]any{"type": "boolean"},
+		"seq":          map[string]any{"type": "long"},
+		"created_at":   map[string]any{"type": "date"},
 	}
 	if dims > 0 {
 		props[VectorField] = map[string]any{"type": "dense_vector", "dims": dims, "index": true, "similarity": "cosine"}
@@ -63,6 +62,10 @@ func MemoryWorkingIndexBody() []byte {
 		"data":       map[string]any{"type": "object", "enabled": false},
 		"updated_at": map[string]any{"type": "date"},
 	})
+}
+
+func textField() map[string]any {
+	return map[string]any{"type": "text", "analyzer": "russian"}
 }
 
 func indexBody(properties map[string]any) []byte {

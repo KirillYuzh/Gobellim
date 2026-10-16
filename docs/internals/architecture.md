@@ -21,7 +21,7 @@ kit — библиотека, а не сервис. Ей нужен один Go-
 
 ## Контейнеры
 
-Framework — библиотека. Ей нужен один процесс на Go; всё остальное внешнее.
+kit — библиотека. Ей нужен один процесс на Go; всё остальное внешнее.
 
 | Контейнер                   | Образ / владелец                                                                 | Порты                                  | Протокол         | Роль                                                           | Состояние              |
 | --------------------------- | -------------------------------------------------------------------------------- | -------------------------------------- | ---------------- | -------------------------------------------------------------- | ---------------------- |
@@ -50,7 +50,7 @@ L2 появился потолок токенов).
 
 ```
 kit/
-  kit.go principal.go tool.go retrieval.go memory.go stream.go toolsearch.go errors.go   фасад: New, Setup, Chat, ChatStream, Health, Ingest, Search, Delete, Score, Prune, Generate[T], Tool[In,Out], RawTool, RetrievalTool, MemoryLoad/Append/Recall/Clear/Working/SetWorking
+  kit.go principal.go tool.go calltool.go retrieval.go memory.go stream.go toolsearch.go errors.go   фасад: New, Setup, Chat, ChatStream, Health, CallTool, Ingest, Search, Delete, Score, Prune, Generate[T], Tool[In,Out], RawTool, RetrievalTool, MemoryLoad/Append/Recall/Clear/Working/SetWorking
   internal/core/                            общий лист: Principal + sentinel-ошибки + HealthStatus/HealthChecker (без зависимостей)
   internal/call/                            единый примитив вызова; штампует аудит-поля (guard/policy/text); владеет GuardRejectError (kit реэкспортирует его как kit.GuardRejectError)
   internal/ort/                             пул сессий инференса (реализацию сессии даёт вызывающий; токенайзера здесь нет)
@@ -66,10 +66,10 @@ kit/
   chunk/                                    токенный чанкер + Tokenizer (по умолчанию WhitespaceTokenizer)
   store/                                    ES interface + Request, index.go (маппинги), chunks.go, search.go, filter.go, bulk.go, memory.go (индексы и запросы памяти), maintenance.go, ensure.go
   trace/                                    модель Langfuse, async writer (writer.go), policy.go (TextPolicy/Sampler), sink.go, otlp.go (Sink OTLP/HTTP)
-  eval/                                     детерминированные проверки трейсов (stdlib; зависит от trace, не от kit)
-  flow/                                     один типизированный шаг `Step[In,Out]` со schema-контрактом и suspend/resume (без Pipeline/builder-DSL, D47)
+  eval/                                     детерминированные проверки трейсов (только stdlib; зависит от trace и internal/core, не от kit) — ноль внешних зависимостей
+  flow/                                     один типизированный шаг `Step[In,Out]` со schema-контрактом и suspend/resume (без Pipeline/builder-DSL, D47); единственное внешнее ребро ядра — валидатор схем (D67)
   rerank/                                   реранкер за интерфейсом Reranker + адаптер TEI/Cohere (/rerank), детерминированный `Reorder`
-  mcp/                                      клиент Model Context Protocol (stdio и streamable HTTP) + `Register` — инструменты как `mcp:<server>:<tool>`
+  mcp/                                      клиент Model Context Protocol (stdio и streamable HTTP) + `Register` — инструменты как `mcp:<server>:<tool>`; сервер `NewServer`/`FromTool` отдаёт инструменты наружу через `App.CallTool`
   webfetch/                                 SSRF-защищённый инструмент исходящего HTTP (эффект egress)
   internal/importrules/                     stdlib-тест правил импортов (I-13); дублирует правила depguard из .golangci.yml
   cmd/kitctl/                               model pull, policy check, verify window/models/parity/latency
@@ -105,11 +105,33 @@ kit/
    конструкторы и `context.Context`.
 
 Правила `internal/importrules` перечисляют ровно те пакеты, которые им подчинены; на
-остальные (фасад `kit`, `flow`, `rerank`, `mcp`, `webfetch`, `cmd/**`, `demo/**`)
-ограничений нет — они свободно зависят вниз (`flow → internal/core`,
-`rerank → internal/core`, `webfetch → kit`, `mcp → kit`), а цикл исключён тем, что
+остальные (фасад `kit`, `rerank`, `mcp`, `webfetch`, `cmd/**`, `demo/**`)
+ограничений нет — они свободно зависят вниз (`rerank → internal/core`,
+`webfetch → kit`, `mcp → kit`), а цикл исключён тем, что
 ни один файл под `internal/` не импортирует фасад. Импорт фасада из `webfetch` и
 `mcp` — обычная зависимость листа-инструмента от фасада, а не исключение.
+
+`flow` — исключение: по D67 это примитив ядра, поэтому он подчинён правилу
+`flow-internal-leaves-only` и может импортировать только листья `internal/**`.
+Запрещены фасад `kit` (цикл), `internal/call` (он тянет `guard` и `trace`, то есть
+провёл бы в примитив всё семейство ядра), семейство ядра
+(`authz`/`guard`/`model`/`embed`/`chunk`/`store`/`trace`) и соседние пакеты
+(`eval`, `rerank`, `mcp`, `webfetch`). Стандартная библиотека и две
+jsonschema-библиотеки из D67 правилом не охвачены. То же ограничение
+продублировано в `.golangci.yml` (`depguard`), чтобы правило проверялось на двух
+независимых уровнях.
+
+Ограничение на `eval` — единственное правило теста, которое не про семейство ядра:
+`eval-trace-and-internal-only` («`eval` may import only `trace` and `internal/**`,
+and must never import the root kit façade») запрещает ему подниматься выше трейса.
+Правила `core-family` и `leaf-internal-only` на `flow` и `eval` не распространяются:
+первое ограничивает только `authz`/`guard`/`model`/`embed`/`chunk`/`store`/`trace`,
+второе — только листья под `internal/`. Поэтому граница, зафиксированная для `flow`
+и `eval` в D67 («`eval` — ноль внешних зависимостей, `flow` — две jsonschema-библиотеки
+ради схем `In`/`Out`»), сегодня держится на stdlib-тесте `go test ./...` и правилах
+`depguard` в `.golangci.yml`, а не на `internal/importrules`: новое внешнее ребро в
+`flow` этот тест не поймает. Расширение правила на `flow` — открытая работа, а не
+состоявшееся свойство.
 
 ![Пакеты kit и правила зависимостей](../packages.svg)
 
@@ -165,8 +187,9 @@ ES-клиент в зависимости не входит (D10). Тестов�
 До того как у L2 появился потолок токенов (`gliner.Config.MaxTokens`), тензорный вход
 строился из всех слов окна guard, и стоимость L2 росла сверхлинейно: на окне по
 умолчанию (8000 рун) одна проверка занимала ≈50–71 с, а пиковый RSS доходил до
-**≈7.3 GB**. С потолком стоимость L2 стала плоской по длине входа (см.
-[Концепции: Guardrails](../concepts/guardrails.md)).
+**≈7.3 GB**. С потолком стоимость L2 стала плоской **в пределах одного окна
+детекции**; длинный вход сканируется несколькими окнами, поэтому полная цена растёт
+с длиной (`D60`; см. [Концепции: Guardrails](../concepts/guardrails.md)).
 
 ### Эмбеддер
 
@@ -205,6 +228,15 @@ pin-схемой продолжает работать. Экспорт и parity
 > (`CGO_ENABLED=1 CGO_LDFLAGS="-L.ort/lib" go build -tags ort ./...`) и образом с
 > `libonnxruntime.so`. Под тегом `ort` `guard/gliner` и `embed.NewLocal` —
 > реальные реализации: ONNX-детектор guard и ONNX-энкодер эмбеддера.
+>
+> Что из этого доступно «из коробки»: детерминированный L1 (`guard/rules`) —
+
+<!-- derived: BR-26 -->
+
+> всегда, в сборке по умолчанию. L2 — плагин, а не часть сборки по умолчанию:
+> `guard-onnx` требует `-tags ort`, `guard-remote` — запущенного удалённого
+> сервиса. Fail-closed означает «ошибка guard отклоняет операцию», а не «все
+> слои включены всегда»: без L2 kit маскирует и отклоняет по L1.
 
 ## Путь вызова
 
@@ -214,18 +246,21 @@ pin-схемой продолжает работать. Экспорт и parity
 ![Путь вызова: authz, guard, span, fn](../call-path.svg)
 
 Путь вызова после шлифовки: принципал берётся из контекста, проверяется право,
-каноникализация и decode-and-rescan выполняются до обоих слоёв guard, решение
-принимает таблица (allow/mask/detect/reject), и только потом идёт сама операция;
-трейс маскирован, версионирован и сэмплирован.
+каноникализация и decode-and-rescan выполняются до слоёв guard, но потоки у них
+разные — L1 читает канонический текст, L2 — исходный, а находки L1 переводятся в
+исходные координаты (`I-03`, `I-21`). Решение принимает таблица
+(allow/mask/detect/reject), и только потом идёт сама операция; трейс маскирован,
+версионирован и сэмплирован.
 
 ```mermaid
 flowchart TD
     A["операция: Chat / Ingest / Search / Generate"] --> B["principal из context"]
     B --> C["authz: permission"]
     C --> D["canonicalize + decode-and-rescan"]
-    D --> E["guard L1: фразы, regex, контрольные суммы"]
-    E --> F["guard L2: ONNX-детектор"]
-    F --> G["decide: категория x рельс"]
+    D --> E["guard L1: фразы, regex, контрольные суммы — канонический текст"]
+    D --> F["guard L2: ONNX-детектор — исходный текст"]
+    E --> G["decide: категория x рельс"]
+    F --> G
     G -->|reject| H["GuardRejectError + tripwire"]
     G -->|mask / detect / allow| I["текст под политикой рельса"]
     I --> J["fn: LLM / tool / embed / ES"]
@@ -255,9 +290,10 @@ flowchart TD
 | Бесконечный цикл tools                                     | `max_steps`, `max_calls` на tool, таймаут tool                                                                                    | детерминированный |
 | Утечка секретов в логах                                    | `slog` не пишет тексты сообщений; только id, размеры, категории                                                                   | дисциплина        |
 
-Ограничение v1: маскирование PII на входе необратимо, модель видит заглушки
-вида `[PII:SNILS]` и не может использовать реальные значения в args tools. Это
-сознательный выбор простоты.
+Маскирование PII на входе необратимо для модели: она видит заглушки вида
+`[PII:SNILS]`. Реальные значения подставляются в args только у инструментов с
+`kit.AllowPII(true)` и только при однозначном отображении заглушки (`BR-04`, `D55`);
+подстановка живёт внутри вызова, трейс и хуки видят маску.
 
 ## Observability
 
@@ -304,8 +340,9 @@ item-статус `409`/`version_conflict` считается успехом). S
 `dropped` (логируется `slog.Warn`); запрос никогда не блокируется трейсингом.
 `App.Close(ctx)` сбрасывает очередь.
 
-JSON-API чтения трейсов в репозитории нет: потребители читают данные из ES
-(Kibana/Grafana). Это запланировано, а не реализовано.
+JSON-API чтения трейсов нет: потребители читают ES (Kibana/Grafana) или CLI-ридер
+`demo/cmd/traces` (список трейсов и разбор одного с observations и scores).
+JSON-API остаётся запланированным.
 
 Помимо ES-writer'а, трейсы можно направить в любой `trace.Sink` через
 `Config.Sinks`: встроен `trace.NewOTLP` (`trace/otlp.go`) — OTLP/HTTP JSON без
@@ -314,7 +351,7 @@ JSON-API чтения трейсов в репозитории нет: потр�
 
 Grafana: в `deploy/grafana/` лежат provisioning ES-datasource и дашборды:
 латентность и ошибки по `name`/`kind`, токены по модели и tenant (панель
-стоимости читает `usage.cost`, который framework заполняет по `Config.Pricing`;
+стоимости читает `usage.cost`, который библиотека заполняет по `Config.Pricing`;
 `0`, если цена не задана — см. [Наблюдаемость](../concepts/observability.md)),
 срабатывания guard по категориям и rail, топ tools и отказы авторизации,
 таблица последних trace.
@@ -323,7 +360,7 @@ Grafana: в `deploy/grafana/` лежат provisioning ES-datasource и дашб�
 
 - [Бизнес-правила](./business-rules.md) — правила, которые обязана сохранять
   архитектура
-- [Решения и допущения](./decisions.md) — журнал `D1`…`D35` и допущения
+- [Решения и допущения](./decisions.md) — журнал `D1`…`D67` и допущения
   `A1`…`A9`
 - [План](./plan.md) — этапы, тесты, риски, Definition of Done
 - [Ориентиры](./references.md) — Go-проекты, с которых снимаются идеи

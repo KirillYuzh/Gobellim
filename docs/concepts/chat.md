@@ -92,7 +92,7 @@ answer, err := app.Chat(ctx, kit.ChatRequest{
 ответом, а не ещё одним вызовом. При исчерпании возвращается `ErrMaxSteps`.
 
 Бюджет хода задаёт `MaxTotalTokens`: превышение возвращает `ErrBudget`. Стоимость
-операции framework считает, если задан `Config.Pricing` (см.
+операции библиотека считает, если задан `Config.Pricing` (см.
 [Наблюдаемость](./observability.md)).
 
 ### Ответ целиком и стриминг

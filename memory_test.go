@@ -16,6 +16,7 @@ import (
 	"github.com/gobellim/kit/embed"
 	"github.com/gobellim/kit/guard"
 	"github.com/gobellim/kit/guard/guardtest"
+	"github.com/gobellim/kit/guard/rules"
 	"github.com/gobellim/kit/internal/call"
 	"github.com/gobellim/kit/model"
 	"github.com/gobellim/kit/store"
@@ -56,8 +57,6 @@ func (f *memES) bulk(body []byte) (int, []byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for i := 0; i+1 < len(lines); i += 2 {
-		// UseNumber keeps int64 sequence numbers exact; float64 would collapse
-		// adjacent values at UnixNano magnitude, which Elasticsearch does not.
 		dec := json.NewDecoder(bytes.NewReader([]byte(lines[i+1])))
 		dec.UseNumber()
 		var doc map[string]any
@@ -119,7 +118,7 @@ func (f *memES) search(body []byte) (int, []byte, error) {
 		hits = append(hits, map[string]any{
 			"_score": 1.0,
 			"_source": map[string]any{
-				"role": d["role"], "content": d["content"], "created_at": d["created_at"],
+				"role": d["role"], "content": d["content"], "untrusted": d["untrusted"], "created_at": d["created_at"],
 			},
 		})
 	}
@@ -227,11 +226,16 @@ roles:
 
 func newMemoryApp(t *testing.T, es store.ES, llm model.Client, embedder embed.Embedder, policyYAML string) *App {
 	t.Helper()
+	return newMemoryAppWithGuard(t, es, llm, embedder, policyYAML, guardtest.AllowAll())
+}
+
+func newMemoryAppWithGuard(t *testing.T, es store.ES, llm model.Client, embedder embed.Embedder, policyYAML string, layers ...guard.Detector) *App {
+	t.Helper()
 	policy, err := authz.Parse(strings.NewReader(policyYAML))
 	if err != nil {
 		t.Fatal(err)
 	}
-	pipeline, err := guard.New(guard.Options{Layers: []guard.Detector{guardtest.AllowAll()}})
+	pipeline, err := guard.New(guard.Options{Layers: layers})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -474,5 +478,73 @@ func TestChatWithThreadUsesAndPersistsMemory(t *testing.T) {
 	}
 	if convo[2].Content != "again" {
 		t.Fatalf("new message missing: %+v", convo)
+	}
+}
+
+func TestChatMarksAppendedMessagesUntrusted(t *testing.T) {
+	es := newMemES()
+	llm := &scripted{t: t, queue: []model.Response{textResponse("noted")}}
+	app := newMemoryAppWithGuard(t, es, llm, nil, testPolicyMemory, rules.New())
+	defer func() { _ = app.Close(context.Background()) }()
+
+	if _, err := app.Chat(memoryCtx(), ChatRequest{
+		ThreadID: "th1",
+		Messages: []model.Message{{Role: model.RoleUser, Content: "snils 112-233-445 95"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(es.docs) == 0 {
+		t.Fatal("nothing was written to memory")
+	}
+	for _, d := range es.docs {
+		if d["untrusted"] != true {
+			t.Fatalf("stored message not marked untrusted: %+v", d)
+		}
+	}
+}
+
+func TestUntrustedHistoryBlocksEgressInTheNextTurn(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		untrusted bool
+		wantErr   bool
+	}{
+		{"tainted history", true, true},
+		{"clean history", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			es := newMemES()
+			es.docs = append(es.docs, map[string]any{
+				"thread_id": "th1", "tenant": "t", "user_id": "u", "role": "assistant",
+				"content": "earlier answer", "seq": float64(1),
+				"untrusted": tc.untrusted, "created_at": time.Now().UTC().Format(time.RFC3339Nano),
+			})
+			llm := &scripted{t: t, queue: []model.Response{
+				toolCallResponse("send", `{"url":"https://any.example.com"}`),
+				textResponse("done"),
+			}}
+			app := newMemoryApp(t, es, llm, nil, testPolicyMemory)
+			defer func() { _ = app.Close(context.Background()) }()
+
+			type sendIn struct {
+				URL string `json:"url"`
+			}
+			if _, err := Tool(app, "send", func(context.Context, sendIn) (string, error) {
+				return "sent", nil
+			}, Effects(EffectEgress), EgressAny()); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := app.Chat(memoryCtx(), ChatRequest{
+				ThreadID: "th1",
+				Messages: []model.Message{{Role: model.RoleUser, Content: "go"}},
+			})
+			if tc.wantErr && !errors.Is(err, ErrUnauthorized) {
+				t.Fatalf("err = %v, want ErrUnauthorized (Rule of Two across turns)", err)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("err = %v, want a clean thread to be allowed", err)
+			}
+		})
 	}
 }

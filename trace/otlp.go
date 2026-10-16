@@ -31,7 +31,6 @@ const (
 	otlpMaxAttempts          = 2
 )
 
-// OTLPOptions configures an OTLP/HTTP-JSON trace exporter.
 type OTLPOptions struct {
 	Endpoint      string
 	Headers       map[string]string
@@ -43,7 +42,6 @@ type OTLPOptions struct {
 	Logger        *slog.Logger
 }
 
-// OTLP is a Sink that buffers spans and exports them as OTLP/HTTP-JSON.
 type OTLP struct {
 	endpoint  string
 	headers   map[string]string
@@ -71,7 +69,6 @@ type OTLP struct {
 
 var _ Sink = (*OTLP)(nil)
 
-// NewOTLP returns an exporter that POSTs OTLP/HTTP-JSON to opts.Endpoint.
 func NewOTLP(opts OTLPOptions) (*OTLP, error) {
 	if opts.Endpoint == "" {
 		return nil, errors.New("trace: OTLP endpoint is required")
@@ -192,7 +189,6 @@ func (o *OTLP) run() {
 	}
 }
 
-// Flush exports the currently buffered spans and reports any export error.
 func (o *OTLP) Flush(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -201,7 +197,6 @@ func (o *OTLP) Flush(ctx context.Context) error {
 	return o.takeErr()
 }
 
-// Close stops the background flusher and exports the remaining spans.
 func (o *OTLP) Close(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -324,7 +319,6 @@ func (o *OTLP) payload(spans []otlpSpan) otlpPayload {
 	}
 }
 
-// OTLP identity mapping: deterministic hex ids derived from the kit ids.
 func otlpTraceID(id string) string {
 	sum := sha256.Sum256([]byte("trace:" + id))
 	return hex.EncodeToString(sum[:16])

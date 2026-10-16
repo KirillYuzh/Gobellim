@@ -21,9 +21,10 @@ flowchart TD
     A["Oперация: Chat / Ingest / Search / Generate"] --> B["principal из context"]
     B --> C["authz: permission"]
     C --> D["canonicalize + decode-and-rescan"]
-    D --> E["guard rules L1: фразы, regex, контрольные суммы"]
-    E --> F["guard ML L2: ONNX detector"]
-    F --> G["decide: категория x рельс"]
+    D --> E["guard rules L1: канонический текст"]
+    D --> F["guard ML L2: исходный текст"]
+    E --> G["decide: категория x рельс"]
+    F --> G
     G -->|reject| H["ErrGuardReject + tripwire"]
     G -->|mask| I["маскированный текст"]
     G -->|allow| I
@@ -35,11 +36,12 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    T["текст"] --> CAN["canonicalize"]
+    T["текст"] --> CAN["canonicalize (+ map в исходные руны)"]
     CAN --> DEC["decode-and-rescan"]
-    DEC --> L1["rules L1"]
-    L1 --> L2["ML L2"]
-    L2 --> DECIDE["decide(rail, findings)"]
+    DEC --> L1["rules L1 — канонический текст"]
+    DEC --> L2["ML L2 — исходный текст"]
+    L1 --> DECIDE["decide(rail, findings)"]
+    L2 --> DECIDE
     DECIDE --> V["Verdict: action + findings + text"]
 ```
 
@@ -64,25 +66,26 @@ flowchart TD
 | ID   | Инвариант                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | I-01 | Любой I/O (LLM, tool, embed, ES, guard) идёт через `internal/call`. Обойти политику нельзя: `Generate` — такая же операция примитива.                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| I-02 | Детекторы guard не зависят от рельса. Рельс влияет только на решение (`decide`), а не на детекцию. Кэш вердиктов ключуется каноническим текстом и версией guard.                                                                                                                                                                                                                                                                                                                                                                                          |
-| I-03 | Каноникализация и decode-and-rescan выполняются **до** L1 и L2; оба слоя видят один и тот же канонический текст.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| I-02 | Детекторы guard не зависят от рельса. Рельс влияет только на решение (`decide`), а не на детекцию. Кэш вердиктов ключуется **инспектируемым текстом** и версией guard (`D66`).                                                                                                                                                                                                                                                                                                                                                                            |
+| I-03 | Каноникализация и decode-and-rescan выполняются **до** слоёв guard, но слои видят **разные потоки**: L1 — канонический текст (гомоглифы и zero-width обезврежены), L2 — текст как есть (транслитерация вне обучающего распределения модели). Находки обеих сторон выражаются в координатах исходного текста (`I-21`, `D64`).                                                                                                                                                                                                                              |
 | I-04 | Mask перезаписывает текст: последующие слои и последующие рельсы видят маску, а не исходные значения.                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | I-05 | Fail-closed различим: недоступность модели — `ErrGuardUnavailable`; битая конфигурация/модель на старте — `ErrInvalidConfig`.                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| I-06 | Окно guard не уже окна модели: если клиент реализует `model.ContextWindow`, `New` сверяет `guard.max_chars` с `ContextTokens()` и возвращает `ErrInvalidConfig` при превышении. Окно модели в токенах, лимит guard в рунах — это верхняя оценка, а не точная гарантия.                                                                                                                                                                                                                                                                                    |
+| I-06 | Окно guard не шире окна модели: если клиент реализует `model.ContextWindow`, `New` сверяет `guard.max_chars` с `ContextTokens()` и возвращает `ErrInvalidConfig` при превышении. Окно модели в токенах, лимит guard в рунах — это верхняя оценка, а не точная гарантия.                                                                                                                                                                                                                                                                                   |
 | I-07 | В трейсы не попадает необработанный текст по умолчанию. Политика текста трейса — явная: `masked` / `full`.                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | I-08 | Вердикт guard воспроизводим: в observation пишутся версия guard (`<policy_hash>/<layer_id>`, имена слоёв через `+`), хэш политики и имя слоя L2 (`guard_model` = `"L2"`).                                                                                                                                                                                                                                                                                                                                                                                 |
-| I-09 | Лимиты и деньги — часть контракта: `ErrBudget` (бюджет хода) и `ErrRateLimited` (429 от провайдера); `Retry-After` учитывается в `internal/httpjson`; таймауты приходят как `context.DeadlineExceeded`/`ErrProvider`.                                                                                                                                                                                                                                                                                                                                     |
-| I-10 | Эгресс — явное свойство инструмента (`Effects`), хосты — allowlist; «Rule of Two» проверяется рантаймом.                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| I-09 | Лимиты и деньги — часть контракта: `ErrBudget` (бюджет хода) и `ErrRateLimited` (лимит на тенанта); `Retry-After` учитывается в `internal/httpjson` при 429 провайдера; таймауты приходят как `context.DeadlineExceeded`/`ErrProvider`.                                                                                                                                                                                                                                                                                                                   |
+| I-10 | Эгресс — явное свойство инструмента (`Effects`); политика хостов обязательна (`EgressHosts` или `EgressAny`), пустая — отказ; «Rule of Two» проверяется рантаймом.                                                                                                                                                                                                                                                                                                                                                                                        |
 | I-11 | Ошибка инструмента — данные для модели: результат приходит как `{"error": "..."}`, и ход продолжается. Прерывают ход: отказ авторизации (RBAC и эгресс-политика), ошибка провайдера, отмена/дедлайн контекста, отсутствие требуемого подтверждения (`ErrApprovalRequired`) и исчерпание одного ретрая на невалидные аргументы (BR-23).                                                                                                                                                                                                                    |
 | I-12 | Контракт ES-запроса явный: метод, путь, тип контента, refresh, идемпотентность — поля запроса, а не вывод из строки пути.                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | I-13 | Тесты — только stdlib. Обвязка **подключена**: CI (`.github/workflows/ci.yml`) гоняет джобы build, test, race, ort-vet, lint, fumpt; `golangci-lint` (`gofumpt`, `govet`, `errcheck`, `staticcheck`, `gosec`, `depguard` и др.) и `make check` дают ту же планку локально. Правила импортов закодированы дважды — `depguard` в `.golangci.yml` и stdlib-тест `internal/importrules`. Обвязка **подключена и зелёная**: `golangci-lint` v2.13.0 локально даёт 0 замечаний, а прогоны workflow на раннере зелёные (push в `develop`/`main` и pull request). |
 | I-14 | Единственный источник правды о вердиктах — этот документ и `guardrails.md`; `BR-27`/`architecture.md` не заявляют больше, чем умеет модель.                                                                                                                                                                                                                                                                                                                                                                                                               |
 | I-15 | Публичный API не содержит «выключателей безопасности»: `AllowAll` живёт в `guard/guardtest`.                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | I-16 | Деградация guard явная: режим задаёт `Config.GuardMode` (`GuardStrict` — fail-closed по умолчанию; `GuardDegraded` — недоступный необязательный (ML) слой пропускается, вердикт помечается `Degraded`, observation — `guard_degraded`). Детерминированный слой (L1) обязателен всегда; деградировавшие вердикты не кэшируются.                                                                                                                                                                                                                            |
-| I-17 | Память ограничена парой `tenant` + `user_id` принципала: история треда, очистка и recall фильтруют по обоим. `thread_id` даёт вызывающий, поэтому сам по себе доступа не даёт; пустой `UserID` — `ErrUnauthorized`. История треда на чтении считается доверенной (замаскирована при записи) и повторно через L2 не проходит.                                                                                                                                                                                                                              |
+| I-17 | Память ограничена парой `tenant` + `user_id` принципала: история треда, очистка и recall фильтруют по обоим. `thread_id` даёт вызывающий, поэтому сам по себе доступа не даёт; пустой `UserID` — `ErrUnauthorized`. История треда на чтении считается доверенной (замаскирована при записи) и повторно через L2 не проходит, но флаг недоверенности отдельного сообщения при загрузке восстанавливается (BR-98, D59).                                                                                                                                     |
 | I-18 | Недоверенный ввод помечается (spotlighting): результат инструмента (включая retrieval) оборачивается в `<untrusted-data>…</untrusted-data>` **после** `ModelView`, а в системный промпт добавляется напоминание трактовать этот блок как данные, а не инструкции. По умолчанию включено (`Config.Spotlight` = `SpotlightOn`); `SpotlightOff` — явный opt-in.                                                                                                                                                                                              |
 | I-19 | `ChatStream` — расширение `Chat`, а не второй путь: цикл tools, RBAC, память, бюджет и трейс работают так же. Скользящее окно (`streamMinWindow` = 400 рун) отправляет каждый кусок ответа через рельс `output` до эмиссии, удерживая хвост `streamHoldback` = 96 рун; отказ рельса даёт `Retract` и аборт. Для клиента без `model.Streamer` — откат на буферизованный `Chat` одним чанком. Инвариант потока: `Done.Final.Content` равен конкатенации выданных `Text`.                                                                                    |
 | I-20 | Остаточное ограничение стриминга документируется, а не скрывается: совпадение длиннее `streamHoldback` (96 рун) без границы предложения внутри всё ещё может пересечь окно и просочиться в уже выданный текст. Один проход guard на окно (не на весь ответ) — осознанная цена стриминга.                                                                                                                                                                                                                                                                  |
+| I-21 | Смещения находок даны в координатах исходного текста. `canonicalizeMap` отдаёт для каждой канонической руны диапазон исходных рун, поэтому находка L1 отображается обратно и маска накрывает ровно сопоставленный ввод, даже если каноникализация руну отбросила (zero-width, bidi) или склеила (комбинирующая последовательность). Слой с `UsesNaturalText() == true` получает исходный текст, и его смещения уже верны (`D63`, `D64`).                                                                                                                  |
 
 ## 3. Контракты пакетов
 
@@ -94,12 +97,12 @@ flowchart TD
 var (
 	ErrTool             = errors.New("kit: tool error")        // падение внутри инструмента
 	ErrBudget           = errors.New("kit: budget exceeded")   // лимит токенов хода
-	ErrRateLimited      = errors.New("kit: rate limited")      // 429 от провайдера
+	ErrRateLimited      = errors.New("kit: rate limited")      // лимит на тенанта
 	ErrApprovalRequired = errors.New("kit: approval required") // tool требует подтверждения
 )
 ```
 
-`Principal` получает метод `Validate() error`: `Tenant` обязателен (I-12b).
+`Principal` получает метод `Validate() error`: `Tenant` обязателен (BR-49).
 
 ### 3.2 `store`
 
@@ -160,6 +163,7 @@ type MemoryMessage struct {
 	Vector     []float32
 	EmbedModel string
 	Seq        int64 // монотонный ключ порядка; created_at (date) хранит только мс
+	Untrusted  bool  // ход, записавший сообщение, был недоверенным (BR-98)
 	CreatedAt  time.Time
 }
 func MemoryBulkBody(msgs []MemoryMessage, dims int) ([]byte, error)
@@ -171,7 +175,7 @@ func MemoryClearBody(tenant, userID, threadID string) []byte
 type WorkingMemory struct { ThreadID, Tenant, UserID string; Data map[string]any; UpdatedAt time.Time }
 func MemoryWorkingID(tenant, threadID string) string // sha256-hex, path-safe
 
-type MemoryHit struct { Role, Content string; CreatedAt time.Time; Score float64 }
+type MemoryHit struct { Role, Content string; Untrusted bool; CreatedAt time.Time; Score float64 }
 func ParseMemorySearch(body []byte) ([]MemoryHit, error)
 ```
 
@@ -198,6 +202,12 @@ type Sampler func(traceID string) bool
 var SamplerAlways Sampler = func(string) bool { return true }
 var SamplerNever  Sampler = func(string) bool { return false }
 func SamplerRatio(p float64) Sampler   // решение детерминировано по trace_id
+func SamplerFromString(s string) (Sampler, error) // "always" | "never" | "ratio:<p>"
+
+type Fanout []Sink // композиция нескольких sink'ов
+func NewFanout(sinks ...Sink) Fanout
+
+func NewOTLP(opts OTLPOptions) (*OTLP, error) // OTLP/HTTP JSON, stdlib
 ```
 
 `Options` дополняется:
@@ -258,16 +268,31 @@ type Verdict struct {
 	Text     string
 	Tripwire *Tripwire
 	Version  string
+
+	// Substitutions — значения, которые заменил mask (только при Action == Mask),
+	// чтобы вызывающий мог вернуть их инструменту с AllowPII.
+	Substitutions []Substitution
+}
+
+type Substitution struct {
+	Placeholder string
+	Category    Category
+	Value       string `json:"-"`
 }
 ```
 
 - `Detector` больше не принимает rail: `Detect(ctx context.Context, text string) ([]Finding, error)`.
-- `Options` дополняется `Version string` и `OnViolation func(Verdict)`;
+- `Options` дополняется `Version string` и `OnViolation func(Verdict)`, а также `WindowChars int` (окно детекции, `D60`);
   `Pipeline.Version()` возвращает версию (хэш имени слоёв + конфигурации).
 - Решение — таблица `actionFor(rail, category)`; `Detect` возвращает true, если
   находка есть, текст не меняется.
 - `canonicalize(text) string`: NFKC (`golang.org/x/text/unicode/norm`), case-fold,
   удаление zero-width/bidi, фолдинг кириллических гомоглифов, нормализация цифр.
+- `canonicalizeMap(text) (string, runeSpans)`: то же плюс диапазон исходных рун для
+  каждой канонической руны; `canonicalize` — тонкая обёртка над ней (I-21, D63).
+- `NaturalText` — необязательная возможность `Detector`: слой, у которого
+  `UsesNaturalText() == true`, получает исходный текст, остальные — канонический;
+  `guard/gliner` её объявляет (I-03, D64).
 - `decodedVariants(text) []string`: base64/hex/percent-encoded фрагменты,
   декодированные и переданные повторно в L1.
 - L1 (`guard/rules`) дополняется: `Luhn` для карт, `IBAN mod-97`, `CVV`,
@@ -341,6 +366,12 @@ type Streamer interface {
 	Client
 	ChatStream(ctx context.Context, req Request, onDelta func(string) error) (Response, error)
 }
+
+// ContextWindow — необязательное расширение Client (I-06): kit.New сверяет окно
+// guard с ContextTokens() и отказывает, если оно шире.
+type ContextWindow interface {
+	ContextTokens() int
+}
 ```
 
 - Цепочка фолбэков и ретраев (item 8 §6 частично + §4.5):
@@ -391,7 +422,10 @@ func (s Structurer) Structure(ctx context.Context, prose string) (string, error)
 
 ### 3.7 `eval` (новый пакет, item 7)
 
-Только stdlib. Зависит от `trace`; **не** импортирует `kit`.
+Только stdlib. Зависит от `trace`; **не** импортирует `kit`. Внешних модулей нет
+(проверено `go list -deps`, 2026-10-16); правило `eval-trace-and-internal-only` в
+`internal/importrules` запрещает ему подниматься выше `trace` и `internal/**`
+(см. D67).
 
 ```go
 // Trace — записанный трейс с его observation.
@@ -463,13 +497,14 @@ func Run(ctx context.Context, rec *trace.Recorder, cases []Case,
 ```go
 type Config struct {
 	// ... ES, LLM, Pricing, Embedder, Policy, GuardL2, GuardMode, GuardMaxChars,
-	//     GuardCacheSize, Tokenizer, ChunkSize, ChunkOverlap, MaxSteps,
-	//     MaxCallsPerTool, ToolTimeout, ArgsMaxBytes, TopK, Logger
+	//     GuardCacheSize, GuardWindowChars, GuardOnViolation, Tokenizer, ChunkSize,
+	//     ChunkOverlap, MaxSteps, MaxCallsPerTool, ToolTimeout, ArgsMaxBytes, TopK, Logger
 	TraceText      trace.TextPolicy
 	Sampler        trace.Sampler
 	HideInput      bool
 	HideOutput     bool
 	Sinks          []trace.Sink
+	TraceProcessors []func(*trace.Observation) // правки наблюдения до записи (D57)
 	MaxTotalTokens int          // бюджет хода (0 — без лимита)
 	Egress         EgressPolicy // Rule of Two и allowlist инструментов
 	Approver       Approver     // вызывается для tool с RequireApproval
@@ -483,7 +518,9 @@ type Config struct {
 }
 
 type EgressPolicy struct {
-	RuleOfTwo bool // запрет эгресса, если на ходу был недоверенный ввод и приватные данные
+	// opt-out: zero value (false) ENFORCES the Rule of Two;
+	// true allows egress in a turn that already saw untrusted input.
+	AllowEgressAfterUntrusted bool
 }
 
 // RateLimit — token bucket на тенанта (ключ — Principal.Tenant).
@@ -522,8 +559,9 @@ type StreamChunk struct {
 Новые/изменённые операции:
 
 - `Generate[T]` — через примитив: `principal` → `PermGenerate` → input-guard →
-  модель → output-guard; `System` идёт ролью `system`; поддержка
-  `ErrorStrategy` (`strict`/`warn`/`fallback`), `SchemaMode`, `UsedFallback`.
+  модель → output-guard; `System` идёт ролью `system`; ответ валидируется по схеме
+  `T` до декодирования; поддержка `ErrorStrategy` (`strict`/`warn`/`fallback`),
+  `SchemaMode`, `Decoded`, `UsedFallback`.
   `GenerateRequest[T].StructuringModel` — второй модельный вызов, который при
   неудачном прямом декодировании переписывает прозу в схему **до** применения
   `ErrorStrategy`; он пишется отдельной observation и не добавляет usage к итогу хода.
@@ -532,16 +570,22 @@ type StreamChunk struct {
   перед записью новых (иначе остаются хвосты), карантин не индексирует текст.
 - `Delete` — проверяет `deleted`/`failures`; корректная метка observation.
 - `Prune(ctx, olderThan)` — удаление старых трейсов (ретенция).
-- `RetrievalTool(app, opts)` — инструмент поиска по KB как типизированный `Tool`
+- `RetrievalTool(app, name, opts...)` — инструмент поиска по KB как типизированный `Tool`
   (item 10).
+- `CallTool(ctx, name, args)` (D54) — вызов одного инструмента тем же путём, что
+  `Chat` (право, валидация, approval, egress, хуки, guard `tool_result`);
+  неопределённый инструмент — `ErrToolNotFound`. Нужен не-модельным вызывающим
+  (MCP-сервер, `mcp.FromTool`).
 
 `Tool` дополняется опциями (items 4, 5, 12, I-10):
 
 ```go
 func Effects(e Effects) ToolOption            // Read | Write | Egress
 func EgressHosts(hosts ...string) ToolOption  // allowlist для Egress
+func EgressAny() ToolOption                   // явный отказ от allowlist: любой хост
+func AllowPII(b bool) ToolOption              // подставлять реальные значения (BR-04)
 func RequireApproval(b bool) ToolOption
-func ValidateOutput(b bool) ToolOption        // item 5: валидация выхода
+func ValidateOutput(b bool) ToolOption        // fail-closed проверка выхода (D61)
 func ModelView(f func(string) string) ToolOption // item 4: что видит модель
 func BeforeToolCall(h BeforeToolHook) ToolOption // per-tool hook заменяет Config.BeforeToolCall
 func AfterToolCall(h AfterToolHook) ToolOption   // per-tool hook заменяет Config.AfterToolCall
@@ -562,7 +606,7 @@ type AfterToolHook func(ctx context.Context, info ToolCallInfo, result string, e
 Цикл `Chat`:
 
 - ошибка инструмента возвращается модели как результат с `isError` (I-11);
-- «ходовые» хуки: до вызова — RBAC, approval (по fingerprint, consume-once), egress-политика, затем `BeforeToolCall`; после исполнения — `AfterToolCall`, за ним guard результата (**последним**), `ValidateOutput`, `ModelView`. Ошибка хука становится результатом-ошибкой модели (I-11), если она не фатальна.
+- «ходовые» хуки: до вызова — RBAC, approval (по fingerprint, consume-once), egress-политика, затем `BeforeToolCall`; после исполнения — `AfterToolCall`, за ним guard результата (**последний рельс**), затем `ValidateOutput` и `ModelView`. Ошибка хука становится результатом-ошибкой модели (I-11), если она не фатальна.
 - `ArgsMaxBytes`, `max_steps`, `max_calls`, timeout — как было;
 - бюджет хода (`MaxTotalTokens`) → `ErrBudget`.
 
@@ -586,15 +630,22 @@ type MemoryHit struct {
 	Role      model.Role
 	Content   string
 	Score     float64
+	Untrusted bool
 	CreatedAt time.Time
 }
 ```
 
 - `Chat` с `ThreadID`: `MemoryLoad` (последние `MemoryLimit` сообщений) перед новым ходом, `MemoryAppend` (сообщения хода + ответ) после успеха; при `MemoryRecall > 0` и наличии эмбеддера в системное сообщение добавляется блок recall.
+- Перенос taint между ходами (D59): сообщение хранит признак `untrusted`; недоверенная строка истории или recall снова помечает ход для Rule of Two.
 - Право `memory` (`authz.PermMemory`); `internal/call` получает `KindMemory`; каждый публичный memory-вызов создаёт trace (`name = "memory"`, `metadata.op`).
 - `store.EnsureSchema` создаёт `kit-memory-messages` и `kit-memory-working`.
 
 ## 4. Решения (дополнение к decisions.md)
+
+Это замороженное ядро решений D21…D30. Решения D31…D67 — в журнале
+[decisions.md](./decisions.md); в частности, судьба `flow` и `eval` в ядре
+зафиксирована в **D67** (`eval` — ноль внешних зависимостей, `flow` — две
+jsonschema-библиотеки ради схем `In`/`Out`).
 
 | #   | Решение                                                                                                | Обоснование                                                                                                                                                                                          | Отвергнуто                     |
 | --- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
@@ -648,7 +699,7 @@ README описывают именно это поведение.
 ### 5.3 `guard`
 
 - `Detector.Detect(ctx, text)` — без рельса (I-02); детекция один раз, решение по
-  таблице `decide(rail, findings)`; кэш по каноническому тексту и версии.
+  таблице `decide(rail, findings)`; кэш по инспектируемому тексту и версии (D66).
 - `Canonicalize`, `DecodedVariants` (I-03); `Action` дополнен `Detect`;
   `Verdict.Tripwire`, `Verdict.Version`; `Tripwire{Reason, RuleID, Metadata}`;
   `Options.Version`, `Options.OnViolation`, `Pipeline.Version()`.
@@ -661,7 +712,20 @@ README описывают именно это поведение.
 - `AllowAll` переехал в `guard/guardtest` (I-15).
 - На рельсе `output` категории INJECTION/UNSAFE дают `Detect`, а не `Mask`.
 - L2 GLiNER: метки сущностей → `PII`; метки классификации маппятся так: явный `category_map` переопределяет всё; значение-категория (`PII`/`SECRET`/`INJECTION`/`UNSAFE`) задаёт категорию; значение **`SAFE`** подавляет находку для этой метки (`category_map` принимает именно эти пять значений); без маппинга работает эвристика (`unsafe/harmful/...` → `UNSAFE`, `inject/jailbreak/attack/override/exfiltrat/abuse` → `INJECTION`), а встроенный список безопасных имён даёт «ничего не сообщать». Незнакомая, немаппленная метка fail-safe → `UNSAFE` (I-14). Go принимает N групп классификации: у каждой своё имя `output`, `multi_label` + `sigmoid`, пороги на метку/группу (`thresholds`). Поставляемый по умолчанию экспорт компактен (`person/email/phone` + `safe/unsafe`); богатый (32 сущности, 5 групп, 70 меток классификации; адверсариальные метки дают `INJECTION`) собирается `export.py --schema full` (D28, D35).
-- L2 получает не всё окно guard: тензорный вход ограничен `Config.MaxTokens` (`DefaultMaxTokens` = 512, кламп до `max_sequence_length` модели), поэтому хвост длинного входа размечает только L1 (D34).
+- L2 получает окно детекции целиком, но тензорный вход внутри окна ограничен `Config.MaxTokens` (`DefaultMaxTokens` = 512, кламп до `max_sequence_length` модели); текст дальше покрывают следующие окна (D34, D60).
+- `Canonicalize` — фиксированная точка: невалидный UTF-8 санируется, затем NFKC →
+  `fold` → снова NFKC (D56).
+- `Options.WindowChars` — окно детекции: текст длиннее сканируется перекрывающимися
+  окнами (D60); `DefaultWindowChars` = 1024.
+- `canonicalizeMap` + `remapSpan`: находки L1 переводятся из канонического
+  пространства в исходное, поэтому маска накрывает весь сопоставленный диапазон
+  (I-21, D63).
+- `NaturalText`: L2 (`UsesNaturalText() == true`) получает исходный текст, L1 —
+  канонический (I-03, D64). Окно 1024 руны ≈ 275 токенов при потолке 512, поэтому
+  `prepare` ничего не отбрасывает (`TestWindowFitsTokenBudget`, BR-70).
+- Группы классификации учитывают роль: информационные задачи (`intent`, `tone` и т. п.)
+  без явного `category_map` вердикта не дают; `thresholdFor` предпочитает порог
+  метки, затем `threshold`, затем `cls_threshold` экспорта (D65).
 
 ### 5.4 `embed`
 
@@ -692,16 +756,16 @@ README описывают именно это поведение.
 
 - `Generate[T](ctx, app, GenerateRequest[T]) (Generated[T], error)` — полноценная
   операция примитива: принципал, право `generate`, input/output guard, трейс;
-  `System` уходит ролью `system`; `ErrorStrategy` `Strict/Warn/Fallback`
-  и `Generated.UsedFallback`; при `SchemaNative` и отсутствии поддержки
-  провайдера схема автоматически инлайнится.
+  `System` уходит ролью `system`; ответ проверяется по схеме `T`; `ErrorStrategy`
+  `Strict/Warn/Fallback` и флаги `Generated.Decoded`/`UsedFallback`; при
+  `SchemaNative` и отсутствии поддержки провайдера схема автоматически инлайнится.
 - Права: добавлены `generate` и `prune`; `Ingest`, `Search`, `Delete`
   требуют непустой `Tenant` (иначе `ErrUnauthorized`). `Prune` требует
   принципала и право `prune`, но не тенант: это глобальное действие
   эксплуатации по времени (как ILM), а не тенант-скоупная операция.
-- `Tool`-опции: `Effects`, `EgressHosts`, `RequireApproval`, `ValidateOutput`,
-  `ModelView`, `BeforeToolCall`, `AfterToolCall`; `Config.Approver`, `ApproverFunc`,
-  `ApprovalRequest.Fingerprint` (хэш `tool` + канонических аргументов).
+- `Tool`-опции: `Effects`, `EgressHosts`, `EgressAny`, `RequireApproval`,
+  `ValidateOutput`, `ModelView`, `BeforeToolCall`, `AfterToolCall`; `Config.Approver`,
+  `ApproverFunc`, `ApprovalRequest.Fingerprint` (хэш `tool` + канонических аргументов).
   Хук на инструменте **заменяет** хук приложения (`Config.BeforeToolCall`/
   `AfterToolCall`), а не складывается с ним; `ToolCallInfo` несёт `Fingerprint` и
   `CallIndex`. Одобрение расходуется один раз за ход (повтор того же fingerprint →
@@ -711,7 +775,7 @@ README описывают именно это поведение.
 - `kit.WithTraceMetadata(ctx, md)` / `kit.TraceMetadataFrom(ctx)` — request-scoped
   метаданные, которые примешиваются в `metadata` каждой observation (per-call значение
   перекрывает значение из контекста).
-- `Config.MaxTotalTokens` → `ErrBudget`; `Config.Egress.RuleOfTwo`;
+- `Config.MaxTotalTokens` → `ErrBudget`; `Config.Egress.AllowEgressAfterUntrusted`;
   `Config.TraceText`, `Config.Sampler`, `Config.HideInput`, `Config.HideOutput`,
   `Config.Sinks`.
 - `Config.Spotlight` (`SpotlightOn`/`SpotlightOff`) и типы `SpotlightMode`,
@@ -749,7 +813,8 @@ README описывают именно это поведение.
 - `webfetch` (новый пакет): `Config` (`AllowHosts`, `MaxBytes`, `Timeout`,
   `MaxRedirects`, `Headers`), `In` (`url`), `Out` (`status`, `content_type`,
   `text`, `truncated`), `New(app, name, cfg)`. Регистрируется через
-  `Effects(EffectEgress)` + `EgressHosts(...)`, поэтому host-allowlist и Rule of Two
+  `Effects(EffectEgress)` + `EgressHosts(...)` (при пустом `AllowHosts` — `EgressAny()`),
+  поэтому host-allowlist и Rule of Two
   рантайма применяются тоже; SSRF-проверки — в dialer'е (включая CGNAT `100.64.0.0/10`
   и ULA `fc00::/7`), с потолками редиректов и тела; не-2xx — данные (D33).
 - `cmd/kitctl verify` (новые подкоманды): `window` (I-06), `models`
@@ -768,7 +833,7 @@ README описывают именно это поведение.
 - `kit.Config.GuardMode` (`GuardStrict`/`GuardDegraded`), `guard.Options.Optional`,
   `guard.Verdict.Degraded`/`DegradedReason`; observation несёт `guard_degraded` (I-16).
 - `kit.Config.Pricing` (`model.Pricing`), `model.Usage.Cost`; `usage.cost`/`cost`
-  заполняются framework'ом (BR-77).
+  заполняются библиотекой (BR-77).
 - Право `chat` на операцию `Chat` (`authz.PermChat`, BR-76).
 - `store.Chunk.EmbedModel` + поле `embed_model` в `kit-chunks`;
   `store.SearchQuery.EmbedModel` фильтрует поиск по текущей модели эмбеддера (BR-79).
@@ -830,8 +895,9 @@ Snapshot, State}`.
 Capacity}` и `HealthChecker`; `kit` их алиасит (`kit.HealthStatus`,
   `kit.HealthChecker`). `trace.Writer.QueueDepth`/`QueueCapacity`, `ort.Pool.Stats`;
   `guard/gliner` и локальный `embed` реализуют `Health()`. `App.Health()`
-  возвращает `Health{Healthy, Degraded, GuardMode, GuardVersion, TraceQueue,
-TraceQueueCap, TraceDropped, Components}`.
+  возвращает `Health{Healthy, Degraded, GuardMode, GuardVersion, GuardStats,
+TraceQueue, TraceQueueCap, TraceDropped, Components}`; `App.Metrics()` отдаёт
+  счётчики guard (вердикты и гистограмма латентности) и очередь trace-писателя.
 - **Реранкинг (D49):** новый пакет `rerank` (`Reranker`, `Rank`, `Reorder`,
   `TEIConfig`/`NewTEI`); `Config.Reranker`, `Config.RerankCandidates`,
   `SearchRequest.Rerank`; `call.KindRerank`; кандидатов `TopK ×
@@ -845,3 +911,68 @@ DefaultRerankMultiplier`.
   `ListTools`, `CallTool`, `Close`, `ServerInfo`, `Tool`, `CallResult`, `Content`;
   транспорты stdio и streamable HTTP; `Register(ctx, app, client, opts...)`
   регистрирует `mcp:<server>:<tool>` с эффектом `Egress`.
+- **MCP-сервер и `CallTool` (D54):** `mcp.NewServer(ServerConfig{Name, Version, Tools,
+AllowedOrigins, Logger})`, `mcp.ServerTool`, `mcp.FromTool(app, def)`,
+  `Server.ServeStdio(ctx, in, out)` и `Server.Handler()` (streamable HTTP, только
+  `POST`). Методы `initialize`, `ping`, `tools/list`, `tools/call`; неизвестный
+  инструмент — ошибка JSON-RPC, ошибка обработчика — `CallResult.IsError`; запрос с
+  заголовком `Origin` отклоняется, пока источник не в `AllowedOrigins`.
+  `kit.App.CallTool(ctx, name, args)` — одиночный вызов инструмента через примитив.
+- **Возврат PII инструменту (D55):** `guard.Verdict.Substitutions`
+  (`Substitution{Placeholder, Category, Value}`; `Value` помечен `json:"-"`)
+  заполняется при `Mask`; `OnViolation` получает вердикт без сырых значений.
+  `kit.AllowPII(true)` разрешает подстановку значений в args инструмента — только
+  при однозначном отображении заглушки и только внутри вызова; результат
+  маскируется обратно. Замена формата заглушки не потребовалась.
+
+### 5.14 Фаззинг и фиксированная точка каноникализации (D56)
+
+- `FuzzCanonicalize`, `FuzzDecodedVariants` (`guard`), `FuzzCompileFilter`,
+  `FuzzRRF` (`store`) — stdlib-фаззинг; находки пишутся в `testdata/fuzz` как
+  регрессия.
+- `Canonicalize` — фиксированная точка: невалидный UTF-8 санируется
+  (`strings.ToValidUTF8`) до первого NFKC, затем `fold` (регистр, гомоглифы,
+  невидимые, полноширинные цифры), затем ещё один NFKC.
+
+### 5.15 Хуки фасада (D57)
+
+- `Config.GuardOnViolation func(guard.Verdict)` — колбэк на каждый вердикт, кроме
+  allow; передаётся в `guard.Options.OnViolation` без сырых значений (`AllowPII`).
+- `Config.TraceProcessors []func(*trace.Observation)` — правки наблюдения до
+  записи и до sink'ов; очистка `Name` отбрасывает документ.
+
+### 5.16 Валидация ответа `Generate` (D58)
+
+- Ответ разбирается в `any` и проверяется скомпилированной схемой, затем декодируется
+  в `T`: `json.Unmarshal` один принимал документ с отсутствующим или лишним полем.
+- `Generated[T].Decoded` — `true`, если ответ совпал со схемой; при `Warn`/`Fallback`
+  остаётся `false`.
+
+### 5.17 Перенос taint между ходами (D59)
+
+- `store.MemoryMessage`/`MemoryHit` несут `Untrusted bool` (`untrusted` в
+  `kit-memory-messages`); `MemoryHistoryBody` и `MemoryRecallBody` запрашивают поле.
+- `memoryLoad` возвращает признак недоверенности, `memoryAppend` его пишет; `Chat`
+  и `ChatStream` помечают ход (`turn.untrusted`), если история или recall недоверенны.
+
+### 5.18 Окно детекции, fail-closed `ValidateOutput`, русский анализатор (D60–D62)
+
+- `guard.Options.WindowChars` (дефолт `DefaultWindowChars` = 1024,
+  `Config.GuardWindowChars`): `Pipeline.windows` режет поток слоя на перекрывающиеся
+  окна (L1 — канонический текст, L2 — исходный), находки смещаются на смещение окна
+  и дедуплицируются.
+- `ValidateOutput(true)` — fail-closed: несовпадение со схемой `Out` даёт модели
+  error-result и помечает ход недоверенным (раньше — только `slog.Warn`).
+- `store.ChunksIndexBody`/`MemoryMessagesIndexBody` создают текстовые поля с
+  анализатором `russian` (`textField()`).
+
+### 5.19 Смещения находок, раздельные потоки, роль группы (D63–D66)
+
+- `canonicalizeMap(text) (string, runeSpans)`; `remapSpan(sp, start, end, total)`;
+  `Pipeline.detect` отображает находки канонических слоёв назад в исходный текст, а
+  слой с `UsesNaturalText()` получает исходный текст напрямую (D63, D64).
+- `guard.NaturalText` (`UsesNaturalText() bool`); `gliner.Detector` его реализует (D64).
+- `categoryForClass(cm, task, label)` учитывает `task` группы; `informationalTasks`
+  перечисляет неверсионные задачи; `thresholdFor(clsThreshold, threshold, thresholds,
+label)` читает `cls_threshold` (D65).
+- `Pipeline.cacheKey(inspected)` — ключ по инспектируемому тексту и версии (D66).

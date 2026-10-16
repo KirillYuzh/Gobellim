@@ -4,10 +4,16 @@ This repository is **kit**. The specification lives in `docs/` only: read it bef
 Code comments are not a contract — do not infer behaviour from them, and never let a comment
 override the specification.
 
+Two tiers of code: the **core** is the default `go build ./...` — stdlib only, no
+native libraries, no ONNX runtime. Plugins are opt-in and live behind their own
+entry point: `guard/gliner` is L2 detection behind `//go:build ort`, and the
+optional `guard-onnx` / `guard-remote` plugins need `-tags ort` or a remote
+service.
+
 ## Read order
 
 1. `docs/README.md` — index and "where to look".
-2. `docs/internals/design.md` — the frozen contracts: invariants `I-01`…`I-20`, package contracts, decisions `D21`…`D30`, and §5, the API changelist.
+2. `docs/internals/design.md` — the frozen contracts: invariants `I-01`…`I-21`, package contracts, decisions `D21`…`D30`, and §5, the API changelist.
 3. `docs/internals/architecture.md` — package layout and dependency rules; do not violate them.
 4. `docs/internals/business-rules.md` — the BR-xx rules your change must keep true.
 5. `docs/internals/plan.md` — current stage and Definition of Done.

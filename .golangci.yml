@@ -1,22 +1,13 @@
-# golangci-lint configuration for kit (module github.com/gobellim/kit).
-#
-# The dependency rules below mirror docs/internals/architecture.md §«Пакеты»
-# and invariant I-13 (docs/internals/design.md). The very same rules are checked
-# by a stdlib-only test in internal/importrules; the depguard rules here make
-# `golangci-lint run` catch them too, outside `go test`.
-#
-# Format: golangci-lint v2 (requires golangci-lint >= v2.1.0).
+# kit lint config; mirrors internal/importrules (I-13, BR-74).
+
 version: "2"
 
 run:
   timeout: 5m
   tests: true
-  # Report and match paths relative to go.mod so depguard file globs below are
-  # stable no matter where the linter is invoked from.
   relative-path-mode: gomod
 
 linters:
-  # Start from nothing and enable an explicit, curated set.
   default: none
   enable:
     - bodyclose # HTTP response bodies are closed
@@ -32,19 +23,8 @@ linters:
     - unused # unused code
   settings:
     gosec:
-      # Drop low-signal findings (e.g. G404 math/rand) but keep real issues.
       severity: medium
       confidence: medium
-      # These rules flag deliberate, non-vulnerable patterns in this module, so
-      # their premise (attacker-controlled input) does not hold:
-      #   G304 — paths are ordinary API/CLI inputs (a policy file, a models dir),
-      #          not tainted data; a library cannot meaningfully sanitise them.
-      #   G204 — the only subprocess is `ps` with constant arguments and our own
-      #          PID, so nothing is interpolated from user input.
-      #   G404 — math/rand is used for retry backoff jitter, never for secrets.
-      #   G115 — os.Getpid() always fits in uint32.
-      #   G301 — the model cache directory is intentionally created 0755 next to
-      #          a caller-specified download path.
       excludes:
         - G304
         - G204
@@ -52,9 +32,6 @@ linters:
         - G115
         - G301
     revive:
-      # A deliberately small ruleset: high-signal correctness rules only, so
-      # the existing codebase is not drowned in style noise. Defining rules
-      # here replaces revive's defaults.
       rules:
         - name: blank-imports
         - name: context-as-argument
@@ -70,12 +47,6 @@ linters:
         - name: unreachable-code
     depguard:
       rules:
-        # ------------------------------------------------------------------
-        # Core family — architecture.md rule 2: authz, guard (with guard/**),
-        # model, embed, chunk, store and trace must not import each other.
-        # Rule 3 exception: trace -> store only. (guard/embed -> internal/ort
-        # are allowed because internal/ort is a leaf, not a core-family pkg.)
-        # ------------------------------------------------------------------
         core-authz:
           files:
             - "authz/**"
@@ -175,8 +146,6 @@ linters:
         core-trace:
           files:
             - "trace/**"
-          # trace -> store is the documented exception (rule 3), so store is the
-          # one core package deliberately absent from this deny list.
           deny:
             - pkg: github.com/gobellim/kit/authz
               desc: "core-family packages must not import each other (I-13)"
@@ -189,11 +158,6 @@ linters:
             - pkg: github.com/gobellim/kit/chunk
               desc: "core-family packages must not import each other (I-13)"
 
-        # ------------------------------------------------------------------
-        # Leaves — architecture.md rule 5: internal/core, internal/id,
-        # internal/httpjson, internal/oauth, internal/ort and internal/importrules
-        # may import other internal/** packages and nothing else in the module.
-        # ------------------------------------------------------------------
         internal-leaves:
           files:
             - "internal/core/**"
@@ -223,15 +187,19 @@ linters:
               desc: "internal leaves may import only internal/** (I-13)"
             - pkg: github.com/gobellim/kit/eval
               desc: "internal leaves may import only internal/** (I-13)"
+            - pkg: github.com/gobellim/kit/flow
+              desc: "internal leaves may import only internal/** (I-13)"
+            - pkg: github.com/gobellim/kit/rerank
+              desc: "internal leaves may import only internal/** (I-13)"
+            - pkg: github.com/gobellim/kit/mcp
+              desc: "internal leaves may import only internal/** (I-13)"
+            - pkg: github.com/gobellim/kit/webfetch
+              desc: "internal leaves may import only internal/** (I-13)"
             - pkg: github.com/gobellim/kit/cmd
               desc: "internal leaves may import only internal/** (I-13)"
             - pkg: github.com/gobellim/kit/demo
               desc: "internal leaves may import only internal/** (I-13)"
 
-        # ------------------------------------------------------------------
-        # eval — architecture.md rule 4: eval imports trace and internal/** only
-        # and must never import the kit façade (so it runs under `go test`).
-        # ------------------------------------------------------------------
         eval:
           files:
             - "eval/**"
@@ -255,11 +223,41 @@ linters:
             - pkg: github.com/gobellim/kit/demo
               desc: "eval may import only trace and internal/** (I-13)"
 
-        # ------------------------------------------------------------------
-        # Any internal/** package must not import the root kit façade: that
-        # would be an import cycle (I-13). Internal packages other than the
-        # leaves (only internal/call today) may still import guard/trace.
-        # ------------------------------------------------------------------
+        flow:
+          files:
+            - "flow/**"
+          deny:
+            - pkg: github.com/gobellim/kit$
+              desc: "flow must not import the kit façade (I-13, cycle risk)"
+            - pkg: github.com/gobellim/kit/internal/call
+              desc: "flow may import only internal/** leaves, not the call primitive (I-13)"
+            - pkg: github.com/gobellim/kit/authz
+              desc: "flow must not import the core family (I-13)"
+            - pkg: github.com/gobellim/kit/guard
+              desc: "flow must not import the core family (I-13)"
+            - pkg: github.com/gobellim/kit/model
+              desc: "flow must not import the core family (I-13)"
+            - pkg: github.com/gobellim/kit/embed
+              desc: "flow must not import the core family (I-13)"
+            - pkg: github.com/gobellim/kit/chunk
+              desc: "flow must not import the core family (I-13)"
+            - pkg: github.com/gobellim/kit/store
+              desc: "flow must not import the core family (I-13)"
+            - pkg: github.com/gobellim/kit/trace
+              desc: "flow must not import the core family (I-13)"
+            - pkg: github.com/gobellim/kit/eval
+              desc: "flow may import only internal/** leaves (I-13)"
+            - pkg: github.com/gobellim/kit/rerank
+              desc: "flow may import only internal/** leaves (I-13)"
+            - pkg: github.com/gobellim/kit/mcp
+              desc: "flow may import only internal/** leaves (I-13)"
+            - pkg: github.com/gobellim/kit/webfetch
+              desc: "flow may import only internal/** leaves (I-13)"
+            - pkg: github.com/gobellim/kit/cmd
+              desc: "flow may import only internal/** leaves (I-13)"
+            - pkg: github.com/gobellim/kit/demo
+              desc: "flow may import only internal/** leaves (I-13)"
+
         internal-no-facade:
           files:
             - "internal/**"
@@ -269,18 +267,14 @@ linters:
 
   exclusions:
     rules:
-      # SA4023 — the non-ort stubs of gliner.CheckParity and kitctl's
-      # newL2Detector always return an error, so their `err != nil` guards look
-      # like constant comparisons to staticcheck. The guards are deliberate and
-      # correct under both build tags (with and without ort); these are
-      # build-tag artefacts, not bugs.
-      - path: 'cmd/kitctl/(latency|verify)\.go'
+      - path: 'cmd/kitctl/(latency|verify)\.go|scripts/guardqual/run\.go'
         linters:
           - staticcheck
         text: "SA4023"
+      - path: 'scripts/guardqual/main\.go'
+        linters:
+          - errcheck
 
-# gofumpt formatting is enforced by the formatter; see the CI `fumpt` job and
-# the Makefile `check` target, which run `gofumpt -l`.
 formatters:
   enable:
     - gofumpt
@@ -289,6 +283,5 @@ formatters:
       module-path: github.com/gobellim/kit
 
 issues:
-  # Report every issue, not a truncated sample.
   max-issues-per-linter: 0
   max-same-issues: 0

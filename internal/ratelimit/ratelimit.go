@@ -1,4 +1,3 @@
-// Package ratelimit provides a per-key token bucket with idle eviction.
 package ratelimit
 
 import (
@@ -13,9 +12,6 @@ type bucket struct {
 	last   time.Time
 }
 
-// Limiter is a per-key token bucket. Keys are created on demand and swept once
-// they have been idle for gcWindow, so a stream of distinct keys cannot grow
-// the map without bound.
 type Limiter struct {
 	mu      sync.Mutex
 	rate    float64
@@ -25,9 +21,6 @@ type Limiter struct {
 	lastGC  time.Time
 }
 
-// New returns a limiter that allows perSecond tokens per key per second with a
-// bucket of burst tokens. Non-positive values fall back to one token per
-// second and a burst of one.
 func New(perSecond float64, burst int) *Limiter {
 	if perSecond <= 0 {
 		perSecond = 1
@@ -43,7 +36,6 @@ func New(perSecond float64, burst int) *Limiter {
 	}
 }
 
-// Allow reports whether one token is available for the key, consuming it.
 func (l *Limiter) Allow(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()

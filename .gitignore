@@ -38,6 +38,6 @@ models/
 # Editor/IDE
 # .idea/
 # .vscode/
+/docslint
 
-# Temporary working notes
-REFACTOR-PLAN.md
+/guardqual

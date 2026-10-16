@@ -24,6 +24,8 @@ type GigaChatConfig struct {
 	Scope       string
 	Model       string
 	HTTPClient  *http.Client
+
+	ContextTokens int
 }
 
 type GigaChatClient struct {
@@ -47,6 +49,9 @@ func GigaChat(cfg GigaChatConfig) (*GigaChatClient, error) {
 	}
 	if cfg.Credentials == "" {
 		return nil, fmt.Errorf("model: gigachat: Credentials is required: %w", core.ErrInvalidConfig)
+	}
+	if cfg.ContextTokens < 0 {
+		return nil, fmt.Errorf("model: gigachat: ContextTokens must not be negative, got %d: %w", cfg.ContextTokens, core.ErrInvalidConfig)
 	}
 	hc := httpClient(cfg.HTTPClient)
 	return &GigaChatClient{

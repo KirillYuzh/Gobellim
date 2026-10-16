@@ -21,10 +21,6 @@ const (
 	streamHoldback  = 96
 )
 
-// StreamChunk is one event of ChatStream. A chunk carries exactly one of Text
-// (confirmed, already guarded text to append), Retract (the client must discard
-// what it has shown; the stream is then aborted with an error), Done (the last
-// chunk, with the assembled Final message) or Err.
 type StreamChunk struct {
 	Text    string
 	Retract bool
@@ -35,14 +31,6 @@ type StreamChunk struct {
 
 var errStreamGuarded = errors.New("kit: stream blocked by guard")
 
-// ChatStream streams a chat turn. The sliding window sends each window of the
-// answer through the output guard rail before it is emitted, keeping back a
-// small tail so a match that straddles a window boundary is still caught. The
-// caller must drain the returned channel until it closes.
-//
-// Streaming is an enhancement of Chat: the tool loop, RBAC, memory, budgets and
-// tracing behave the same. If the LLM client does not implement
-// model.Streamer, ChatStream falls back to a buffered Chat and emits one chunk.
 func (a *App) ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamChunk, error) {
 	pr, err := principal(ctx)
 	if err != nil {
@@ -81,14 +69,15 @@ func (a *App) ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamChu
 		approved:     make(map[string]bool),
 	}
 	for i := range client {
-		text, untrusted, gerr := a.guardText(ctx, guard.RailInput, "guard:input", client[i].Content, traceID)
+		v, gerr := a.guardTextVerdict(ctx, guard.RailInput, "guard:input", client[i].Content, traceID)
 		if gerr != nil {
 			return nil, gerr
 		}
-		if untrusted {
+		if v.Action != guard.Allow || v.Truncated {
 			t.untrusted = true
 		}
-		client[i].Content = text
+		t.subs = append(t.subs, v.Substitutions...)
+		client[i].Content = v.Text
 	}
 
 	go a.streamTurn(ctx, req, pr, client, t, streamer, ch)
@@ -122,17 +111,27 @@ func (a *App) streamTurn(ctx context.Context, req ChatRequest, pr core.Principal
 	}
 	msgs := make([]model.Message, 0, len(client)+2)
 	if req.ThreadID != "" {
-		history, herr := a.memoryLoad(ctx, pr, req.ThreadID, a.memoryLimit(), traceID)
+		history, historyUntrusted, herr := a.memoryLoad(ctx, pr, req.ThreadID, a.memoryLimit(), traceID)
 		if herr != nil {
 			ch <- StreamChunk{Err: herr}
 			return
+		}
+		if historyUntrusted {
+			t.untrusted = true
 		}
 		if a.memoryRecall() > 0 && a.cfg.Embedder != nil {
 			hits, rerr := a.memoryRecallHits(ctx, pr, client[len(client)-1].Content, a.memoryRecall(), traceID)
 			if rerr != nil {
 				a.logger().Warn("kit: chat: memory recall failed", "err", rerr)
-			} else if block := memoryRecallBlock(hits); block != "" {
-				system = joinSystem(system, block)
+			} else {
+				if block := memoryRecallBlock(hits); block != "" {
+					system = joinSystem(system, block)
+				}
+				for _, h := range hits {
+					if h.Untrusted {
+						t.untrusted = true
+					}
+				}
 			}
 		}
 		if system != "" {
@@ -241,7 +240,7 @@ func (a *App) streamTurn(ctx context.Context, req ChatRequest, pr core.Principal
 				turnMsgs := make([]model.Message, 0, len(client)+1)
 				turnMsgs = append(turnMsgs, client...)
 				turnMsgs = append(turnMsgs, out)
-				if aerr := a.memoryAppend(ctx, pr, req.ThreadID, turnMsgs, traceID); aerr != nil {
+				if aerr := a.memoryAppend(ctx, pr, req.ThreadID, turnMsgs, t.untrusted, traceID); aerr != nil {
 					a.logger().Warn("kit: chat: memory append failed", "err", aerr)
 				}
 			}
@@ -267,10 +266,6 @@ func (a *App) streamTurn(ctx context.Context, req ChatRequest, pr core.Principal
 	ch <- StreamChunk{Err: fmt.Errorf("kit: chat: reached max_steps=%d: %w", a.cfg.MaxSteps, core.ErrMaxSteps)}
 }
 
-// windowGuard buffers model output and guards it window by window. A tail of
-// streamHoldback runes is kept back so a match that straddles a boundary is
-// still seen by the detector; windows are cut at a natural boundary when one is
-// available.
 type windowGuard struct {
 	app     *App
 	ctx     context.Context

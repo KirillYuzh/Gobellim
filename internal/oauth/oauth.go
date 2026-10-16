@@ -51,7 +51,6 @@ func (ts *TokenSource) Token(ctx context.Context) (string, error) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Basic "+ts.Credentials)
-	// GigaChat rejects the token request without a uuid4 request identifier.
 	req.Header.Set("RqUID", id.UUIDv4())
 
 	resp, err := ts.httpClient().Do(req)

@@ -1,8 +1,3 @@
-// Package mcp is a small Model Context Protocol client: it speaks JSON-RPC 2.0
-// over stdio (a spawned server process) or streamable HTTP, lists the server's
-// tools and calls them. Register turns those tools into kit tools, each named
-// mcp:<server>:<tool> with the Egress effect, so the ordinary authorization and
-// guard path applies to them unchanged.
 package mcp
 
 import (
@@ -16,24 +11,20 @@ import (
 	"github.com/gobellim/kit/internal/core"
 )
 
-// ProtocolVersion is the MCP revision this client speaks.
 const ProtocolVersion = "2025-06-18"
 
-// clientName/clientVersion identify this client during the initialize handshake.
 const (
 	clientName    = "gobellim-kit"
 	clientVersion = "1.0.0"
 )
 
-// Config selects a transport and names the server. Exactly one of Command
-// (stdio) and URL (streamable HTTP) must be set.
 type Config struct {
-	Name    string   // server name; becomes the middle segment of mcp:<name>:<tool>
-	Command string   // stdio: executable to spawn
-	Args    []string // stdio: arguments
-	Env     []string // stdio: extra environment entries ("K=V")
-	Dir     string   // stdio: working directory
-	URL     string   // http: streamable HTTP endpoint
+	Name    string
+	Command string
+	Args    []string
+	Env     []string
+	Dir     string
+	URL     string
 	Headers map[string]string
 	Client  *http.Client
 	Logger  *slog.Logger
@@ -54,34 +45,28 @@ func (c Config) withDefaults() Config {
 	return c
 }
 
-// ServerInfo is what the server reports about itself during initialize.
 type ServerInfo struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
 }
 
-// Tool is one tool the server exposes.
 type Tool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	InputSchema json.RawMessage `json:"inputSchema,omitempty"`
 }
 
-// Content is one item of a tool result. Only text is interpreted; other kinds
-// are preserved in the raw result for the caller.
 type Content struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
 }
 
-// CallResult is the outcome of tools/call.
 type CallResult struct {
 	Content           []Content       `json:"content,omitempty"`
 	StructuredContent json.RawMessage `json:"structuredContent,omitempty"`
 	IsError           bool            `json:"isError,omitempty"`
 }
 
-// Text joins the text parts of the result.
 func (r CallResult) Text() string {
 	out := ""
 	for i, c := range r.Content {
@@ -96,17 +81,12 @@ func (r CallResult) Text() string {
 	return out
 }
 
-// Transport carries JSON-RPC messages to one server. Call performs a
-// request/response exchange and returns the raw result; Notify sends a
-// notification and ignores any reply. The built-in implementations are the
-// stdio transport (a spawned process) and the streamable-HTTP transport.
 type Transport interface {
 	Call(ctx context.Context, method string, params any) (json.RawMessage, error)
 	Notify(ctx context.Context, method string, params any) error
 	Close() error
 }
 
-// Client is a JSON-RPC client bound to one MCP server.
 type Client struct {
 	cfg       Config
 	transport Transport
@@ -116,8 +96,6 @@ type Client struct {
 	ready      bool
 }
 
-// New builds a client for the configured transport. It does not talk to the
-// server yet; call Initialize for that. Close releases the transport.
 func New(cfg Config) (*Client, error) {
 	cfg = cfg.withDefaults()
 	var (
@@ -140,17 +118,14 @@ func New(cfg Config) (*Client, error) {
 	return &Client{cfg: cfg, transport: tr}, nil
 }
 
-// Name is the server name used in tool names.
 func (c *Client) Name() string { return c.cfg.Name }
 
-// ServerInfo returns what the server reported during Initialize.
 func (c *Client) ServerInfo() ServerInfo {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.serverInfo
 }
 
-// Initialize performs the MCP handshake. It is idempotent.
 func (c *Client) Initialize(ctx context.Context) error {
 	c.mu.RLock()
 	ready := c.ready
@@ -190,7 +165,6 @@ func (c *Client) Initialize(ctx context.Context) error {
 	return nil
 }
 
-// ListTools returns every tool the server exposes, following pagination.
 func (c *Client) ListTools(ctx context.Context) ([]Tool, error) {
 	if err := c.Initialize(ctx); err != nil {
 		return nil, err
@@ -223,7 +197,6 @@ func (c *Client) ListTools(ctx context.Context) ([]Tool, error) {
 	}
 }
 
-// CallTool invokes a tool by its server-side name.
 func (c *Client) CallTool(ctx context.Context, name string, args json.RawMessage) (CallResult, error) {
 	if err := c.Initialize(ctx); err != nil {
 		return CallResult{}, err
@@ -246,7 +219,6 @@ func (c *Client) CallTool(ctx context.Context, name string, args json.RawMessage
 	return res, nil
 }
 
-// Close releases the transport (for stdio, it terminates the server process).
 func (c *Client) Close() error {
 	if c.transport == nil {
 		return nil
@@ -254,7 +226,6 @@ func (c *Client) Close() error {
 	return c.transport.Close()
 }
 
-// rpcError is a JSON-RPC error object.
 type rpcError struct {
 	Code    int             `json:"code"`
 	Message string          `json:"message"`

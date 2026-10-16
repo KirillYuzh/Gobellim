@@ -21,10 +21,6 @@ func (e *Engine) Create(ctx context.Context, p domain.Principal, doc domain.Know
 }
 
 func (e *Engine) Update(ctx context.Context, p domain.Principal, doc domain.KnowledgeDoc) error {
-	ctx = kit.WithPrincipal(ctx, kitPrincipal(p))
-	if err := e.app.Delete(ctx, doc.ID); err != nil {
-		return translate(err)
-	}
 	return e.Create(ctx, p, doc)
 }
 
@@ -72,9 +68,13 @@ func (e *Engine) List(ctx context.Context, p domain.Principal) ([]domain.Knowled
 }
 
 func (e *Engine) Get(ctx context.Context, p domain.Principal, id string) (domain.KnowledgeDoc, error) {
+	query, err := e.chunkFilter(p, id)
+	if err != nil {
+		return domain.KnowledgeDoc{}, err
+	}
 	body := map[string]any{
 		"size":    maxListedDocs,
-		"query":   e.chunkFilter(p, id),
+		"query":   query,
 		"sort":    []any{map[string]any{"position": map[string]any{"order": "asc"}}},
 		"_source": []string{"text", "position", "acl", "source"},
 	}
@@ -145,9 +145,13 @@ func (b docBucket) title() string {
 }
 
 func (e *Engine) docBuckets(ctx context.Context, p domain.Principal) ([]docBucket, error) {
+	query, err := e.chunkFilter(p, "")
+	if err != nil {
+		return nil, err
+	}
 	body := map[string]any{
 		"size":  0,
-		"query": e.chunkFilter(p, ""),
+		"query": query,
 		"aggs": map[string]any{
 			"docs": map[string]any{
 				"terms": map[string]any{"field": "doc_id", "size": maxListedDocs},
@@ -170,15 +174,16 @@ func (e *Engine) docBuckets(ctx context.Context, p domain.Principal) ([]docBucke
 	return res.Aggregations.Docs.Buckets, nil
 }
 
-func (e *Engine) chunkFilter(p domain.Principal, docID string) map[string]any {
-	filter := []any{
-		map[string]any{"term": map[string]any{store.TenantField: p.Tenant}},
-		map[string]any{"term": map[string]any{"quarantined": false}},
+func (e *Engine) chunkFilter(p domain.Principal, docID string) (map[string]any, error) {
+	acl, err := store.ACLFilter(kitPrincipal(p))
+	if err != nil {
+		return nil, fmt.Errorf("knowledge base filter: %w", err)
 	}
+	filter := []any{acl}
 	if docID != "" {
 		filter = append(filter, map[string]any{"term": map[string]any{"doc_id": docID}})
 	}
-	return map[string]any{"bool": map[string]any{"filter": filter}}
+	return map[string]any{"bool": map[string]any{"filter": filter}}, nil
 }
 
 func (e *Engine) esSearch(ctx context.Context, body any, out any) error {

@@ -18,15 +18,16 @@ import (
 )
 
 type Config struct {
-	ES        store.ES
-	LLM       model.Client
-	Embedder  embed.Embedder
-	Policy    *authz.Policy
-	GuardL2   guard.Detector
-	Weather   usecase.WeatherProvider
-	TraceText trace.TextPolicy
-	Sampler   trace.Sampler
-	Logger    *slog.Logger
+	ES           store.ES
+	LLM          model.Client
+	Embedder     embed.Embedder
+	Policy       *authz.Policy
+	GuardL2      guard.Detector
+	Weather      usecase.WeatherProvider
+	WeatherHosts []string
+	TraceText    trace.TextPolicy
+	Sampler      trace.Sampler
+	Logger       *slog.Logger
 }
 
 type Engine struct {
@@ -57,7 +58,9 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 		return nil, err
 	}
 	if _, err := kit.Tool(app, "get_weather", e.getWeather,
-		kit.Desc("Текущая погода в городе.")); err != nil {
+		kit.Desc("Текущая погода в городе."),
+		kit.Effects(kit.EffectEgress),
+		kit.EgressHosts(cfg.WeatherHosts...)); err != nil {
 		return nil, err
 	}
 	return e, nil

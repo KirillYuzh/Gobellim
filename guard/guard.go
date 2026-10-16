@@ -5,20 +5,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
-)
 
-type Rail string
-
-const (
-	RailInput      Rail = "input"
-	RailRetrieval  Rail = "retrieval"
-	RailExecution  Rail = "execution"
-	RailOutput     Rail = "output"
-	RailToolResult Rail = "tool_result"
+	"github.com/gobellim/kit/internal/core"
 )
 
 type Action int
@@ -77,10 +71,37 @@ type Verdict struct {
 	Tripwire *Tripwire
 	Version  string
 
-	// Degraded is true when an optional layer failed and the verdict was
-	// produced by the remaining layers. DegradedReason holds the layer errors.
+	Substitutions []Substitution
+
 	Degraded       bool
 	DegradedReason string
+
+	Truncated      bool
+	InspectedRunes int
+}
+
+func (v Verdict) ObservationMetadata() map[string]any {
+	if !v.Truncated {
+		return nil
+	}
+	return map[string]any{
+		"truncated":       true,
+		"inspected_chars": v.InspectedRunes,
+	}
+}
+
+type Substitution struct {
+	Placeholder string
+	Category    Category
+	Value       string `json:"-"`
+}
+
+func (v Verdict) withoutSubstitutions() Verdict {
+	if len(v.Substitutions) == 0 {
+		return v
+	}
+	v.Substitutions = nil
+	return v
 }
 
 type Detector interface {
@@ -88,31 +109,49 @@ type Detector interface {
 	Name() string
 }
 
+type NaturalText interface {
+	Detector
+	UsesNaturalText() bool
+}
+
+func usesNaturalText(d Detector) bool {
+	n, ok := d.(NaturalText)
+	return ok && n.UsesNaturalText()
+}
+
 const (
-	DefaultMaxChars  = 8000
-	DefaultCacheSize = 4096
+	DefaultMaxChars    = 8000
+	DefaultCacheSize   = 4096
+	DefaultWindowChars = 1024
 )
 
 type Options struct {
-	Layers []Detector
-	// Optional lists layer names whose failure does not fail the check. An
-	// optional layer that errors is skipped and the verdict is marked
-	// Degraded; a required layer that errors fails the check. Empty means
-	// every layer is required (fail-closed).
-	Optional    []string
-	MaxChars    int
-	CacheSize   int
-	Version     string
-	OnViolation func(Verdict)
+	Layers               []Detector
+	Ensembles            []Ensemble
+	Optional             []string
+	OptionalByRail       map[Rail][]string
+	MaxChars             int
+	CacheSize            int
+	WindowChars          int
+	Version              string
+	ArtifactHash         string
+	OnViolation          func(Verdict)
+	Logger               *slog.Logger
+	DegradedWarnInterval time.Duration
+
+	now func() time.Time
 }
 
 type Pipeline struct {
-	layers      []Detector
-	optional    map[string]bool
+	layers      []layer
+	degradation degradationPolicy
 	maxChars    int
+	windowChars int
 	cache       *lru
 	version     string
 	onViolation func(Verdict)
+	warner      *warner
+	counters    counters
 }
 
 func New(opts Options) (*Pipeline, error) {
@@ -122,33 +161,66 @@ func New(opts Options) (*Pipeline, error) {
 	if opts.CacheSize <= 0 {
 		opts.CacheSize = DefaultCacheSize
 	}
-	optional := make(map[string]bool, len(opts.Optional))
-	for _, name := range opts.Optional {
-		optional[name] = true
+	if opts.WindowChars <= 0 {
+		opts.WindowChars = DefaultWindowChars
+	}
+	layers, err := buildLayers(opts.Layers, opts.Ensembles)
+	if err != nil {
+		return nil, err
+	}
+	degradation, err := newDegradationPolicy(opts.Optional, opts.OptionalByRail)
+	if err != nil {
+		return nil, err
+	}
+	if opts.DegradedWarnInterval <= 0 {
+		opts.DegradedWarnInterval = DefaultDegradedWarnInterval
+	}
+	artifact := opts.ArtifactHash
+	if artifact == "" {
+		detectors := make([]Detector, 0, len(layers))
+		for _, l := range layers {
+			detectors = append(detectors, l.detectors...)
+		}
+		artifact = ArtifactHashes(detectors)
 	}
 	return &Pipeline{
-		layers:      opts.Layers,
-		optional:    optional,
+		layers:      layers,
+		degradation: degradation,
 		maxChars:    opts.MaxChars,
+		windowChars: opts.WindowChars,
 		cache:       newLRU(opts.CacheSize),
-		version:     opts.Version,
+		version:     computeVersion(opts, layers, artifact),
 		onViolation: opts.OnViolation,
+		warner:      newWarner(opts.Logger, opts.DegradedWarnInterval, opts.now),
 	}, nil
+}
+
+func (p *Pipeline) optionalOn(rail Rail, l layer, d Detector) bool {
+	return p.degradation.allows(rail, l.name, d.Name())
 }
 
 func (p *Pipeline) Version() string { return p.version }
 
 func (p *Pipeline) Check(ctx context.Context, rail Rail, text string) (Verdict, error) {
-	if text == "" {
-		return Verdict{Action: Allow, Rail: rail, Text: text, Version: p.version}, nil
+	if !ValidRail(rail) {
+		return Verdict{}, fmt.Errorf("guard: unknown rail %q: %w", string(rail), core.ErrInvalidConfig)
 	}
-	inspected := truncateRunes(text, p.maxChars)
-	key := p.cacheKey(Canonicalize(inspected))
+	started := time.Now()
+	total := utf8.RuneCountInString(text)
+	if text == "" {
+		v := p.finish(rail, text, nil, nil, 0, total)
+		p.observeLatency(time.Since(started))
+		return v, nil
+	}
+	inspectedText := truncateRunes(text, p.maxChars)
+	inspected := utf8.RuneCountInString(inspectedText)
+	canonical, spans := canonicalizeMap(inspectedText)
+	key := p.cacheKey(inspectedText)
 
 	findings, ok := p.cache.get(key)
 	var degraded []string
 	if !ok {
-		fs, deg, err := p.detect(ctx, inspected, utf8.RuneCountInString(text))
+		fs, deg, err := p.detect(ctx, rail, inspectedText, canonical, spans, total)
 		if err != nil {
 			return Verdict{}, err
 		}
@@ -159,21 +231,33 @@ func (p *Pipeline) Check(ctx context.Context, rail Rail, text string) (Verdict, 
 		}
 	}
 
+	v := p.finish(rail, text, findings, degraded, inspected, total)
+	p.observeLatency(time.Since(started))
+	return v, nil
+}
+
+func (p *Pipeline) finish(rail Rail, text string, findings []Finding, degraded []string, inspected, total int) Verdict {
 	v := decide(rail, text, findings)
 	v.Version = p.version
 	v.Degraded = len(degraded) > 0
 	v.DegradedReason = strings.Join(degraded, "; ")
-	if v.Action != Allow && p.onViolation != nil {
-		p.onViolation(v)
+	v.Truncated = inspected < total
+	v.InspectedRunes = inspected
+	p.count(rail, v)
+	if v.Degraded {
+		p.warner.warn(rail, v.Version, v.DegradedReason)
 	}
-	return v, nil
+	if v.Action != Allow && p.onViolation != nil {
+		p.onViolation(v.withoutSubstitutions())
+	}
+	return v
 }
 
-func (p *Pipeline) cacheKey(canonical string) string {
+func (p *Pipeline) cacheKey(inspected string) string {
 	h := sha256.New()
 	h.Write([]byte(p.version))
 	h.Write([]byte{0})
-	h.Write([]byte(canonical))
+	h.Write([]byte(inspected))
 	return string(h.Sum(nil))
 }
 
@@ -187,49 +271,122 @@ func truncateRunes(text string, max int) string {
 	return text
 }
 
-func (p *Pipeline) detect(ctx context.Context, inspected string, total int) ([]Finding, []string, error) {
-	canonical := Canonicalize(inspected)
-
+func (p *Pipeline) detect(ctx context.Context, r Rail, inspected, canonical string, spans runeSpans, total int) ([]Finding, []string, error) {
 	var findings []Finding
 	var degraded []string
-	for _, layer := range p.layers {
-		fs, err := layer.Detect(ctx, canonical)
-		if err != nil {
-			if p.optional[layer.Name()] {
-				degraded = append(degraded, layer.Name()+": "+err.Error())
-				continue
+
+	for _, l := range p.layers {
+		for _, d := range l.detectors {
+			raw := usesNaturalText(d)
+			stream := canonical
+			if raw {
+				stream = inspected
 			}
-			return nil, nil, fmt.Errorf("guard: layer %s: %w", layer.Name(), err)
-		}
-		findings = append(findings, fs...)
-		if rejectCapable(fs) {
-			return findings, degraded, nil
+			for _, w := range p.windows(stream) {
+				fs, err := d.Detect(ctx, w.text)
+				if err != nil {
+					if p.optionalOn(r, l, d) {
+						degraded = append(degraded, degradedLabel(l, d)+": "+err.Error())
+						break
+					}
+					return nil, nil, fmt.Errorf("guard: layer %s: %w", degradedLabel(l, d), err)
+				}
+				for _, f := range fs {
+					if raw {
+						f.Start += w.offset
+						f.End += w.offset
+					} else {
+						f.Start, f.End = remapSpan(spans, f.Start+w.offset, f.End+w.offset, total)
+					}
+					findings = append(findings, f)
+				}
+				if rejectCapable(fs) {
+					return dedupe(findings), degraded, nil
+				}
+			}
 		}
 	}
 
 	for _, variant := range DecodedVariants(inspected) {
 		decoded := Canonicalize(variant)
-		for _, layer := range p.layers {
-			if layer.Name() != "L1" {
+		for _, l := range p.layers {
+			if l.name != rulesLayer {
 				continue
 			}
-			fs, err := layer.Detect(ctx, decoded)
-			if err != nil {
-				if p.optional[layer.Name()] {
-					degraded = append(degraded, layer.Name()+" (decoded): "+err.Error())
-					continue
+			for _, d := range l.detectors {
+				fs, err := d.Detect(ctx, decoded)
+				if err != nil {
+					if p.optionalOn(r, l, d) {
+						degraded = append(degraded, degradedLabel(l, d)+" (decoded): "+err.Error())
+						continue
+					}
+					return nil, nil, fmt.Errorf("guard: layer %s (decoded): %w", degradedLabel(l, d), err)
 				}
-				return nil, nil, fmt.Errorf("guard: layer %s (decoded): %w", layer.Name(), err)
-			}
-			for _, f := range fs {
-				f.Start = 0
-				f.End = total
-				f.Layer = "L1+decode"
-				findings = append(findings, f)
+				for _, f := range fs {
+					f.Start = 0
+					f.End = total
+					f.Layer = rulesLayer + "+decode"
+					findings = append(findings, f)
+				}
 			}
 		}
 	}
-	return findings, degraded, nil
+	return dedupe(findings), degraded, nil
+}
+
+func degradedLabel(l layer, d Detector) string {
+	if l.name == d.Name() || len(l.detectors) == 1 {
+		return l.name
+	}
+	return l.name + "/" + d.Name()
+}
+
+func remapSpan(sp runeSpans, start, end, total int) (int, int) {
+	if start < 0 {
+		start = 0
+	}
+	if end < start {
+		end = start
+	}
+	if start >= sp.len() {
+		return total, total
+	}
+	if end > sp.len() {
+		end = sp.len()
+	}
+	if end <= start {
+		return sp.start[start], sp.start[start]
+	}
+	return sp.start[start], sp.end[end-1]
+}
+
+type window struct {
+	text   string
+	offset int
+}
+
+func (p *Pipeline) windows(canonical string) []window {
+	runes := []rune(canonical)
+	if p.windowChars <= 0 || len(runes) <= p.windowChars {
+		return []window{{text: canonical}}
+	}
+	overlap := p.windowChars / 8
+	if overlap < 1 {
+		overlap = 1
+	}
+	var out []window
+	for start := 0; start < len(runes); {
+		end := start + p.windowChars
+		if end > len(runes) {
+			end = len(runes)
+		}
+		out = append(out, window{text: string(runes[start:end]), offset: start})
+		if end >= len(runes) {
+			break
+		}
+		start = end - overlap
+	}
+	return out
 }
 
 func rejectCapable(fs []Finding) bool {
@@ -267,7 +424,7 @@ func decide(rail Rail, text string, findings []Finding) Verdict {
 	}
 	v := Verdict{Action: action, Rail: rail, Findings: findings, Text: text}
 	if action == Mask {
-		v.Text = maskRunes(text, mergeMaskSpans(findings))
+		v.Text, v.Substitutions = maskRunes(text, mergeMaskSpans(findings))
 	}
 	if action == Reject {
 		v.Tripwire = tripwireFor(rail, findings)
@@ -356,14 +513,15 @@ func tripwireFor(rail Rail, findings []Finding) *Tripwire {
 	}
 }
 
-func maskRunes(text string, spans []Finding) string {
+func maskRunes(text string, spans []Finding) (string, []Substitution) {
 	if len(spans) == 0 {
-		return text
+		return text, nil
 	}
 	sort.Slice(spans, func(i, j int) bool { return spans[i].Start < spans[j].Start })
 
 	runes := []rune(text)
 	var b strings.Builder
+	var subs []Substitution
 	prev := 0
 	for _, s := range spans {
 		if s.Start < prev {
@@ -376,18 +534,21 @@ func maskRunes(text string, spans []Finding) string {
 		if end > len(runes) {
 			end = len(runes)
 		}
+		if end < s.Start {
+			continue
+		}
 		b.WriteString(string(runes[prev:s.Start]))
-		b.WriteString("[")
-		b.WriteString(string(s.Category))
-		b.WriteString(":")
-		b.WriteString(s.Label)
-		b.WriteString("]")
+		placeholder := "[" + string(s.Category) + ":" + s.Label + "]"
+		b.WriteString(placeholder)
+		if value := string(runes[s.Start:end]); value != "" {
+			subs = append(subs, Substitution{Placeholder: placeholder, Category: s.Category, Value: value})
+		}
 		prev = end
 	}
 	if prev < len(runes) {
 		b.WriteString(string(runes[prev:]))
 	}
-	return b.String()
+	return b.String(), subs
 }
 
 type lru struct {

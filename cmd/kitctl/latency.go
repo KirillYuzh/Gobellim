@@ -49,14 +49,15 @@ type latencyStat struct {
 func runVerifyLatency(args []string) int {
 	fs := flag.NewFlagSet("verify latency", flag.ContinueOnError)
 	dir := fs.String("dir", defaultModelsDir(), "models directory")
-	iterations := fs.Int("iterations", 200, "timed iterations per corpus item")
-	warmup := fs.Int("warmup", 20, "warmup passes over the corpus, discarded")
-	maxChars := fs.Int("max-chars", guard.DefaultMaxChars, "guard window in runes")
+	iterations := fs.Int("iterations", 20, "timed iterations per corpus item")
+	warmup := fs.Int("warmup", 2, "warmup passes over the corpus, discarded")
+	maxChars := fs.Int("max-chars", guard.DefaultMaxChars, "longest corpus item and guard truncation limit, in runes")
+	window := fs.Int("window", guard.DefaultWindowChars, "detection window in runes; longer text is scanned in overlapping windows of this size")
 	if _, err := parseInterleaved(fs, args); err != nil {
 		return 2
 	}
-	if *iterations < 1 || *warmup < 0 || *maxChars < 1 {
-		fmt.Fprintln(os.Stderr, "kitctl verify latency: --iterations >= 1, --warmup >= 0, --max-chars >= 1")
+	if *iterations < 1 || *warmup < 0 || *maxChars < 1 || *window < 1 {
+		fmt.Fprintln(os.Stderr, "kitctl verify latency: --iterations >= 1, --warmup >= 0, --max-chars >= 1, --window >= 1")
 		return 2
 	}
 
@@ -76,7 +77,7 @@ func runVerifyLatency(args []string) int {
 	for _, cfg := range configs {
 		for i := 0; i < *warmup; i++ {
 			for _, it := range items {
-				if _, _, err := checkOnce(ctx, cfg, *maxChars, it.text); err != nil {
+				if _, _, err := checkOnce(ctx, cfg, *maxChars, *window, it.text); err != nil {
 					fmt.Fprintf(os.Stderr, "kitctl verify latency: %s warmup: %v\n", cfg.name, err)
 					return 1
 				}
@@ -91,7 +92,7 @@ func runVerifyLatency(args []string) int {
 		for ii, it := range items {
 			s := latencySample{runes: utf8.RuneCountInString(it.text), ms: make([]float64, 0, *iterations)}
 			for i := 0; i < *iterations; i++ {
-				v, ms, err := checkOnce(ctx, cfg, *maxChars, it.text)
+				v, ms, err := checkOnce(ctx, cfg, *maxChars, *window, it.text)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "kitctl verify latency: %s/%s: %v\n", cfg.name, it.name, err)
 					return 1
@@ -109,12 +110,12 @@ func runVerifyLatency(args []string) int {
 	endRSS, _ := rssMB()
 
 	_, hasL2 := byConfig["L1+L2"]
-	printLatencyReport(*dir, *iterations, *warmup, *maxChars, l2Note, rssSource, baselineRSS, warmRSS, endRSS, items, byConfig, hasL2)
+	printLatencyReport(*dir, *iterations, *warmup, *maxChars, *window, l2Note, rssSource, baselineRSS, warmRSS, endRSS, items, byConfig, hasL2)
 	return 0
 }
 
-func checkOnce(ctx context.Context, cfg latencyConfig, maxChars int, text string) (guard.Verdict, float64, error) {
-	p, err := guard.New(guard.Options{Layers: cfg.layers, MaxChars: maxChars, CacheSize: 1, Version: cfg.name})
+func checkOnce(ctx context.Context, cfg latencyConfig, maxChars, window int, text string) (guard.Verdict, float64, error) {
+	p, err := guard.New(guard.Options{Layers: cfg.layers, MaxChars: maxChars, WindowChars: window, CacheSize: 1, Version: cfg.name})
 	if err != nil {
 		return guard.Verdict{}, 0, err
 	}
@@ -221,12 +222,12 @@ func deltaCells(l1, l2 latencyStat) []string {
 	}
 }
 
-func printLatencyReport(dir string, iterations, warmup, maxChars int, l2Note, rssSource string, baselineRSS, warmRSS, endRSS float64, items []latencyItem, byConfig map[string]latencyResult, hasL2 bool) {
+func printLatencyReport(dir string, iterations, warmup, maxChars, window int, l2Note, rssSource string, baselineRSS, warmRSS, endRSS float64, items []latencyItem, byConfig map[string]latencyResult, hasL2 bool) {
 	fmt.Printf("kitctl verify latency\n")
 	fmt.Printf("machine: %s/%s, NumCPU=%d\n", runtime.GOOS, runtime.GOARCH, runtime.NumCPU())
 	fmt.Printf("models: dir=%s guard-model=%s\n", dir, defaultGuardModel)
-	fmt.Printf("rail=%s iterations=%d warmup=%d max-chars=%d (fresh pipeline per timed Check: no cache hits)\n",
-		guard.RailInput, iterations, warmup, maxChars)
+	fmt.Printf("rail=%s iterations=%d warmup=%d max-chars=%d window=%d (fresh pipeline per timed Check: no cache hits)\n",
+		guard.RailInput, iterations, warmup, maxChars, window)
 	fmt.Printf("%s\n", l2Note)
 	fmt.Printf("RSS: %.1f MB baseline, %.1f MB after warmup, %.1f MB after the run (source: %s)\n\n",
 		baselineRSS, warmRSS, endRSS, rssSource)
@@ -258,5 +259,7 @@ func printLatencyReport(dir string, iterations, warmup, maxChars int, l2Note, rs
 	_, _ = fmt.Fprintln(w, strings.Join(overall, "\t"))
 	_ = w.Flush()
 
-	fmt.Printf("\ndocumented target: p50 <= 150 ms, p95 <= 400 ms at <=512 tokens on 4 vCPU (this host reports %d CPU(s))\n", runtime.NumCPU())
+	fmt.Printf("\ndocumented target (D53): short input p50 <= 250 ms / p95 <= 400 ms; a full-tensor window p50 <= 800 ms.\n")
+	fmt.Printf("long input is scanned in overlapping windows, so its cost is about N windows x the per-window figure above.\n")
+	fmt.Printf("(this host reports %d CPU(s))\n", runtime.NumCPU())
 }

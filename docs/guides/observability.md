@@ -6,7 +6,7 @@ kit пишет трейсы вызовов в Elasticsearch сам: trace соз
 
 Это how-to: что пишется и когда, политика текста, сэмплирование, sink'и,
 ретенция, дашборды и — отдельным разделом — почему **деньги считаете вы, а не
-framework**. Замысел — [Наблюдаемость](../concepts/observability.md); поля
+библиотека**. Замысел — [Наблюдаемость](../concepts/observability.md); поля
 документов — [Индексы Elasticsearch](../reference/elasticsearch.md).
 
 ## Когда использовать
@@ -100,7 +100,7 @@ guarded-промпт.
 
 > [!WARNING]
 > `trace.TextFull` — осознанный отказ от маскирования. Он удобен на стенде и
-> опасен в проде: в ES уйдут сырые PII и секреты. Framework предупредит один раз
+> опасен в проде: в ES уйдут сырые PII и секреты. Библиотека предупредит один раз
 > `slog.Warn` при `kit.New`, и всё.
 
 ## Сэмплирование
@@ -219,6 +219,28 @@ Sink получает **те же** документы, но уже после �
 поставлен в очередь. Поэтому sink'ом нельзя «поправить» то, что ушло в ES, —
 только отправить данные дальше (аналитика, тесты, свой стор).
 
+## Обработчики наблюдений: `TraceProcessors`
+
+`Config.TraceProcessors` — срез `func(*trace.Observation)`, которые правят
+observation **до** сборки ES-документа и до sink'ов. Так можно доредактировать
+(`Metadata`, `Tags`, текст) или отбросить документ целиком, очистив `Name`:
+
+```go
+kit.Config{
+	TraceProcessors: []func(*trace.Observation){
+		func(o *trace.Observation) {
+			if o.GuardAction == "reject" {
+				o.Tags = append(o.Tags, "alert")
+			}
+		},
+	},
+}
+```
+
+В отличие от sink'а обработчик работает до сериализации, поэтому его правки
+попадают и в ES, и в sink'и. Сэмплирование (`Sampler`) идёт раньше: до
+отброшенного сэмплером документа обработчик не доходит.
+
 ## Ретенция: ILM и `Prune`
 
 Traces и observations живут в data streams `kit-traces` и `kit-observations`.
@@ -254,14 +276,14 @@ deleted, err := app.Prune(ctx, 30*24*time.Hour)
 | Cost by tenant         | `kit-traces`           | sum `usage.cost`, bucket by `tenant`            |
 | Recent traces          | `kit-traces`           | `*`                                             |
 
-> [!WARNING]
-> Панель **Cost by tenant** суммирует `usage.cost`, а его framework не
-> заполняет (см. ниже). Пока вы не начнёте проставлять стоимость, панель
-> показывает нули.
+> [!NOTE]
+> Панель **Cost by tenant** суммирует `usage.cost`, который библиотека
+> заполняет по `Config.Pricing` (BR-77). Пока цена не задана, значение — `0` и
+> панель показывает нули.
 
 ## Стоимость: `Config.Pricing`
 
-Framework считает стоимость сам, если задан `Config.Pricing`
+Библиотека считает стоимость сам, если задан `Config.Pricing`
 (`model.Pricing{InputPerMTok, OutputPerMTok}`): `usage.cost` в trace (сумма хода) и
 `cost` в generation-observation заполняются по токенам (BR-77). Нулевая цена
 (значение по умолчанию) означает «цена неизвестна» и даёт `0`.
@@ -290,6 +312,16 @@ app, _ := kit.New(ctx, kit.Config{
 ```go
 h := app.Health()
 writeJSON(w, map[string]any{"ok": h.Healthy, "degraded": h.Degraded, "checks": h.Components})
+```
+
+Для счётчиков есть `App.Metrics()`: вердикты guard (`Scans`, `Blocked`,
+`Truncated`, `Degradations`, гистограмма латентности `Latency`), глубина очереди
+trace-писателя и `TraceDropped`. Ядро не тянет библиотеку метрик: снимок
+отправляйте туда, где уже собираются метрики.
+
+```go
+m := app.Metrics()
+writeJSON(w, map[string]any{"guard_scans": m.Guard.Scans, "guard_blocked": m.Guard.Blocked, "trace_dropped": m.TraceDropped})
 ```
 
 ## Рецепты
@@ -340,15 +372,16 @@ kind:SPAN AND tags:effect:*   → group by name → p95(latency_ms)
 
 Так вы отсечёте вызовы ES (`kit-chunks`) и эмбеддера, которые тоже `SPAN`.
 
-## Чего фреймворк не делает (ограничения)
+## Чего библиотека не делает (ограничения)
 
 - **Нет UI.** `kit-overview` — только провижененный Grafana-дашборд; своего
   интерфейса нет.
-- **Нет trace read API.** JSON read API трейсов не реализован: читать можно
-  только сам ES. Приложение не может «достать трейс» через kit.
-- **Нет расчёта стоимости.** `usage.cost`/`cost` — ваша ответственность;
-  framework пишет только токены и только для первого вызова `Generate` (токены
-  структурирующего вызова не попадают никуда).
+- **Нет trace read API.** JSON read API трейсов не реализован: читать можно сам ES
+  (Kibana/Grafana) или CLI-ридер `go run ./demo/cmd/traces` (`-limit`, `-name`,
+  `-tenant`, `-trace <id>`). Приложение не может «достать трейс» через kit.
+- **Стоимость считается только при заданном `Config.Pricing`.** Без цены
+  `usage.cost`/`cost` равны `0`; токены структурирующего вызова не входят в итог
+  хода.
 - **Трейсы не изолированы по тенантам.** `kit-traces`/`kit-observations` — общие
   data streams без ACL: любой, у кого есть доступ к индексу, видит документы всех
   арендаторов. Изоляция — на стороне ES (роли, фильтры, отдельные кластеры).

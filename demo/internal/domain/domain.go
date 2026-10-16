@@ -58,6 +58,29 @@ type KnowledgeHit struct {
 	Position int
 }
 
+// Ticket is the typed answer of the triage use case. kit derives its JSON Schema
+// from these fields, so the model is asked for exactly this shape.
+type Ticket struct {
+	Severity int    `json:"severity"`
+	Summary  string `json:"summary"`
+}
+
+// AuditEvent is one recorded use of the bot. It lives in the demo's own store,
+// not in kit: the library never owns your analytics.
+type AuditEvent struct {
+	Tenant string
+	UserID string
+	Role   Role
+	Action string
+}
+
+// AuditStats is the aggregate the mock audit store reports.
+type AuditStats struct {
+	Events   int
+	ByRole   map[string]int
+	ByAction map[string]int
+}
+
 const Tenant = "bot"
 
 var (

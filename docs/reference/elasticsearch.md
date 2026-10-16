@@ -12,7 +12,7 @@ ES подключается через интерфейс `store.ES` (I-12, D21)
 
 ```go
 type Request struct {
-    Method      string // GET, POST, PUT, DELETE, HEAD
+    Method      string // GET, POST, PUT, DELETE
     Path        string // может уже нести query string
     Body        []byte
     ContentType string // "" -> application/json
@@ -55,7 +55,7 @@ func RawRequest(method, path string, body []byte, contentType string) Request
 | `doc_id`      | `keyword`                                        | Исходный документ.                                                |
 | `tenant`      | `keyword`                                        | Тенант из принципала.                                             |
 | `acl`         | `keyword`                                        | Роли, которым разрешён чанк.                                      |
-| `text`        | `text`                                           | Текст чанка (BM25).                                               |
+| `text`        | `text` `analyzer=russian`                        | Текст чанка (BM25).                                               |
 | `vector`      | `dense_vector` `dims=<Dim>`, `similarity=cosine` | Эмбеддинг; размерность берётся из эмбеддера.                      |
 | `position`    | `integer`                                        | Порядковый номер чанка в документе.                               |
 | `source`      | `keyword`                                        | Источник документа.                                               |
@@ -68,19 +68,28 @@ func RawRequest(method, path string, body []byte, contentType string) Request
 чанк хранится маркером `quarantined: true` **без** `text` и без `vector`
 (BR-31, D19), поэтому его нельзя ни найти, ни использовать.
 
+Текстовые поля (`text`, `content`) создаются с анализатором **`russian`** (модуль
+`analysis-common`, плагин не нужен). Это под русский корпус, и это известная
+плата: **смешанный или англоязычный корпус будет искать хуже** — английские
+слова пойдут под русский стеммер, а лексическая половина гибрида просядет
+(векторная, kNN, продолжит работать). Смена анализатора — это изменение маппинга:
+`EnsureSchema` существующий индекс не пересоздаёт, поэтому свой анализатор
+задавайте до первого `Ingest` или переиндексируйте сами (D62).
+
 ## kit-memory-messages
 
-| Поле          | Тип                                | Назначение                                          |
-| ------------- | ---------------------------------- | --------------------------------------------------- |
-| `thread_id`   | `keyword`                          | Тред, заданный вызывающим (`ChatRequest.ThreadID`). |
-| `tenant`      | `keyword`                          | Тенант принципала.                                  |
-| `user_id`     | `keyword`                          | Resource: идентификатор пользователя.               |
-| `role`        | `keyword`                          | `user` или `assistant`.                             |
-| `content`     | `text`                             | Текст сообщения (уже прошедший guard).              |
-| `seq`         | `long`                             | Монотонный ключ порядка (сортировка истории).       |
-| `created_at`  | `date`                             | Время записи.                                       |
-| `vector`      | `dense_vector` `similarity=cosine` | Только при известной размерности; для recall.       |
-| `embed_model` | `keyword`                          | Модель эмбеддера вектора сообщения.                 |
+| Поле          | Тип                                | Назначение                                                 |
+| ------------- | ---------------------------------- | ---------------------------------------------------------- |
+| `thread_id`   | `keyword`                          | Тред, заданный вызывающим (`ChatRequest.ThreadID`).        |
+| `tenant`      | `keyword`                          | Тенант принципала.                                         |
+| `user_id`     | `keyword`                          | Resource: идентификатор пользователя.                      |
+| `role`        | `keyword`                          | `user` или `assistant`.                                    |
+| `content`     | `text` `analyzer=russian`          | Текст сообщения (уже прошедший guard).                     |
+| `untrusted`   | `boolean`                          | Ход был недоверенным: восстанавливает Rule of Two (`D59`). |
+| `seq`         | `long`                             | Монотонный ключ порядка (сортировка истории).              |
+| `created_at`  | `date`                             | Время записи.                                              |
+| `vector`      | `dense_vector` `similarity=cosine` | Только при известной размерности; для recall.              |
+| `embed_model` | `keyword`                          | Модель эмбеддера вектора сообщения.                        |
 
 Все запросы памяти фильтруют `tenant` + `user_id`; `thread_id` добавляется для
 истории и очистки. `created_at` — только для отображения: порядок истории идёт
@@ -105,7 +114,7 @@ func RawRequest(method, path string, body []byte, contentType string) Request
 | ------------------------- | --------------------------- | ------------------------------------------------------------------------------- |
 | `@timestamp`              | `date`                      | Время окончания trace.                                                          |
 | `trace_id`                | `keyword`                   | Идентификатор trace.                                                            |
-| `name`                    | `keyword`                   | `chat`, `ingest`, `search`, `generate`.                                         |
+| `name`                    | `keyword`                   | `chat`, `ingest`, `search`, `generate`, `memory`.                               |
 | `user_id`                 | `keyword`                   | Принципал.                                                                      |
 | `session_id`              | `keyword`                   | Группировка по сессии.                                                          |
 | `tenant`                  | `keyword`                   | Тенант принципала.                                                              |
@@ -123,7 +132,7 @@ func RawRequest(method, path string, body []byte, contentType string) Request
 | `usage.prompt_tokens`     | `integer`                   | Токены промпта.                                                                 |
 | `usage.completion_tokens` | `integer`                   | Токены ответа.                                                                  |
 | `usage.total_tokens`      | `integer`                   | Всего токенов.                                                                  |
-| `usage.cost`              | `double`                    | Стоимость; framework считает её по `Config.Pricing` (`0`, если цена не задана). |
+| `usage.cost`              | `double`                    | Стоимость; библиотека считает её по `Config.Pricing` (`0`, если цена не задана). |
 
 Score пишется сюда же: `kind: SCORE`, `trace_id`, `name`, `score`, `comment`.
 
@@ -176,7 +185,7 @@ Score пишется сюда же: `kind: SCORE`, `trace_id`, `name`, `score`, 
 | 5   | `PUT /kit-memory-working`                                   |
 | 6   | `PUT /kit-chunks` — только если размерность эмбеддера `> 0` |
 
-Шаблоны data stream задают 1 shard, 0 replicas и lifecycle `kit-traces-30d`. Вызов идемпотентен: ответы `resource_already_exists_exception` и `already_exists_exception` считаются успехом. Если `Embedder` не задан, `Dim()` не даёт размерности и шаг 4 пропускается. Каждый шаг ограничен `store.EnsureStepTimeout` (по умолчанию 30 с).
+Шаблоны data stream задают 1 shard, 0 replicas и lifecycle `kit-traces-30d`. Вызов идемпотентен: ответы `resource_already_exists_exception` и `already_exists_exception` считаются успехом. Если `Embedder` не задан, `Dim()` не даёт размерности и шаг 6 пропускается. Каждый шаг ограничен `store.EnsureStepTimeout` (по умолчанию 30 с).
 
 ## Поиск
 

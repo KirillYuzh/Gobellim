@@ -160,3 +160,44 @@ func TestChatStreamMasksPII(t *testing.T) {
 		t.Fatal("the final message must match the emitted stream")
 	}
 }
+
+func TestChatStreamTruncatedInputBlocksEgress(t *testing.T) {
+	type sendIn struct {
+		To string `json:"to"`
+	}
+
+	streamer := &fakeStreamer{
+		queue:  []model.Response{toolCallResponse("send_mail", `{"to":"a@example.com"}`)},
+		deltas: [][]string{{""}},
+	}
+	app := newRealApp(t, discardES{}, streamer, nil, testPolicyMemory, func(c *Config) {
+		c.GuardMaxChars = 16
+		c.MaxSteps = 3
+	})
+	sent := false
+	if _, err := Tool(app, "send_mail",
+		func(context.Context, sendIn) (string, error) { sent = true; return "sent", nil },
+		Effects(EffectEgress), EgressAny()); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := WithPrincipal(context.Background(), Principal{UserID: "u", Tenant: "t", Roles: []string{"admin"}})
+	ch, err := app.ChatStream(ctx, ChatRequest{Messages: []model.Message{
+		{Role: model.RoleUser, Content: strings.Repeat("очень длинный пользовательский ввод ", 40)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var streamErr error
+	for chunk := range ch {
+		if chunk.Err != nil {
+			streamErr = chunk.Err
+		}
+	}
+	if !errors.Is(streamErr, ErrUnauthorized) {
+		t.Fatalf("err = %v, want ErrUnauthorized", streamErr)
+	}
+	if sent {
+		t.Fatal("egress must not run on a turn whose input the guard could not finish scanning")
+	}
+}

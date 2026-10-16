@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -28,35 +27,6 @@ const DefaultModel = "hivetrace__gliner-guard-omni"
 const DefaultSessions = 2
 
 const DefaultMaxTokens = 512
-
-var (
-	unsafeLabelRe    = regexp.MustCompile(`(?i)(unsafe|harmful|toxic|violence|danger)`)
-	injectionLabelRe = regexp.MustCompile(`(?i)(inject|jailbreak|attack|override|exfiltrat|abuse)`)
-)
-
-var safeLabels = map[string]bool{
-	"safe": true, "benign": true, "harmless": true,
-	"clean": true, "neutral": true, "none": true, "ok": true,
-	"informational": true, "informal": true, "formal": true,
-	"conversational": true, "creative": true, "factual": true,
-	"positive": true, "polite": true,
-}
-
-const defaultClassificationThreshold = 0.5
-
-const safeCategory = "SAFE"
-
-func parseCategory(s string) (guard.Category, bool) {
-	switch c := guard.Category(strings.ToUpper(strings.TrimSpace(s))); c {
-	case guard.CatPII, guard.CatSecret, guard.CatInjection, guard.CatUnsafe:
-		return c, true
-	}
-	return "", false
-}
-
-func categoryIsSafe(s string) bool {
-	return strings.EqualFold(strings.TrimSpace(s), safeCategory)
-}
 
 type Config struct {
 	Dir       string
@@ -199,6 +169,8 @@ func VerifyDir(dir, model string) error {
 }
 
 func (*Detector) Name() string { return "L2" }
+
+func (*Detector) UsesNaturalText() bool { return true }
 
 func (d *Detector) Detect(ctx context.Context, text string) ([]guard.Finding, error) {
 	if text == "" {
@@ -421,7 +393,7 @@ func (d *Detector) findings(p *prepared, out *outputs) []guard.Finding {
 		}
 	}
 	for _, c := range res.classifications {
-		cat, ok := d.categoryFor(c.label, "")
+		cat, ok := d.categoryForClass(c.group, c.label)
 		if !ok {
 			continue
 		}
@@ -438,28 +410,15 @@ func (d *Detector) findings(p *prepared, out *outputs) []guard.Finding {
 }
 
 func (d *Detector) categoryFor(label string, def guard.Category) (guard.Category, bool) {
-	if s, ok := d.cfg.CategoryMap[label]; ok {
-		if categoryIsSafe(s) {
-			return "", false
-		}
-		if c, ok := parseCategory(s); ok {
-			return c, true
-		}
+	return categoryForLabel(d.cfg.CategoryMap, label, def)
+}
+
+func (d *Detector) categoryForClass(group int, label string) (guard.Category, bool) {
+	task := ""
+	if group >= 0 && group < len(d.cfg.Schema.Classifications) {
+		task = d.cfg.Schema.Classifications[group].Task
 	}
-	if def != "" {
-		return def, true
-	}
-	low := strings.ToLower(strings.TrimSpace(label))
-	if safeLabels[low] {
-		return "", false
-	}
-	if unsafeLabelRe.MatchString(low) {
-		return guard.CatUnsafe, true
-	}
-	if injectionLabelRe.MatchString(low) {
-		return guard.CatInjection, true
-	}
-	return guard.CatUnsafe, true
+	return categoryForClass(d.cfg.CategoryMap, task, label)
 }
 
 type classification struct {
@@ -468,6 +427,7 @@ type classification struct {
 	MultiLabel            bool               `json:"multi_label"`
 	Activation            string             `json:"activation"`
 	Output                string             `json:"output"`
+	ClsThreshold          float64            `json:"cls_threshold"`
 	Threshold             float64            `json:"threshold"`
 	Thresholds            map[string]float64 `json:"thresholds"`
 	SchemaMarkerPositions []int64            `json:"schema_marker_positions"`
@@ -488,13 +448,7 @@ func (c *classification) outputName() string {
 }
 
 func (c *classification) thresholdFor(label string) float64 {
-	if v, ok := c.Thresholds[label]; ok {
-		return v
-	}
-	if c.Threshold > 0 {
-		return c.Threshold
-	}
-	return defaultClassificationThreshold
+	return thresholdFor(c.ClsThreshold, c.Threshold, c.Thresholds, label)
 }
 
 type modelConfig struct {

@@ -15,8 +15,6 @@ import (
 	"github.com/gobellim/kit/internal/httpjson"
 )
 
-// sessionHeader is the response header the server uses to hand out a session
-// id, which must be echoed on every later request.
 const sessionHeader = "Mcp-Session-Id"
 
 type httpTransport struct {
@@ -67,7 +65,7 @@ func (h *httpTransport) post(ctx context.Context, v any) ([]json.RawMessage, err
 	if err != nil {
 		return nil, fmt.Errorf("mcp: %s: encode request: %w", h.cfg.Name, err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.cfg.URL, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.cfg.URL, bytes.NewReader(payload)) //nolint:gosec // the MCP endpoint is operator-configured
 	if err != nil {
 		return nil, fmt.Errorf("mcp: %s: build request: %w", h.cfg.Name, err)
 	}
@@ -84,7 +82,7 @@ func (h *httpTransport) post(ctx context.Context, v any) ([]json.RawMessage, err
 		req.Header.Set(sessionHeader, session)
 	}
 
-	resp, err := h.hc.Do(req)
+	resp, err := h.hc.Do(req) //nolint:gosec // the request URL is operator-configured
 	if err != nil {
 		return nil, fmt.Errorf("mcp: %s: post: %w: %w", h.cfg.Name, err, core.ErrProvider)
 	}
@@ -121,8 +119,6 @@ func (h *httpTransport) post(ctx context.Context, v any) ([]json.RawMessage, err
 	return []json.RawMessage{json.RawMessage(trimmed)}, nil
 }
 
-// readSSE reads server-sent events and returns the JSON payload of each `data:`
-// frame.
 func readSSE(r io.Reader, name string) ([]json.RawMessage, error) {
 	var out []json.RawMessage
 	sc := bufio.NewScanner(r)

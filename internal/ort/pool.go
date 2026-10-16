@@ -58,7 +58,6 @@ func (p *Pool) Release(s Session) {
 	p.ch <- s
 }
 
-// Stats reports the pool's capacity and how many sessions are idle right now.
 type Stats struct {
 	Size      int
 	Available int

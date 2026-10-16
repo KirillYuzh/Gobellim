@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gobellim/kit/authz"
+	"github.com/gobellim/kit/demo/internal/adapter/audit"
 	"github.com/gobellim/kit/demo/internal/adapter/elastic"
 	"github.com/gobellim/kit/demo/internal/adapter/guardrail"
 	"github.com/gobellim/kit/demo/internal/adapter/httpapi"
@@ -75,15 +76,16 @@ func run() error {
 	defer stop()
 
 	engine, err := kitengine.New(ctx, kitengine.Config{
-		ES:        elastic.New(cfg.ESURL, client),
-		LLM:       llm,
-		Embedder:  embedder,
-		Policy:    policy,
-		GuardL2:   guardrail.New(cfg.ModelsDir, cfg.GLiNERModel, log),
-		Weather:   weather.New(client, cfg.WeatherBaseURL),
-		TraceText: cfg.TraceText,
-		Sampler:   sampler,
-		Logger:    log,
+		ES:           elastic.New(cfg.ESURL, client),
+		LLM:          llm,
+		Embedder:     embedder,
+		Policy:       policy,
+		GuardL2:      guardrail.New(cfg.ModelsDir, cfg.GLiNERModel, log),
+		Weather:      weather.New(client, cfg.WeatherBaseURL),
+		WeatherHosts: cfg.WeatherHosts,
+		TraceText:    cfg.TraceText,
+		Sampler:      sampler,
+		Logger:       log,
 	})
 	if err != nil {
 		return err
@@ -99,7 +101,8 @@ func run() error {
 		{ID: "u-root", Login: "root", Role: domain.RoleAdmin},
 	})
 	auth := usecase.NewAuth(directory, memory.NewTokens(), cfg.TokenTTL)
-	bot := usecase.NewBot(engine)
+	auditor := audit.NewMemory()
+	bot := usecase.NewBot(engine, auditor)
 	kb := usecase.NewKnowledge(engine)
 
 	if cfg.SeedKB {
@@ -117,7 +120,7 @@ func run() error {
 
 	server := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(auth, bot, kb, log),
+		Handler:           httpapi.New(auth, bot, kb, auditor, log),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {

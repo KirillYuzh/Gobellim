@@ -75,9 +75,6 @@ func SpanMetadataFrom(ctx context.Context) map[string]any {
 	return md
 }
 
-// HealthStatus is a component's self-reported state, surfaced by App.Health.
-// OK=false marks the component unhealthy; Detail explains why. Components with a
-// bounded worker pool also report InUse and Capacity.
 type HealthStatus struct {
 	OK       bool
 	Detail   string
@@ -85,9 +82,6 @@ type HealthStatus struct {
 	Capacity int
 }
 
-// HealthChecker may be implemented by an injected component (guard L2, an
-// embedder, the ES client, the LLM client) so App.Health can report its state.
-// The zero value of HealthStatus means healthy with no pool.
 type HealthChecker interface {
 	Health() HealthStatus
 }

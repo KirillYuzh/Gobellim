@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"strings"
 
 	"github.com/gobellim/kit/authz"
 	"github.com/gobellim/kit/internal/core"
@@ -56,6 +58,8 @@ type ToolDef struct {
 	permission      string
 	effect          Effect
 	egressHosts     []string
+	egressAny       bool
+	allowPII        bool
 	requireApproval bool
 	validateOutput  bool
 	modelView       func(string) string
@@ -77,6 +81,10 @@ func (t *ToolDef) Permission() string { return t.permission }
 func (t *ToolDef) Effect() Effect { return t.effect }
 
 func (t *ToolDef) EgressHosts() []string { return append([]string(nil), t.egressHosts...) }
+
+func (t *ToolDef) EgressAny() bool { return t.egressAny }
+
+func (t *ToolDef) AllowPII() bool { return t.allowPII }
 
 func (t *ToolDef) RequireApproval() bool { return t.requireApproval }
 
@@ -146,6 +154,8 @@ type toolOptions struct {
 	permission      string
 	effect          Effect
 	egressHosts     []string
+	egressAny       bool
+	allowPII        bool
 	requireApproval bool
 	validateOutput  bool
 	modelView       func(string) string
@@ -162,6 +172,10 @@ func Effects(e Effect) ToolOption { return func(o *toolOptions) { o.effect = e }
 func EgressHosts(hosts ...string) ToolOption {
 	return func(o *toolOptions) { o.egressHosts = append([]string(nil), hosts...) }
 }
+
+func EgressAny() ToolOption { return func(o *toolOptions) { o.egressAny = true } }
+
+func AllowPII(b bool) ToolOption { return func(o *toolOptions) { o.allowPII = b } }
 
 func RequireApproval(b bool) ToolOption { return func(o *toolOptions) { o.requireApproval = b } }
 
@@ -210,6 +224,8 @@ func Tool[In, Out any](app *App, name string, fn func(ctx context.Context, in In
 		permission:      o.permission,
 		effect:          o.effect,
 		egressHosts:     o.egressHosts,
+		egressAny:       o.egressAny,
+		allowPII:        o.allowPII,
 		requireApproval: o.requireApproval,
 		validateOutput:  o.validateOutput,
 		modelView:       o.modelView,
@@ -254,10 +270,6 @@ func Tool[In, Out any](app *App, name string, fn func(ctx context.Context, in In
 	return def, nil
 }
 
-// RawTool registers a tool whose JSON Schema is supplied verbatim instead of
-// being derived from a Go type. It exists for tools whose schema comes from
-// outside the program (an MCP server). args is the raw JSON argument object;
-// fn returns the result the model sees. An empty schema becomes a bare object.
 func RawTool(app *App, name string, schema json.RawMessage, fn func(ctx context.Context, args json.RawMessage) (string, error), opts ...ToolOption) (*ToolDef, error) {
 	if app == nil {
 		return nil, fmt.Errorf("kit: app is required: %w", core.ErrInvalidConfig)
@@ -288,6 +300,8 @@ func RawTool(app *App, name string, schema json.RawMessage, fn func(ctx context.
 		permission:      o.permission,
 		effect:          o.effect,
 		egressHosts:     o.egressHosts,
+		egressAny:       o.egressAny,
+		allowPII:        o.allowPII,
 		requireApproval: o.requireApproval,
 		validateOutput:  o.validateOutput,
 		modelView:       o.modelView,
@@ -318,10 +332,16 @@ func (a *App) register(def *ToolDef) {
 
 func schemaFor[T any]() (json.RawMessage, error) {
 	var v T
+	if !reflect.ValueOf(v).IsValid() {
+		return json.RawMessage(`{}`), nil
+	}
 	return reflectSchema(v)
 }
 
 func reflectSchema(v any) (json.RawMessage, error) {
+	if !reflect.ValueOf(v).IsValid() {
+		return json.RawMessage(`{}`), nil
+	}
 	r := &invopop.Reflector{DoNotReference: true, ExpandedStruct: true}
 	raw, err := json.Marshal(r.Reflect(v))
 	if err != nil {
@@ -355,4 +375,16 @@ func compileSchema(name string, raw json.RawMessage) (*stjs.Schema, error) {
 		return nil, fmt.Errorf("compile schema: %w", err)
 	}
 	return comp, nil
+}
+
+func decodeAnswer[T any](text string, compiled *stjs.Schema, dst *T) error {
+	trimmed := strings.TrimSpace(text)
+	var raw any
+	if err := json.Unmarshal([]byte(trimmed), &raw); err != nil {
+		return err
+	}
+	if err := compiled.Validate(raw); err != nil {
+		return fmt.Errorf("answer does not match the schema: %w", err)
+	}
+	return json.Unmarshal([]byte(trimmed), dst)
 }

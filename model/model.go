@@ -90,14 +90,11 @@ type Usage struct {
 	Cost             float64
 }
 
-// Pricing is the per-million-token price of a model. The zero value means the
-// price is unknown and produces a zero cost.
 type Pricing struct {
 	InputPerMTok  float64
 	OutputPerMTok float64
 }
 
-// Cost returns the price of one call with the given usage.
 func (p Pricing) Cost(u Usage) float64 {
 	return float64(u.PromptTokens)/1e6*p.InputPerMTok + float64(u.CompletionTokens)/1e6*p.OutputPerMTok
 }
