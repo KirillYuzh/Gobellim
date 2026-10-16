@@ -1362,6 +1362,7 @@ type GenerateRequest[T any] struct {
 type Generated[T any] struct {
 	Value        T
 	Raw          string
+	Decoded      bool
 	UsedFallback bool
 	FinishReason model.FinishReason
 }
@@ -1384,6 +1385,10 @@ func Generate[T any](ctx context.Context, app *App, req GenerateRequest[T]) (Gen
 	}
 
 	schema, err := schemaFor[T]()
+	if err != nil {
+		return zero, err
+	}
+	compiled, err := compileSchema("generate", schema)
 	if err != nil {
 		return zero, err
 	}
@@ -1463,13 +1468,13 @@ func Generate[T any](ctx context.Context, app *App, req GenerateRequest[T]) (Gen
 	tr.Output = text
 
 	out := Generated[T]{Raw: text, FinishReason: resp.FinishReason}
-	decodeErr := json.Unmarshal([]byte(strings.TrimSpace(text)), &out.Value)
+	decodeErr := decodeAnswer(text, compiled, &out.Value)
 
 	if decodeErr != nil && req.StructuringModel != nil {
 		structured, serr := app.structure(ctx, req.StructuringModel, schema, mode,
 			req.MaxTokens, req.Temperature, text, traceID)
 		if serr == nil {
-			if derr := json.Unmarshal([]byte(strings.TrimSpace(structured)), &out.Value); derr == nil {
+			if derr := decodeAnswer(structured, compiled, &out.Value); derr == nil {
 				decodeErr = nil
 			}
 		}
@@ -1488,6 +1493,7 @@ func Generate[T any](ctx context.Context, app *App, req GenerateRequest[T]) (Gen
 			return zero, fmt.Errorf("kit: generate: decode answer: %w: %w", decodeErr, core.ErrProvider)
 		}
 	}
+	out.Decoded = true
 	return out, nil
 }
 

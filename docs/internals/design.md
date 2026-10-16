@@ -532,8 +532,9 @@ type StreamChunk struct {
 Новые/изменённые операции:
 
 - `Generate[T]` — через примитив: `principal` → `PermGenerate` → input-guard →
-  модель → output-guard; `System` идёт ролью `system`; поддержка
-  `ErrorStrategy` (`strict`/`warn`/`fallback`), `SchemaMode`, `UsedFallback`.
+  модель → output-guard; `System` идёт ролью `system`; ответ валидируется по схеме
+  `T` до декодирования; поддержка `ErrorStrategy` (`strict`/`warn`/`fallback`),
+  `SchemaMode`, `Decoded`, `UsedFallback`.
   `GenerateRequest[T].StructuringModel` — второй модельный вызов, который при
   неудачном прямом декодировании переписывает прозу в схему **до** применения
   `ErrorStrategy`; он пишется отдельной observation и не добавляет usage к итогу хода.
@@ -710,9 +711,9 @@ README описывают именно это поведение.
 
 - `Generate[T](ctx, app, GenerateRequest[T]) (Generated[T], error)` — полноценная
   операция примитива: принципал, право `generate`, input/output guard, трейс;
-  `System` уходит ролью `system`; `ErrorStrategy` `Strict/Warn/Fallback`
-  и `Generated.UsedFallback`; при `SchemaNative` и отсутствии поддержки
-  провайдера схема автоматически инлайнится.
+  `System` уходит ролью `system`; ответ проверяется по схеме `T`; `ErrorStrategy`
+  `Strict/Warn/Fallback` и флаги `Generated.Decoded`/`UsedFallback`; при
+  `SchemaNative` и отсутствии поддержки провайдера схема автоматически инлайнится.
 - Права: добавлены `generate` и `prune`; `Ingest`, `Search`, `Delete`
   требуют непустой `Tenant` (иначе `ErrUnauthorized`). `Prune` требует
   принципала и право `prune`, но не тенант: это глобальное действие
@@ -893,3 +894,10 @@ AllowedOrigins, Logger})`, `mcp.ServerTool`, `mcp.FromTool(app, def)`,
   allow; передаётся в `guard.Options.OnViolation` без сырых значений (`AllowPII`).
 - `Config.TraceProcessors []func(*trace.Observation)` — правки наблюдения до
   записи и до sink'ов; очистка `Name` отбрасывает документ.
+
+### 5.16 Валидация ответа `Generate` (D58)
+
+- Ответ разбирается в `any` и проверяется скомпилированной схемой, затем декодируется
+  в `T`: `json.Unmarshal` один принимал документ с отсутствующим или лишним полем.
+- `Generated[T].Decoded` — `true`, если ответ совпал со схемой; при `Warn`/`Fallback`
+  остаётся `false`.

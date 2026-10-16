@@ -275,8 +275,9 @@ func Generate[T any](ctx context.Context, app *App, req GenerateRequest[T]) (Gen
 
 Полноценная операция примитива: принципал, право `generate`, input/output guard,
 трейс. Просит модель вернуть значение типа `T` по JSON Schema, выведенной из `T`,
-и декодирует ответ в `T`. `System` уходит ролью `system`. При `SchemaNative` и
-отсутствии поддержки у провайдера схема автоматически инлайнится.
+проверяет ответ по этой же схеме и декодирует его в `T`. `System` уходит ролью
+`system`. При `SchemaNative` и отсутствии поддержки у провайдера схема
+автоматически инлайнится.
 
 ```go
 type Review struct {
@@ -287,6 +288,7 @@ type Review struct {
 g, err := kit.Generate[Review](ctx, app, kit.GenerateRequest[Review]{Prompt: "Проверь заявку"})
 // g.Value   — декодированное значение
 // g.Raw     — сырой (уже прошедший guard) ответ
+// g.Decoded — true, если ответ совпал со схемой и заполнил g.Value
 // g.UsedFallback — true, если сработала стратегия Fallback
 ```
 
@@ -433,12 +435,12 @@ type GenerateRequest[T any] struct {
 | `Temperature`      | `*float64`         | Температура генерации.                                                  |
 | `SessionID`        | `string`           | Идентификатор сессии для трейсов.                                       |
 | `SchemaMode`       | `model.SchemaMode` | Как передать схему; `SchemaNative` без поддержки провайдера инлайнится. |
-| `ErrorStrategy`    | `ErrorStrategy`    | Что делать, если ответ не декодируется в `T`.                           |
+| `ErrorStrategy`    | `ErrorStrategy`    | Что делать, если ответ не декодируется или не совпадает со схемой `T`.  |
 | `Fallback`         | `*T`               | Значение по умолчанию для стратегии `Fallback`; обязательно для неё.    |
 | `Tags`             | `[]string`         | Метки на trace.                                                         |
 | `StructuringModel` | `model.Client`     | Второй вызов при неудачном прямом декодировании (см. ниже).             |
 
-Если задан `StructuringModel`, то при неполадке прямого декодирования в `T` (и до применения `ErrorStrategy`) kit делает одну попытку через `model.Structurer`: просит модель переписать прошлый ответ по той же схеме и декодирует результат. Вызов идёт через `internal/call`, пишется **отдельной** observation (с `metadata.structuring = true`) и **не** добавляет usage к итогу хода.
+Если задан `StructuringModel`, то при неполадке прямого декодирования или несоответствии схеме (и до применения `ErrorStrategy`) kit делает одну попытку через `model.Structurer`: просит модель переписать прошлый ответ по той же схеме и декодирует результат. Вызов идёт через `internal/call`, пишется **отдельной** observation (с `metadata.structuring = true`) и **не** добавляет usage к итогу хода.
 
 ### Generated
 
@@ -446,17 +448,19 @@ type GenerateRequest[T any] struct {
 type Generated[T any] struct {
     Value        T
     Raw          string
+    Decoded      bool
     UsedFallback bool
     FinishReason model.FinishReason
 }
 ```
 
-| Поле           | Тип                  | Назначение                                  |
-| -------------- | -------------------- | ------------------------------------------- |
-| `Value`        | `T`                  | Декодированное значение.                    |
-| `Raw`          | `string`             | Сырой ответ (уже прошедший output guard).   |
-| `UsedFallback` | `bool`               | `true`, если вернулось значение `Fallback`. |
-| `FinishReason` | `model.FinishReason` | Причина остановки модели.                   |
+| Поле           | Тип                  | Назначение                                              |
+| -------------- | -------------------- | ------------------------------------------------------- |
+| `Value`        | `T`                  | Декодированное значение.                                |
+| `Raw`          | `string`             | Сырой ответ (уже прошедший output guard).               |
+| `Decoded`      | `bool`               | `true`, если ответ совпал со схемой и заполнил `Value`. |
+| `UsedFallback` | `bool`               | `true`, если вернулось значение `Fallback`.             |
+| `FinishReason` | `model.FinishReason` | Причина остановки модели.                               |
 
 ### ErrorStrategy
 
@@ -465,7 +469,7 @@ type ErrorStrategy int
 
 const (
     Strict   ErrorStrategy = iota // ошибка (по умолчанию)
-    Warn                          // предупреждение в лог, `Raw` возвращается
+    Warn                          // предупреждение в лог, `Raw` возвращается, `Decoded` = false
     Fallback                      // вернуть `Fallback` и пометить `UsedFallback`
 )
 ```

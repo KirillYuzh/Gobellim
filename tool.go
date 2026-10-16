@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/gobellim/kit/authz"
 	"github.com/gobellim/kit/internal/core"
@@ -373,4 +374,19 @@ func compileSchema(name string, raw json.RawMessage) (*stjs.Schema, error) {
 		return nil, fmt.Errorf("compile schema: %w", err)
 	}
 	return comp, nil
+}
+
+// decodeAnswer unmarshals text into dst only if it is JSON that matches the
+// schema sent to the model. json.Unmarshal alone accepts a document with missing
+// or extra fields, which would yield a silently wrong value.
+func decodeAnswer[T any](text string, compiled *stjs.Schema, dst *T) error {
+	trimmed := strings.TrimSpace(text)
+	var raw any
+	if err := json.Unmarshal([]byte(trimmed), &raw); err != nil {
+		return err
+	}
+	if err := compiled.Validate(raw); err != nil {
+		return fmt.Errorf("answer does not match the schema: %w", err)
+	}
+	return json.Unmarshal([]byte(trimmed), dst)
 }

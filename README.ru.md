@@ -166,8 +166,9 @@ ticket, err := kit.Generate[Ticket](ctx, app, kit.GenerateRequest[Ticket]{
 	Fallback:      &fallback,
 })
 if ticket.UsedFallback {
-	// ответ модели не декодировался в Ticket; вернулось значение Fallback
+	// ответ модели не декодировался в Ticket или не совпал со схемой; вернулось значение Fallback
 }
+_ = ticket.Decoded      // false, если ErrorStrategy был Warn или Fallback
 _ = ticket.FinishReason // model.FinishStop, FinishLength, FinishToolCalls, ...
 ```
 

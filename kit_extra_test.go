@@ -419,3 +419,51 @@ func TestTraceProcessorsCanDropObservation(t *testing.T) {
 		t.Fatalf("a dropped observation must not reach sinks: %+v", obs)
 	}
 }
+
+func TestGenerateRejectsOffSchemaAnswer(t *testing.T) {
+	type ticket struct {
+		Severity int    `json:"severity"`
+		Summary  string `json:"summary"`
+	}
+	ctx := WithPrincipal(context.Background(), Principal{UserID: "u", Roles: []string{"admin"}, Tenant: "t"})
+
+	for name, answer := range map[string]string{
+		"missing a required field": `{"severity":2}`,
+		"extra field":              `{"severity":2,"summary":"ok","extra":1}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			llm := &scripted{t: t, queue: []model.Response{textResponse(answer)}}
+			app := newTestAppWithPolicy(t, llm, testPolicyGenerate)
+			defer func() { _ = app.Close(context.Background()) }()
+			if _, err := Generate[ticket](ctx, app, GenerateRequest[ticket]{Prompt: "x"}); !errors.Is(err, ErrProvider) {
+				t.Fatalf("err = %v, want ErrProvider", err)
+			}
+		})
+	}
+}
+
+func TestGenerateDecodedFlag(t *testing.T) {
+	ctx := WithPrincipal(context.Background(), Principal{UserID: "u", Roles: []string{"admin"}, Tenant: "t"})
+
+	llm := &scripted{t: t, queue: []model.Response{textResponse("7")}}
+	app := newTestAppWithPolicy(t, llm, testPolicyGenerate)
+	defer func() { _ = app.Close(context.Background()) }()
+	ok, err := Generate[int](ctx, app, GenerateRequest[int]{Prompt: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok.Decoded || ok.UsedFallback || ok.Value != 7 {
+		t.Fatalf("decoded answer flags = %+v", ok)
+	}
+
+	bad := &scripted{t: t, queue: []model.Response{textResponse("not json")}}
+	app2 := newTestAppWithPolicy(t, bad, testPolicyGenerate)
+	defer func() { _ = app2.Close(context.Background()) }()
+	warned, err := Generate[int](ctx, app2, GenerateRequest[int]{Prompt: "x", ErrorStrategy: Warn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if warned.Decoded || warned.UsedFallback {
+		t.Fatalf("a failed decode must not be marked decoded: %+v", warned)
+	}
+}
