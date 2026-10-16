@@ -4,11 +4,13 @@ default: deny
 roles:
   user:
     permissions:
+      - chat
       - search
       - tool:kb_search
 
   admin:
     permissions:
+      - chat
       - search
       - ingest
       - delete
