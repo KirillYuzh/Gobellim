@@ -114,7 +114,7 @@ func RawRequest(method, path string, body []byte, contentType string) Request
 | ------------------------- | --------------------------- | ------------------------------------------------------------------------------- |
 | `@timestamp`              | `date`                      | Время окончания trace.                                                          |
 | `trace_id`                | `keyword`                   | Идентификатор trace.                                                            |
-| `name`                    | `keyword`                   | `chat`, `ingest`, `search`, `generate`.                                         |
+| `name`                    | `keyword`                   | `chat`, `ingest`, `search`, `generate`, `memory`.                               |
 | `user_id`                 | `keyword`                   | Принципал.                                                                      |
 | `session_id`              | `keyword`                   | Группировка по сессии.                                                          |
 | `tenant`                  | `keyword`                   | Тенант принципала.                                                              |
@@ -185,7 +185,7 @@ Score пишется сюда же: `kind: SCORE`, `trace_id`, `name`, `score`, 
 | 5   | `PUT /kit-memory-working`                                   |
 | 6   | `PUT /kit-chunks` — только если размерность эмбеддера `> 0` |
 
-Шаблоны data stream задают 1 shard, 0 replicas и lifecycle `kit-traces-30d`. Вызов идемпотентен: ответы `resource_already_exists_exception` и `already_exists_exception` считаются успехом. Если `Embedder` не задан, `Dim()` не даёт размерности и шаг 4 пропускается. Каждый шаг ограничен `store.EnsureStepTimeout` (по умолчанию 30 с).
+Шаблоны data stream задают 1 shard, 0 replicas и lifecycle `kit-traces-30d`. Вызов идемпотентен: ответы `resource_already_exists_exception` и `already_exists_exception` считаются успехом. Если `Embedder` не задан, `Dim()` не даёт размерности и шаг 6 пропускается. Каждый шаг ограничен `store.EnsureStepTimeout` (по умолчанию 30 с).
 
 ## Поиск
 

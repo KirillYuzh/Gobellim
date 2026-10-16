@@ -68,7 +68,7 @@ flowchart TD
 | I-03 | Каноникализация и decode-and-rescan выполняются **до** L1 и L2; оба слоя видят один и тот же канонический текст.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | I-04 | Mask перезаписывает текст: последующие слои и последующие рельсы видят маску, а не исходные значения.                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | I-05 | Fail-closed различим: недоступность модели — `ErrGuardUnavailable`; битая конфигурация/модель на старте — `ErrInvalidConfig`.                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| I-06 | Окно guard не уже окна модели: если клиент реализует `model.ContextWindow`, `New` сверяет `guard.max_chars` с `ContextTokens()` и возвращает `ErrInvalidConfig` при превышении. Окно модели в токенах, лимит guard в рунах — это верхняя оценка, а не точная гарантия.                                                                                                                                                                                                                                                                                    |
+| I-06 | Окно guard не шире окна модели: если клиент реализует `model.ContextWindow`, `New` сверяет `guard.max_chars` с `ContextTokens()` и возвращает `ErrInvalidConfig` при превышении. Окно модели в токенах, лимит guard в рунах — это верхняя оценка, а не точная гарантия.                                                                                                                                                                                                                                                                                   |
 | I-07 | В трейсы не попадает необработанный текст по умолчанию. Политика текста трейса — явная: `masked` / `full`.                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | I-08 | Вердикт guard воспроизводим: в observation пишутся версия guard (`<policy_hash>/<layer_id>`, имена слоёв через `+`), хэш политики и имя слоя L2 (`guard_model` = `"L2"`).                                                                                                                                                                                                                                                                                                                                                                                 |
 | I-09 | Лимиты и деньги — часть контракта: `ErrBudget` (бюджет хода) и `ErrRateLimited` (лимит на тенанта); `Retry-After` учитывается в `internal/httpjson` при 429 провайдера; таймауты приходят как `context.DeadlineExceeded`/`ErrProvider`.                                                                                                                                                                                                                                                                                                                   |
@@ -79,7 +79,7 @@ flowchart TD
 | I-14 | Единственный источник правды о вердиктах — этот документ и `guardrails.md`; `BR-27`/`architecture.md` не заявляют больше, чем умеет модель.                                                                                                                                                                                                                                                                                                                                                                                                               |
 | I-15 | Публичный API не содержит «выключателей безопасности»: `AllowAll` живёт в `guard/guardtest`.                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | I-16 | Деградация guard явная: режим задаёт `Config.GuardMode` (`GuardStrict` — fail-closed по умолчанию; `GuardDegraded` — недоступный необязательный (ML) слой пропускается, вердикт помечается `Degraded`, observation — `guard_degraded`). Детерминированный слой (L1) обязателен всегда; деградировавшие вердикты не кэшируются.                                                                                                                                                                                                                            |
-| I-17 | Память ограничена парой `tenant` + `user_id` принципала: история треда, очистка и recall фильтруют по обоим. `thread_id` даёт вызывающий, поэтому сам по себе доступа не даёт; пустой `UserID` — `ErrUnauthorized`. История треда на чтении считается доверенной (замаскирована при записи) и повторно через L2 не проходит.                                                                                                                                                                                                                              |
+| I-17 | Память ограничена парой `tenant` + `user_id` принципала: история треда, очистка и recall фильтруют по обоим. `thread_id` даёт вызывающий, поэтому сам по себе доступа не даёт; пустой `UserID` — `ErrUnauthorized`. История треда на чтении считается доверенной (замаскирована при записи) и повторно через L2 не проходит, но флаг недоверенности отдельного сообщения при загрузке восстанавливается (BR-98, D59).                                                                                                                                     |
 | I-18 | Недоверенный ввод помечается (spotlighting): результат инструмента (включая retrieval) оборачивается в `<untrusted-data>…</untrusted-data>` **после** `ModelView`, а в системный промпт добавляется напоминание трактовать этот блок как данные, а не инструкции. По умолчанию включено (`Config.Spotlight` = `SpotlightOn`); `SpotlightOff` — явный opt-in.                                                                                                                                                                                              |
 | I-19 | `ChatStream` — расширение `Chat`, а не второй путь: цикл tools, RBAC, память, бюджет и трейс работают так же. Скользящее окно (`streamMinWindow` = 400 рун) отправляет каждый кусок ответа через рельс `output` до эмиссии, удерживая хвост `streamHoldback` = 96 рун; отказ рельса даёт `Retract` и аборт. Для клиента без `model.Streamer` — откат на буферизованный `Chat` одним чанком. Инвариант потока: `Done.Final.Content` равен конкатенации выданных `Text`.                                                                                    |
 | I-20 | Остаточное ограничение стриминга документируется, а не скрывается: совпадение длиннее `streamHoldback` (96 рун) без границы предложения внутри всё ещё может пересечь окно и просочиться в уже выданный текст. Один проход guard на окно (не на весь ответ) — осознанная цена стриминга.                                                                                                                                                                                                                                                                  |
@@ -160,6 +160,7 @@ type MemoryMessage struct {
 	Vector     []float32
 	EmbedModel string
 	Seq        int64 // монотонный ключ порядка; created_at (date) хранит только мс
+	Untrusted  bool  // ход, записавший сообщение, был недоверенным (BR-98)
 	CreatedAt  time.Time
 }
 func MemoryBulkBody(msgs []MemoryMessage, dims int) ([]byte, error)
@@ -171,7 +172,7 @@ func MemoryClearBody(tenant, userID, threadID string) []byte
 type WorkingMemory struct { ThreadID, Tenant, UserID string; Data map[string]any; UpdatedAt time.Time }
 func MemoryWorkingID(tenant, threadID string) string // sha256-hex, path-safe
 
-type MemoryHit struct { Role, Content string; CreatedAt time.Time; Score float64 }
+type MemoryHit struct { Role, Content string; Untrusted bool; CreatedAt time.Time; Score float64 }
 func ParseMemorySearch(body []byte) ([]MemoryHit, error)
 ```
 
@@ -272,7 +273,7 @@ type Substitution struct {
 ```
 
 - `Detector` больше не принимает rail: `Detect(ctx context.Context, text string) ([]Finding, error)`.
-- `Options` дополняется `Version string` и `OnViolation func(Verdict)`;
+- `Options` дополняется `Version string` и `OnViolation func(Verdict)`, а также `WindowChars int` (окно детекции, `D60`);
   `Pipeline.Version()` возвращает версию (хэш имени слоёв + конфигурации).
 - Решение — таблица `actionFor(rail, category)`; `Detect` возвращает true, если
   находка есть, текст не меняется.
@@ -473,13 +474,14 @@ func Run(ctx context.Context, rec *trace.Recorder, cases []Case,
 ```go
 type Config struct {
 	// ... ES, LLM, Pricing, Embedder, Policy, GuardL2, GuardMode, GuardMaxChars,
-	//     GuardCacheSize, Tokenizer, ChunkSize, ChunkOverlap, MaxSteps,
-	//     MaxCallsPerTool, ToolTimeout, ArgsMaxBytes, TopK, Logger
+	//     GuardCacheSize, GuardWindowChars, GuardOnViolation, Tokenizer, ChunkSize,
+	//     ChunkOverlap, MaxSteps, MaxCallsPerTool, ToolTimeout, ArgsMaxBytes, TopK, Logger
 	TraceText      trace.TextPolicy
 	Sampler        trace.Sampler
 	HideInput      bool
 	HideOutput     bool
 	Sinks          []trace.Sink
+	TraceProcessors []func(*trace.Observation) // правки наблюдения до записи (D57)
 	MaxTotalTokens int          // бюджет хода (0 — без лимита)
 	Egress         EgressPolicy // Rule of Two и allowlist инструментов
 	Approver       Approver     // вызывается для tool с RequireApproval
@@ -579,7 +581,7 @@ type AfterToolHook func(ctx context.Context, info ToolCallInfo, result string, e
 Цикл `Chat`:
 
 - ошибка инструмента возвращается модели как результат с `isError` (I-11);
-- «ходовые» хуки: до вызова — RBAC, approval (по fingerprint, consume-once), egress-политика, затем `BeforeToolCall`; после исполнения — `AfterToolCall`, за ним guard результата (**последним**), `ValidateOutput`, `ModelView`. Ошибка хука становится результатом-ошибкой модели (I-11), если она не фатальна.
+- «ходовые» хуки: до вызова — RBAC, approval (по fingerprint, consume-once), egress-политика, затем `BeforeToolCall`; после исполнения — `AfterToolCall`, за ним guard результата (**последний рельс**), затем `ValidateOutput` и `ModelView`. Ошибка хука становится результатом-ошибкой модели (I-11), если она не фатальна.
 - `ArgsMaxBytes`, `max_steps`, `max_calls`, timeout — как было;
 - бюджет хода (`MaxTotalTokens`) → `ErrBudget`.
 
