@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/gobellim/kit/internal/core"
 	"github.com/gobellim/kit/internal/httpjson"
@@ -19,3 +20,7 @@ func doJSON(ctx context.Context, hc *http.Client, method, url string, headers ma
 	}
 	return nil
 }
+
+func Retryable(err error) bool { return httpjson.IsRetryable(err) }
+
+func RetryAfter(err error) time.Duration { return httpjson.RetryAfter(err) }

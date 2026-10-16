@@ -59,8 +59,9 @@ type ollamaRequest struct {
 }
 
 type ollamaResponse struct {
-	Model   string `json:"model"`
-	Message struct {
+	Model      string `json:"model"`
+	DoneReason string `json:"done_reason"`
+	Message    struct {
 		Role      string           `json:"role"`
 		Content   string           `json:"content"`
 		ToolCalls []ollamaToolCall `json:"tool_calls"`
@@ -71,8 +72,10 @@ type ollamaResponse struct {
 }
 
 func (c *OllamaClient) Chat(ctx context.Context, req Request) (Response, error) {
+	msgs, native := schemaPlan(req)
+
 	body := ollamaRequest{Model: c.cfg.Model, Stream: false}
-	for _, m := range req.Messages {
+	for _, m := range msgs {
 		om := ollamaMessage{Role: string(m.Role), Content: m.Content}
 		for _, tc := range m.ToolCalls {
 			var otc ollamaToolCall
@@ -82,15 +85,17 @@ func (c *OllamaClient) Chat(ctx context.Context, req Request) (Response, error) 
 		}
 		body.Messages = append(body.Messages, om)
 	}
-	for _, t := range req.Tools {
-		var spec oaiToolSpec
-		spec.Type = "function"
-		spec.Function.Name = t.Name
-		spec.Function.Description = t.Description
-		spec.Function.Parameters = t.Schema
-		body.Tools = append(body.Tools, spec)
+	if req.ToolChoice != "none" {
+		for _, t := range req.Tools {
+			var spec oaiToolSpec
+			spec.Type = "function"
+			spec.Function.Name = t.Name
+			spec.Function.Description = t.Description
+			spec.Function.Parameters = t.Schema
+			body.Tools = append(body.Tools, spec)
+		}
 	}
-	if len(req.JSONSchema) > 0 {
+	if native {
 		body.Format = req.JSONSchema
 	}
 	opts := map[string]any{}
@@ -100,12 +105,23 @@ func (c *OllamaClient) Chat(ctx context.Context, req Request) (Response, error) 
 	if req.MaxTokens > 0 {
 		opts["num_predict"] = req.MaxTokens
 	}
+	if req.Seed != nil {
+		opts["seed"] = *req.Seed
+	}
+	if len(req.Stop) > 0 {
+		opts["stop"] = req.Stop
+	}
 	if len(opts) > 0 {
 		body.Options = opts
 	}
 
+	outBody, err := applyProviderOptions(req, body)
+	if err != nil {
+		return Response{}, err
+	}
+
 	var out ollamaResponse
-	if err := doJSON(ctx, c.hc, http.MethodPost, joinURL(c.cfg.BaseURL, "/api/chat"), nil, body, &out); err != nil {
+	if err := doJSON(ctx, c.hc, http.MethodPost, joinURL(c.cfg.BaseURL, "/api/chat"), nil, outBody, &out); err != nil {
 		return Response{}, err
 	}
 	msg := Message{Role: RoleAssistant, Content: out.Message.Content}
@@ -121,10 +137,24 @@ func (c *OllamaClient) Chat(ctx context.Context, req Request) (Response, error) 
 		})
 	}
 	return Response{
-		Message: msg,
-		Model:   out.Model,
-		Usage:   Usage{PromptTokens: out.PromptEvalCount, CompletionTokens: out.EvalCount, TotalTokens: out.PromptEvalCount + out.EvalCount},
+		Message:      msg,
+		Model:        out.Model,
+		Usage:        Usage{PromptTokens: out.PromptEvalCount, CompletionTokens: out.EvalCount, TotalTokens: out.PromptEvalCount + out.EvalCount},
+		FinishReason: ollamaFinishReason(out),
 	}, nil
+}
+
+func ollamaFinishReason(out ollamaResponse) FinishReason {
+	if out.DoneReason != "" {
+		return ParseFinishReason(out.DoneReason)
+	}
+	if len(out.Message.ToolCalls) > 0 {
+		return FinishToolCalls
+	}
+	if out.Done {
+		return FinishStop
+	}
+	return FinishOther
 }
 
 func rawObject(s string) map[string]any {

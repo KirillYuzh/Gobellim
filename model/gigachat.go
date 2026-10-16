@@ -93,6 +93,7 @@ type gcResponse struct {
 			Content      string          `json:"content"`
 			FunctionCall *gcFunctionCall `json:"function_call"`
 		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage struct {
 		PromptTokens     int `json:"prompt_tokens"`
@@ -103,18 +104,30 @@ type gcResponse struct {
 
 const structuredFunctionName = "structured_output"
 
+func gcFinishReason(reason string, call *gcFunctionCall) FinishReason {
+	if reason != "" {
+		return ParseFinishReason(reason)
+	}
+	if call != nil {
+		return FinishToolCalls
+	}
+	return FinishStop
+}
+
 func (c *GigaChatClient) Chat(ctx context.Context, req Request) (Response, error) {
 	token, err := c.ts.Token(ctx)
 	if err != nil {
 		return Response{}, err
 	}
 
+	msgs, native := schemaPlan(req)
+
 	body := gcRequest{
 		Model:       c.cfg.Model,
 		Temperature: req.Temperature,
 		MaxTokens:   req.MaxTokens,
 	}
-	for _, m := range req.Messages {
+	for _, m := range msgs {
 		role := string(m.Role)
 		if m.Role == RoleTool {
 			role = "function"
@@ -126,23 +139,30 @@ func (c *GigaChatClient) Chat(ctx context.Context, req Request) (Response, error
 		}
 		body.Messages = append(body.Messages, gm)
 	}
-	for _, t := range req.Tools {
-		body.Functions = append(body.Functions, gcFunction{Name: t.Name, Description: t.Description, Parameters: t.Schema})
-	}
-	switch {
-	case len(req.JSONSchema) > 0:
-		body.Functions = append(body.Functions, gcFunction{Name: structuredFunctionName, Description: "Return the structured result.", Parameters: req.JSONSchema})
-		body.FunctionCall = map[string]string{"name": structuredFunctionName}
-	case len(body.Functions) > 0:
-		body.FunctionCall = "auto"
+	if req.ToolChoice != "none" {
+		for _, t := range req.Tools {
+			body.Functions = append(body.Functions, gcFunction{Name: t.Name, Description: t.Description, Parameters: t.Schema})
+		}
+		switch {
+		case native:
+			body.Functions = append(body.Functions, gcFunction{Name: structuredFunctionName, Description: "Return the structured result.", Parameters: req.JSONSchema})
+			body.FunctionCall = map[string]string{"name": structuredFunctionName}
+		case len(body.Functions) > 0:
+			body.FunctionCall = "auto"
+		}
 	}
 
 	headers := map[string]string{
 		"Authorization": "Bearer " + token,
 		"Accept":        "application/json",
 	}
+	outBody, err := applyProviderOptions(req, body)
+	if err != nil {
+		return Response{}, err
+	}
+
 	var out gcResponse
-	if err := doJSON(ctx, c.hc, http.MethodPost, joinURL(c.cfg.BaseURL, "/v1/chat/completions"), headers, body, &out); err != nil {
+	if err := doJSON(ctx, c.hc, http.MethodPost, joinURL(c.cfg.BaseURL, "/v1/chat/completions"), headers, outBody, &out); err != nil {
 		return Response{}, err
 	}
 	if len(out.Choices) == 0 {
@@ -166,8 +186,9 @@ func (c *GigaChatClient) Chat(ctx context.Context, req Request) (Response, error
 		}
 	}
 	return Response{
-		Message: msg,
-		Model:   out.Model,
-		Usage:   Usage{PromptTokens: out.Usage.PromptTokens, CompletionTokens: out.Usage.CompletionTokens, TotalTokens: out.Usage.TotalTokens},
+		Message:      msg,
+		Model:        out.Model,
+		Usage:        Usage{PromptTokens: out.Usage.PromptTokens, CompletionTokens: out.Usage.CompletionTokens, TotalTokens: out.Usage.TotalTokens},
+		FinishReason: gcFinishReason(out.Choices[0].FinishReason, choice.FunctionCall),
 	}, nil
 }

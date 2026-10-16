@@ -1,4 +1,3 @@
-// Package model defines the chat primitives and the provider clients.
 package model
 
 import (
@@ -15,10 +14,13 @@ const (
 	RoleTool      Role = "tool"
 )
 
-// Client is an LLM client. There is intentionally no streaming.
 type Client interface {
 	Chat(ctx context.Context, req Request) (Response, error)
 	Model() string
+}
+
+type ContextWindow interface {
+	ContextTokens() int
 }
 
 type ToolCall struct {
@@ -41,12 +43,44 @@ type ToolSpec struct {
 	Schema      json.RawMessage
 }
 
+type FinishReason string
+
+const (
+	FinishStop          FinishReason = "stop"
+	FinishToolCalls     FinishReason = "tool_calls"
+	FinishLength        FinishReason = "length"
+	FinishContentFilter FinishReason = "content_filter"
+	FinishOther         FinishReason = "other"
+)
+
+func ParseFinishReason(s string) FinishReason {
+	switch FinishReason(s) {
+	case FinishStop, FinishToolCalls, FinishLength, FinishContentFilter:
+		return FinishReason(s)
+	default:
+		return FinishOther
+	}
+}
+
+type SchemaMode int
+
+const (
+	SchemaNative SchemaMode = iota
+	SchemaInline
+	SchemaSystem
+)
+
 type Request struct {
-	Messages    []Message
-	Tools       []ToolSpec
-	Temperature *float64
-	MaxTokens   int
-	JSONSchema  json.RawMessage
+	Messages        []Message
+	Tools           []ToolSpec
+	Temperature     *float64
+	MaxTokens       int
+	JSONSchema      json.RawMessage
+	SchemaMode      SchemaMode
+	ToolChoice      string
+	Seed            *int
+	Stop            []string
+	ProviderOptions map[string]any
 }
 
 type Usage struct {
@@ -56,7 +90,8 @@ type Usage struct {
 }
 
 type Response struct {
-	Message Message
-	Usage   Usage
-	Model   string
+	Message      Message
+	Usage        Usage
+	Model        string
+	FinishReason FinishReason
 }
