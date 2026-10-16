@@ -173,5 +173,6 @@ API эмбеддера — `Query()` и `Passages()`, без общего `Embed
 ## Смотрите также
 
 - [Справочник kit](../reference/kit.md) — `Doc`, `SearchRequest`, `SearchHit`, `RetrievalTool`
+- [Как индексировать и искать](../guides/retrieval.md) — шаги, ACL, фильтры и тюнинг
 - [Бизнес-правила](../internals/business-rules.md) — `BR-10`…`BR-14`, `BR-34`…`BR-39`
 - [Устройство](../internals/architecture.md) — рантайм ORT и эмбеддер

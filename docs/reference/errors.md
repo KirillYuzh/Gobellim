@@ -50,8 +50,13 @@ var reject *kit.GuardRejectError
 
 `Unwrap` возвращает `core.ErrGuardReject`, поэтому `errors.Is(err, kit.ErrGuardReject)`
 остаётся верным. `Tripwire` объясняет решение (`Reason`, `RuleID`, `Metadata`), а
-`Version` — версия guard; значение `RuleID`/`Reason` кладётся ещё и в метаданные
-observation (`tripwire_rule`, `tripwire_reason`).
+`Version` — версия guard.
+
+> [!WARNING]
+> На **reject** ключи `tripwire_rule`/`tripwire_reason` в метаданных observation
+> могут отсутствовать: `internal/call` возвращает `GuardRejectError` до блока,
+> который их пишет. Надёжные носители — сам `Tripwire` в ошибке (`errors.As`) и
+> поля observation `guard_rail`, `guard_action`, `guard_categories`.
 
 ## Матчинг
 
@@ -92,6 +97,7 @@ if errors.As(err, &reject) {
 ## Смотрите также
 
 - [Справочник kit](./kit.md) — где возвращается каждая ошибка
+- [Обработка ошибок (how-to)](../guides/errors.md) — таксономия, ретраи и маппинг в HTTP
 - [policy.yaml](./policy.md) — `ErrUnauthorized` и `ErrInvalidConfig`
 - [Наблюдаемость](../concepts/observability.md) — `error_kind` в observations
 - [Chat](../concepts/chat.md) — guard входа и выхода в цикле

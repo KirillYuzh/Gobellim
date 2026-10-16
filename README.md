@@ -189,6 +189,7 @@ the schema before the model runs. Ask from the [TUI or curl](./demo), or run the
 
 - [Runnable demo →](./demo)
 - [Documentation →](./docs)
+- [How-to guides →](./docs/guides) — task recipes, including provider setup
 
 ## License
 

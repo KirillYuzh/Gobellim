@@ -10,9 +10,9 @@ Session — это группировка по `session_id`, отдельной 
 
 ## Когда использовать
 
-- Нужно видеть латентность, стоимость и ошибки по каждому запросу.
+- Нужно видеть латентность, токены и ошибки по каждому запросу.
 - Нужно знать, какие инструменты вызывает модель и где срабатывает guard.
-- Нужно считать расход по модели и тенанту.
+- Нужно считать токены по модели и тенанту; стоимость — на стороне приложения.
 - Нужно писать eval-проверки по реальным трейсам без сети и без LLM-судьи.
 
 Трейсинг включён всегда: писатель создаётся в `kit.New`, отдельного флага
@@ -77,13 +77,23 @@ flowchart TD
 | score       | вызов `App.Score`                             | `kit-traces`       |
 
 Trace несёт `name` (`chat`, `ingest`, `search`, `generate`), `user_id`, `tenant`,
-`session_id`, вход, выход и `usage` с токенами и стоимостью. `Delete` и `Prune`
+`session_id`, вход, выход и `usage` с токенами. `Delete` и `Prune`
 trace-документа не создают: их работа видна как observations.
 
 Observation несёт `kind` (`SPAN`, `GENERATION`, `EVENT`), `name`, `level`,
-`model`, `latency_ms`, токены и `cost`. Проверки guard пишутся как `EVENT` с
-именем `guard:<rail>`; отказ добавляет `guard_rail`, `guard_action` и
-`guard_categories`. Пустые поля в документ не попадают.
+`model`, `latency_ms` и токены (плюс поле `cost`, которое framework не
+заполняет). Проверки guard пишутся как `EVENT` с именем `guard:<rail>`; отказ
+добавляет `guard_rail`, `guard_action` и `guard_categories`. Пустые поля в
+документ не попадают.
+
+> [!NOTE]
+> **Стоимость framework не считает.** Поля `usage.cost` (trace) и `cost`
+> (observation) есть в маппинге и пишутся, но `model.Usage` не несёт `Cost`,
+> поэтому `toTraceUsage` переносит только токены, и framework всегда пишет `0`.
+> Ценообразование — ответственность приложения: цену проставляют своим
+> `trace.Sink` или внешней аналитикой по токенам. Хука, чтобы вписать стоимость в
+> ES-документ до его сборки, фасад не даёт — `Processors` не выведены в
+> `kit.Config`, а sink видит документ уже собранным.
 
 ### Модель данных
 
@@ -220,6 +230,10 @@ deleted, err := app.Prune(ctx, 30*24*time.Hour)
 | стоимость по тенанту                      | `kit-traces`, `usage.cost`                |
 | последние trace                           | `kit-traces`                              |
 
+> [!NOTE]
+> Панель «стоимость по тенанту» читает `usage.cost`, который framework пишет
+> нулём; она заработает, когда приложение начнёт проставлять цену.
+
 ## Дальше
 
 | Цель                           | Куда идти                                              |
@@ -232,6 +246,7 @@ deleted, err := app.Prune(ctx, 30*24*time.Hour)
 ## Смотрите также
 
 - [Chat](./chat.md) — где создаётся trace запроса
+- [Как смотреть трейсы и метрики](../guides/observability.md) — политика текста, sink'и, дашборды и стоимость
 - [Eval](./eval.md) — детерминированные проверки поверх `trace.Recorder`
 - [Справочник kit](../reference/kit.md) — `App.Score`, `App.Close`, `App.Prune`
 - [Архитектура](../internals/architecture.md) — раздел Observability

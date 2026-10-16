@@ -194,8 +194,9 @@ guard — заглушка), полный режим — образ с `libonnxr
 - [x] Линтер импортов и CI подключены: `.github/workflows/ci.yml` (build, test,
       race, ort-vet, lint, fumpt), `.golangci.yml` (`gofumpt`/`govet`/`errcheck`/
       `staticcheck`/`gosec`/`depguard`), stdlib-тест `internal/importrules` и `make
-check`. Честно: workflow ещё ни разу не выполнялся на раннере (истории CI
-      нет), а `golangci-lint` локально запустить не удалось.
+check`. Обвязка зелёная: прогоны на раннере проходят (push в `develop`/`main`
+      и pull request), `golangci-lint` v2.13.0 локально даёт 0 замечаний, гейт
+      паритета `kitctl verify parity` работает в ORT-сборке.
 - [x] Все unit-тесты (stdlib) проходят.
 - [ ] Паритет guard на `pii-bench` и `insecure-prompts` — численный порог не
       подтверждён; parity-фикстуры `guard/gliner` проходят 12/12 под `ort`.
@@ -244,6 +245,7 @@ check`. Честно: workflow ещё ни разу не выполнялся н
       полную таксономию (32 сущности + 5 групп = 70 меток); артефакт генерируется
       локально, дефолтный экспорт остаётся компактным (D35).
 - [ ] JSON-API чтения трейсов — запланирован, не реализован.
+- [ ] `usage.cost`/`cost` попадают в документы, но framework всегда пишет `0`: `model.Usage` не несёт поля `Cost`, а `toTraceUsage` переносит только токены; цену проставляет приложение. Хука, чтобы вписать стоимость до сборки ES-документа, в `kit.Config` нет.
 - [x] Документы приведены в соответствие с кодом (docs/**, README, AGENTS.md,
       demo/README).
 

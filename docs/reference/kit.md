@@ -601,6 +601,8 @@ Sentinels объявлены в `kit/errors.go` (реэкспорт из `intern
 ## Смотрите также
 
 - [Ошибки](./errors.md) — sentinels и коды ответов
+- [Structured output](../guides/structured-output.md) — рецепты `Generate[T]`
+- [Вызов инструментов](../guides/tool-calling.md) — настройка `Tool` и разбор сбоев
 - [Конфигурация](./configuration.md) — значения по умолчанию и лимиты
 - [Провайдеры](./providers.md) — реализации `model.Client` и `embed.Embedder`
 - [policy.yaml](./policy.md) — формат политики RBAC
