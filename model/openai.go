@@ -69,16 +69,21 @@ type oaiToolSpec struct {
 }
 
 type oaiRequest struct {
-	Model          string         `json:"model"`
-	Messages       []oaiMessage   `json:"messages"`
-	Tools          []oaiToolSpec  `json:"tools,omitempty"`
-	ToolChoice     any            `json:"tool_choice,omitempty"`
-	Temperature    *float64       `json:"temperature,omitempty"`
-	MaxTokens      int            `json:"max_tokens,omitempty"`
-	Seed           *int           `json:"seed,omitempty"`
-	Stop           []string       `json:"stop,omitempty"`
-	ResponseFormat *oaiRespFormat `json:"response_format,omitempty"`
-	Stream         bool           `json:"stream"`
+	Model          string           `json:"model"`
+	Messages       []oaiMessage     `json:"messages"`
+	Tools          []oaiToolSpec    `json:"tools,omitempty"`
+	ToolChoice     any              `json:"tool_choice,omitempty"`
+	Temperature    *float64         `json:"temperature,omitempty"`
+	MaxTokens      int              `json:"max_tokens,omitempty"`
+	Seed           *int             `json:"seed,omitempty"`
+	Stop           []string         `json:"stop,omitempty"`
+	ResponseFormat *oaiRespFormat   `json:"response_format,omitempty"`
+	Stream         bool             `json:"stream"`
+	StreamOptions  *oaiStreamOption `json:"stream_options,omitempty"`
+}
+
+type oaiStreamOption struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 type oaiRespFormat struct {
@@ -117,7 +122,7 @@ func oaiToolChoice(choice string) any {
 	}
 }
 
-func (c *OpenAIClient) Chat(ctx context.Context, req Request) (Response, error) {
+func (c *OpenAIClient) buildBody(req Request, stream bool) oaiRequest {
 	msgs, native := schemaPlan(req)
 
 	body := oaiRequest{
@@ -128,6 +133,10 @@ func (c *OpenAIClient) Chat(ctx context.Context, req Request) (Response, error) 
 		Seed:        req.Seed,
 		Stop:        req.Stop,
 		ToolChoice:  oaiToolChoice(req.ToolChoice),
+		Stream:      stream,
+	}
+	if stream {
+		body.StreamOptions = &oaiStreamOption{IncludeUsage: true}
 	}
 	for _, m := range msgs {
 		om := oaiMessage{Role: string(m.Role), Content: m.Content, ToolCallID: m.ToolCallID, Name: m.Name}
@@ -155,7 +164,10 @@ func (c *OpenAIClient) Chat(ctx context.Context, req Request) (Response, error) 
 		rf.JSONSchema.Schema = req.JSONSchema
 		body.ResponseFormat = rf
 	}
+	return body
+}
 
+func (c *OpenAIClient) headers() map[string]string {
 	headers := map[string]string{}
 	if c.cfg.APIKey != "" {
 		headers["Authorization"] = "Bearer " + c.cfg.APIKey
@@ -163,8 +175,19 @@ func (c *OpenAIClient) Chat(ctx context.Context, req Request) (Response, error) 
 	for k, v := range c.cfg.Headers {
 		headers[k] = v
 	}
+	return headers
+}
 
-	outBody, err := applyProviderOptions(req, body)
+func (c *OpenAIClient) encode(req Request, stream bool) (map[string]any, map[string]string, error) {
+	payload, err := applyProviderOptions(req, c.buildBody(req, stream))
+	if err != nil {
+		return nil, nil, err
+	}
+	return payload, c.headers(), nil
+}
+
+func (c *OpenAIClient) Chat(ctx context.Context, req Request) (Response, error) {
+	outBody, headers, err := c.encode(req, false)
 	if err != nil {
 		return Response{}, err
 	}

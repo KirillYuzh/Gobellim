@@ -205,7 +205,7 @@ resp, err := llm.Chat(ctx, model.Request{
 
 Ключи `model`, `messages` и `stream` **защищены**: после слияния клиент
 переустанавливает их из собственного тела. Переопределить их через
-`ProviderOptions` нельзя — в частности, включить `stream` не получится.
+`ProviderOptions` нельзя; `stream` переключает только операция `ChatStream`.
 
 ## Troubleshooting
 
@@ -253,7 +253,8 @@ base, err := model.NewOpenAI(model.OpenAIConfig{
 - Не нормализует различия серверов: если шлюз не понимает `response_format`,
   `tools` или `seed`, ошибка/игнор вернётся как есть.
 - Не подставляет `/v1` за вас и не «угадывает» корень API.
-- Не стримит и не даёт включить `stream` через `ProviderOptions`.
+- Стриминг — отдельной операцией `ChatStream` (SSE); включить `stream` через
+  `ProviderOptions` всё равно нельзя.
 - Не проверяет имя модели и не ротирует ключи.
 
 ## Смотрите также

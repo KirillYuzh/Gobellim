@@ -33,6 +33,10 @@ func (*Detector) Detect(context.Context, string) ([]guard.Finding, error) {
 	return nil, fmt.Errorf("gliner: built without ORT support; rebuild with -tags ort: %w", core.ErrGuardUnavailable)
 }
 
+func (*Detector) Health() core.HealthStatus {
+	return core.HealthStatus{Detail: "gliner: built without ORT support; rebuild with -tags ort"}
+}
+
 func VerifyDir(dir, model string) error {
 	dir = resolveModelsDir(dir)
 	if err := verifyFiles(dir, model); err != nil {

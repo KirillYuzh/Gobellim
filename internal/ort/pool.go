@@ -58,6 +58,17 @@ func (p *Pool) Release(s Session) {
 	p.ch <- s
 }
 
+// Stats reports the pool's capacity and how many sessions are idle right now.
+type Stats struct {
+	Size      int
+	Available int
+	Wait      time.Duration
+}
+
+func (p *Pool) Stats() Stats {
+	return Stats{Size: len(p.all), Available: len(p.ch), Wait: p.wait}
+}
+
 func (p *Pool) Close() error {
 	var err error
 	p.once.Do(func() {

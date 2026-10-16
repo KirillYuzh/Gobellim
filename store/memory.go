@@ -1,0 +1,245 @@
+package store
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/gobellim/kit/internal/core"
+)
+
+type MemoryMessage struct {
+	ID         string
+	ThreadID   string
+	Tenant     string
+	UserID     string
+	Role       string
+	Content    string
+	Vector     []float32
+	EmbedModel string
+	Seq        int64
+	CreatedAt  time.Time
+}
+
+func (m MemoryMessage) Document() map[string]any {
+	created := m.CreatedAt
+	if created.IsZero() {
+		created = time.Now().UTC()
+	}
+	doc := map[string]any{
+		ThreadField:  m.ThreadID,
+		TenantField:  m.Tenant,
+		UserIDField:  m.UserID,
+		RoleField:    m.Role,
+		ContentField: m.Content,
+		"seq":        m.Seq,
+		"created_at": created.UTC().Format(time.RFC3339Nano),
+	}
+	if len(m.Vector) > 0 {
+		doc[VectorField] = m.Vector
+	}
+	if m.EmbedModel != "" {
+		doc[EmbedModelField] = m.EmbedModel
+	}
+	return doc
+}
+
+func ValidateMemoryMessage(m MemoryMessage, dims int) error {
+	if m.ThreadID == "" {
+		return fmt.Errorf("store: memory message has no thread_id: %w", core.ErrInvalidArgs)
+	}
+	if m.Tenant == "" {
+		return fmt.Errorf("store: memory message has no tenant: %w", core.ErrInvalidArgs)
+	}
+	if m.Content == "" {
+		return fmt.Errorf("store: memory message has empty content: %w", core.ErrInvalidArgs)
+	}
+	if m.Seq <= 0 {
+		return fmt.Errorf("store: memory message %q has no sequence: %w", m.ThreadID, core.ErrInvalidArgs)
+	}
+	if dims > 0 && len(m.Vector) > 0 && len(m.Vector) != dims {
+		return fmt.Errorf("store: memory message vector has %d dims, want %d: %w", len(m.Vector), dims, core.ErrInvalidArgs)
+	}
+	return nil
+}
+
+func MemoryBulkBody(msgs []MemoryMessage, dims int) ([]byte, error) {
+	docs := make([]Doc, 0, len(msgs))
+	for _, m := range msgs {
+		if err := ValidateMemoryMessage(m, dims); err != nil {
+			return nil, err
+		}
+		docs = append(docs, Doc{ID: m.ID, Source: m.Document()})
+	}
+	return BulkBody(IndexMemoryMessages, docs)
+}
+
+func MemoryHistoryBody(tenant, userID, threadID string, limit int) []byte {
+	if limit <= 0 {
+		return nil
+	}
+	body := map[string]any{
+		"size": limit,
+		"query": map[string]any{
+			"bool": map[string]any{
+				"filter": []any{
+					map[string]any{"term": map[string]any{TenantField: tenant}},
+					map[string]any{"term": map[string]any{UserIDField: userID}},
+					map[string]any{"term": map[string]any{ThreadField: threadID}},
+				},
+			},
+		},
+		"sort":    []any{map[string]any{"seq": map[string]any{"order": "desc"}}},
+		"_source": []string{RoleField, ContentField, "created_at"},
+	}
+	raw, _ := json.Marshal(body)
+	return raw
+}
+
+func MemoryRecallBody(tenant, userID string, vector []float32, topK, numCandidates int) ([]byte, error) {
+	if tenant == "" {
+		return nil, fmt.Errorf("store: memory recall requires a tenant: %w", core.ErrInvalidArgs)
+	}
+	if len(vector) == 0 {
+		return nil, fmt.Errorf("store: memory recall requires a query vector: %w", core.ErrInvalidArgs)
+	}
+	if topK <= 0 {
+		topK = DefaultTopK
+	}
+	if topK > MaxTopK {
+		topK = MaxTopK
+	}
+	if numCandidates <= 0 {
+		numCandidates = topK * 10
+		if numCandidates < 100 {
+			numCandidates = 100
+		}
+	}
+	if numCandidates > MaxNumCandidates {
+		numCandidates = MaxNumCandidates
+	}
+	filter := map[string]any{
+		"bool": map[string]any{
+			"filter": []any{
+				map[string]any{"term": map[string]any{TenantField: tenant}},
+				map[string]any{"term": map[string]any{UserIDField: userID}},
+			},
+		},
+	}
+	body := map[string]any{
+		"size": topK,
+		"query": map[string]any{
+			"knn": map[string]any{
+				"field":          VectorField,
+				"query_vector":   vector,
+				"num_candidates": numCandidates,
+				"filter":         filter,
+			},
+		},
+		"_source": []string{RoleField, ContentField, "created_at"},
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("store: encode memory recall: %w", err)
+	}
+	return raw, nil
+}
+
+func MemoryClearBody(tenant, userID, threadID string) []byte {
+	body := map[string]any{
+		"query": map[string]any{
+			"bool": map[string]any{
+				"filter": []any{
+					map[string]any{"term": map[string]any{TenantField: tenant}},
+					map[string]any{"term": map[string]any{UserIDField: userID}},
+					map[string]any{"term": map[string]any{ThreadField: threadID}},
+				},
+			},
+		},
+	}
+	raw, _ := json.Marshal(body)
+	return raw
+}
+
+type WorkingMemory struct {
+	ThreadID  string
+	Tenant    string
+	UserID    string
+	Data      map[string]any
+	UpdatedAt time.Time
+}
+
+func (w WorkingMemory) Document() map[string]any {
+	updated := w.UpdatedAt
+	if updated.IsZero() {
+		updated = time.Now().UTC()
+	}
+	data := w.Data
+	if data == nil {
+		data = map[string]any{}
+	}
+	return map[string]any{
+		ThreadField:  w.ThreadID,
+		TenantField:  w.Tenant,
+		UserIDField:  w.UserID,
+		"data":       data,
+		"updated_at": updated.UTC().Format(time.RFC3339Nano),
+	}
+}
+
+func MemoryWorkingID(tenant, threadID string) string {
+	h := sha256.New()
+	h.Write([]byte(tenant))
+	h.Write([]byte{0})
+	h.Write([]byte(threadID))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+type MemoryHit struct {
+	Role      string
+	Content   string
+	CreatedAt time.Time
+	Score     float64
+}
+
+func ParseMemorySearch(body []byte) ([]MemoryHit, error) {
+	var parsed struct {
+		Error json.RawMessage `json:"error"`
+		Hits  struct {
+			Hits []struct {
+				Score  float64 `json:"_score"`
+				Source struct {
+					Role      string `json:"role"`
+					Content   string `json:"content"`
+					CreatedAt string `json:"created_at"`
+				} `json:"_source"`
+			} `json:"hits"`
+		} `json:"hits"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("store: parse memory response: %w", err)
+	}
+	if len(parsed.Error) > 0 {
+		return nil, fmt.Errorf("store: memory search failed: %s: %w", Snippet(parsed.Error), core.ErrProvider)
+	}
+	out := make([]MemoryHit, 0, len(parsed.Hits.Hits))
+	for _, h := range parsed.Hits.Hits {
+		created := time.Time{}
+		if h.Source.CreatedAt != "" {
+			parsed, err := time.Parse(time.RFC3339Nano, h.Source.CreatedAt)
+			if err != nil {
+				return nil, fmt.Errorf("store: memory created_at %q: %w", h.Source.CreatedAt, err)
+			}
+			created = parsed
+		}
+		out = append(out, MemoryHit{
+			Role:      h.Source.Role,
+			Content:   h.Source.Content,
+			CreatedAt: created,
+			Score:     h.Score,
+		})
+	}
+	return out, nil
+}

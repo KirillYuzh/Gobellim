@@ -12,7 +12,8 @@
 > интерфейсами: заглушки активны без тега `ort` (`//go:build !ort`). Поэтому
 > сборка по умолчанию (`go build ./...` без тега) **не требует нативных
 > библиотек**. Заглушки не дают ML-функциональности: `guard/gliner` возвращает
-> `ErrGuardUnavailable` (fail-closed, BR-06), `embed.NewLocal` — ошибку
+> `ErrGuardUnavailable` (fail-closed в режиме `GuardStrict`, BR-06; в
+> `GuardDegraded` ошибка ML-слоя не фатальна), `embed.NewLocal` — ошибку
 > конфигурации. При этом детерминированный слой guard (L1, `guard/rules`)
 > полностью работоспособен в сборке по умолчанию. Под тегом `ort` реализованы и
 > ML-слой guard (`guard/gliner`, ONNX-only; parity-тест на 12/12 фикстур), и
@@ -42,26 +43,26 @@
 
 Пакеты (архитектура):
 
-| Пакет                  | Роль                                                                                                      | Источник    |
-| ---------------------- | --------------------------------------------------------------------------------------------------------- | ----------- |
-| `kit` (фасад)          | `New`, `Setup`, `Chat`, `Ingest`, `Search`, `Delete`, `Score`, `Generate[T]`                              | архитектура |
-| `internal/call`        | единый примитив вызова: `authz → guard → span → fn`                                                       | D1          |
-| `internal/ort`         | пул ONNX-сессий (cgo; токенайзера здесь нет)                                                              | архитектура |
-| `authz`                | `policy.yaml`, `Check(principal, permission)`                                                             | архитектура |
-| `guard`                | `Rail`/`Detector`/`Pipeline`, `canonical.go`; L0, L1 (`rules/`), `gliner/`                                | архитектура |
-| `model`                | `Message`, `Client`, `openai.go`, `vllm.go`, `ollama.go`, `gigachat.go`                                   | архитектура |
-| `embed`                | `Embedder`, `local.go`, `openai.go`, `gigachat.go`, `presets.go`                                          | архитектура |
-| `chunk`                | токенный чанкер; токенайзер — интерфейс, по умолчанию `WhitespaceTokenizer`                               | архитектура |
-| `store`                | ES interface + `Request`, `schema.go`/`index.go`, `chunks.go`, `search.go`, `filter.go`, `maintenance.go` | архитектура |
-| `trace`                | модель Langfuse, async writer, политика текста и sampling (read API — запланирован, не реализован)        | архитектура |
-| `eval`                 | детерминированные проверки трейсов (stdlib; зависит от `trace`, не от `kit`)                              | дизайн D30  |
-| `flow`                 | типизированные последовательные step-пайплайны: schema-контракт и suspend/resume                          | дизайн D31  |
-| `webfetch`             | SSRF-защищённый инструмент исходящего HTTP (эффект egress)                                                | дизайн D33  |
-| `internal/importrules` | stdlib-тест правил импортов (I-13)                                                                        | архитектура |
-| `cmd/kitctl`           | `model pull`, `policy check`, `verify window/models/parity/latency`                                       | архитектура |
-| `demo`                 | пример: Clean Architecture сервис (`cmd/bot` + `internal/{domain,usecase,adapter}`)                       | архитектура |
-| `deploy`               | `docker-compose.yml`, `grafana/`                                                                          | архитектура |
-| `testdata`             | золотые файлы, parity-фикстуры                                                                            | архитектура |
+| Пакет                  | Роль                                                                                                                        | Источник    |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| `kit` (фасад)          | `New`, `Setup`, `Chat`, `Ingest`, `Search`, `Delete`, `Score`, `Generate[T]`                                                | архитектура |
+| `internal/call`        | единый примитив вызова: `authz → guard → span → fn`                                                                         | D1          |
+| `internal/ort`         | пул ONNX-сессий (cgo; токенайзера здесь нет)                                                                                | архитектура |
+| `authz`                | `policy.yaml`, `Check(principal, permission)`                                                                               | архитектура |
+| `guard`                | `Rail`/`Detector`/`Pipeline`, `canonical.go`; L0, L1 (`rules/`), `gliner/`                                                  | архитектура |
+| `model`                | `Message`, `Client`, `openai.go`, `vllm.go`, `ollama.go`, `gigachat.go`                                                     | архитектура |
+| `embed`                | `Embedder`, `local.go`, `openai.go`, `gigachat.go`, `presets.go`                                                            | архитектура |
+| `chunk`                | токенный чанкер; токенайзер — интерфейс, по умолчанию `WhitespaceTokenizer`                                                 | архитектура |
+| `store`                | ES interface + `Request`, `schema.go`/`index.go`, `chunks.go`, `search.go`, `filter.go`, `maintenance.go`                   | архитектура |
+| `trace`                | модель [Langfuse](https://langfuse.com/), async writer, политика текста и sampling (read API — запланирован, не реализован) | архитектура |
+| `eval`                 | детерминированные проверки трейсов (stdlib; зависит от `trace`, не от `kit`)                                                | дизайн D30  |
+| `flow`                 | типизированные последовательные step-пайплайны: schema-контракт и suspend/resume                                            | дизайн D31  |
+| `webfetch`             | SSRF-защищённый инструмент исходящего HTTP (эффект egress)                                                                  | дизайн D33  |
+| `internal/importrules` | stdlib-тест правил импортов (I-13)                                                                                          | архитектура |
+| `cmd/kitctl`           | `model pull`, `policy check`, `verify window/models/parity/latency`                                                         | архитектура |
+| `demo`                 | пример: Clean Architecture сервис (`cmd/bot` + `internal/{domain,usecase,adapter}`)                                         | архитектура |
+| `deploy`               | `docker-compose.yml`, `grafana/`                                                                                            | архитектура |
+| `testdata`             | золотые файлы, parity-фикстуры                                                                                              | архитектура |
 
 Провайдеры: одно OpenAI-совместимое ядро плюс явные конструкторы `VLLM` (тонкая
 обёртка над `openai`), `Ollama` (native `/api/chat`), `OpenAI`, `GigaChat`
@@ -132,7 +133,7 @@ BR-29); ML-слой доступен только под тегом `ort`, те�
   эмбеддера; поле `acl` типа `keyword` (BR-38).
 - Гибридный поиск: BM25 + kNN, оба через `_msearch` с ACL-фильтром; RRF
   считается в Go (D11, BR-12, BR-37).
-- Трейсы по модели Langfuse: trace → observations (SPAN, GENERATION, EVENT) →
+- Трейсы по модели [Langfuse](https://langfuse.com/): trace → observations (SPAN, GENERATION, EVENT) →
   scores, session как группировка (архитектура); data stream с ILM 30 дней,
   маскированный текст (D12, BR-41, BR-43).
 
@@ -179,7 +180,7 @@ guard — заглушка), полный режим — образ с `libonnxr
 | Риск                                                                          | Влияние                                 | Мера                                                                                                                                                     | Этап |
 | ----------------------------------------------------------------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
 | Неофициальный ONNX-экспорт GLiNER2: references и postprocessing не поддержаны | ML-слой guard может не собраться        | паритет-спайк Go/ORT против Python; порт схемы-промпта и декодирования спанов; при провале — пересмотр D6/D7                                             | 0    |
-| Расхождение размеров модели: 307M (карточка) против 209M (статья)             | неверная оценка памяти и latency        | зафиксировать фактические веса и память, уточнить ресурсы `demo` (4 vCPU / 4 GB)                                                                         | 0    |
+| Расхождение размеров модели: 307M (карточка) против 209M (статья)             | неверная оценка памяти и latency        | зафиксировать фактические веса и память, уточнить ресурсы `demo` (4 vCPU / 4 GB с L1; ≥6 GB с L2)                                                        | 0    |
 | Latency guard на CPU                                                          | выход за p50 ≤ 150 мс / p95 ≤ 400 мс    | int8 при прохождении parity, пул сессий и `intra_op_threads`, LRU-кэш вердиктов, лимит `max_chars`                                                       | 0, 2 |
 | Отсутствие RRF на basic-лицензии ES                                           | гибридный поиск недоступен «из коробки» | RRF считаем в Go по `_msearch`; проверить `_msearch`+knn на basic                                                                                        | 3    |
 | GigaChat OAuth и самоподписанные сертификаты                                  | адаптер не заработает как drop-in       | отдельный адаптер, порт 9443 OAuth + свой CA, structured output через function calling; сверка с документацией Sber                                      | 2    |
@@ -209,7 +210,7 @@ check`. Обвязка зелёная: прогоны на раннере про
 - [x] ES: авто-создание индекса, `dense_vector` из эмбеддера, `acl` keyword,
       ACL-фильтр и `quarantined:false` в kNN и BM25, фильтр `store.Filter`, RRF
       в Go.
-- [x] Трейсы: модель Langfuse, data stream + ILM 30 дней, политика текста
+- [x] Трейсы: модель [Langfuse](https://langfuse.com/), data stream + ILM 30 дней, политика текста
       `masked` по умолчанию с opt-in `full`, аудит-поля, детерминированный
       sampling, export-лимиты и processors.
 - [x] `demo`: mock-авторизация, чат с tools (погода и роль), RBAC по ролям.
@@ -245,15 +246,26 @@ check`. Обвязка зелёная: прогоны на раннере про
       полную таксономию (32 сущности + 5 групп = 70 меток); артефакт генерируется
       локально, дефолтный экспорт остаётся компактным (D35).
 - [ ] JSON-API чтения трейсов — запланирован, не реализован.
-- [ ] `usage.cost`/`cost` попадают в документы, но framework всегда пишет `0`: `model.Usage` не несёт поля `Cost`, а `toTraceUsage` переносит только токены; цену проставляет приложение. Хука, чтобы вписать стоимость до сборки ES-документа, в `kit.Config` нет.
+- [x] `usage.cost`/`cost` заполняются framework'ом по `Config.Pricing` (`model.Pricing`); нулевая цена даёт `0`.
+- [x] Guard: режим `Config.GuardMode` (`GuardStrict`/`GuardDegraded`), деградация видна в observation (`guard_degraded`) (I-16).
+- [x] Право `chat` на операцию `Chat` (`authz.PermChat`).
+- [x] Идентичность эмбеддера: `embed_model` в чанке, поиск фильтрует по текущей модели (BR-79).
+- [x] Память: история треда, семантический recall и working-память в ES; право `memory`; скоуп `tenant` + `user_id`; порядок по `seq`; `Chat.ThreadID` (I-17, BR-81…BR-84).
+- [x] Spotlighting: результат инструмента оборачивается как недоверенный, напоминание в системном промпте, `Config.Spotlight` (I-18, BR-85).
+- [x] Rate limit на тенанта (`Config.RateLimit`) до провайдера/ES/guard; `ErrRateLimited` (BR-86).
+- [x] Атомарный ingest: `doc_version` + «сначала запись, потом удаление» (BR-87).
+- [x] Кэш ответов без tools (`Config.ResponseCache`), `metadata.cache` (BR-88).
+- [x] Стриминг: `ChatStream` со скользящим окном рельса `output`, `model.Streamer`, откат на буферизованный `Chat` (I-19, I-20, BR-89, BR-90).
+- [x] OTLP-синк трейсов (`trace.NewOTLP`) без внешних зависимостей (stdlib).
+- [x] Часть 3: `flow` сужен до `Step` (D47); `App.Health()` и `HealthChecker` (D48); реранкинг (`rerank`, `SearchRequest.Rerank`, D49); поиск по инструментам (`Config.ToolSearch`, D50); MCP-клиент и `kit.RawTool` (D51); роли документации разведены (D52).
 - [x] Документы приведены в соответствие с кодом (docs/**, README, AGENTS.md,
       demo/README).
 
 ## Смотрите также
 
-- [Решения и допущения](./decisions.md) — `D1`…`D35`, `A1`…`A9`
+- [Решения и допущения](./decisions.md) — `D1`…`D52`, `A1`…`A9`
 - [Архитектура](./architecture.md) — пакеты и рантайм, на которые опирается
   план
-- [Бизнес-правила](./business-rules.md) — `BR-01`…`BR-75`, проверяемые на
+- [Бизнес-правила](./business-rules.md) — `BR-01`…`BR-95`, проверяемые на
   этапах
 - [Ориентиры](./references.md) — идеи для реализации

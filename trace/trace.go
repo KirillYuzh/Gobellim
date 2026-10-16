@@ -49,6 +49,10 @@ type Observation struct {
 	GuardModel   string
 	PolicyHash   string
 	TextPolicy   TextPolicy
+
+	// GuardDegraded records that an optional guard layer was unavailable and the
+	// verdict was produced by the remaining layers.
+	GuardDegraded bool
 }
 
 type Trace struct {
@@ -195,6 +199,9 @@ func (o Observation) document(cfg exportConfig) map[string]any {
 	}
 	if o.GuardAction != "" {
 		doc["guard_action"] = o.GuardAction
+	}
+	if o.GuardDegraded {
+		doc["guard_degraded"] = true
 	}
 	if len(o.GuardCategories) > 0 {
 		doc["guard_categories"] = o.GuardCategories

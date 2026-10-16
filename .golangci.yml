@@ -201,6 +201,8 @@ linters:
             - "internal/httpjson/**"
             - "internal/oauth/**"
             - "internal/ort/**"
+            - "internal/ratelimit/**"
+            - "internal/cache/**"
             - "internal/importrules/**"
           deny:
             - pkg: github.com/gobellim/kit$

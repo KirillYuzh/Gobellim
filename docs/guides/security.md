@@ -61,22 +61,25 @@ default: deny
 roles:
   user:
     permissions:
+      - chat
       - tool:get_weather
   admin:
     permissions:
       - "*"
 ```
 
-| Право         | Константа              | Проверяется                          |
-| ------------- | ---------------------- | ------------------------------------ |
-| `search`      | `authz.PermSearch`     | `App.Search` (эмбеддер и `_msearch`) |
-| `ingest`      | `authz.PermIngest`     | `App.Ingest` (эмбеддер и запись)     |
-| `delete`      | `authz.PermDelete`     | `App.Delete`                         |
-| `trace`       | `authz.PermTrace`      | `App.Score`                          |
-| `generate`    | `authz.PermGenerate`   | `Generate[T]`                        |
-| `prune`       | `authz.PermPrune`      | `App.Prune`                          |
-| `tool:<name>` | `authz.ToolPermission` | исполнение и вычитание tool-схемы    |
-| `*`           | wildcard               | разрешает любое право                |
+| Право         | Константа              | Проверяется                           |
+| ------------- | ---------------------- | ------------------------------------- |
+| `chat`        | `authz.PermChat`       | `App.Chat` (модель и цикл)            |
+| `memory`      | `authz.PermMemory`     | операции памяти и `Chat` с `ThreadID` |
+| `search`      | `authz.PermSearch`     | `App.Search` (эмбеддер и `_msearch`)  |
+| `ingest`      | `authz.PermIngest`     | `App.Ingest` (эмбеддер и запись)      |
+| `delete`      | `authz.PermDelete`     | `App.Delete`                          |
+| `trace`       | `authz.PermTrace`      | `App.Score`                           |
+| `generate`    | `authz.PermGenerate`   | `Generate[T]`                         |
+| `prune`       | `authz.PermPrune`      | `App.Prune`                           |
+| `tool:<name>` | `authz.ToolPermission` | исполнение и вычитание tool-схемы     |
+| `*`           | wildcard               | разрешает любое право                 |
 
 `Authz.Authorize` вызывает **сам примитив** `internal/call` на **каждом** вызове
 (`authz → guard → span → fn`). Отсюда главное свойство: **отсутствие права — это
@@ -90,7 +93,7 @@ roles:
   (у него права нет, принципал всё равно обязателен).
 - `Ingest`/`Search`/`Delete` требуют непустого `Tenant`; `Prune` — только
   принципала и права `prune`.
-- `Chat` отдельного права не требует: гейт — права на инструменты.
+- `Chat` требует права `chat`; гейт на инструменты проверяется дополнительно.
 
 Проверить файл без запуска сервиса:
 

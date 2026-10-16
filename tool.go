@@ -254,6 +254,59 @@ func Tool[In, Out any](app *App, name string, fn func(ctx context.Context, in In
 	return def, nil
 }
 
+// RawTool registers a tool whose JSON Schema is supplied verbatim instead of
+// being derived from a Go type. It exists for tools whose schema comes from
+// outside the program (an MCP server). args is the raw JSON argument object;
+// fn returns the result the model sees. An empty schema becomes a bare object.
+func RawTool(app *App, name string, schema json.RawMessage, fn func(ctx context.Context, args json.RawMessage) (string, error), opts ...ToolOption) (*ToolDef, error) {
+	if app == nil {
+		return nil, fmt.Errorf("kit: app is required: %w", core.ErrInvalidConfig)
+	}
+	if name == "" {
+		return nil, fmt.Errorf("kit: tool name is required: %w", core.ErrInvalidConfig)
+	}
+	if fn == nil {
+		return nil, fmt.Errorf("kit: tool %s: handler is required: %w", name, core.ErrInvalidConfig)
+	}
+	if len(schema) == 0 {
+		schema = json.RawMessage(`{"type":"object"}`)
+	}
+
+	o := toolOptions{permission: authz.ToolPermission(name)}
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	compiled, err := compileSchema(name, schema)
+	if err != nil {
+		return nil, fmt.Errorf("kit: tool %s: %w", name, err)
+	}
+
+	def := &ToolDef{
+		name:            name,
+		description:     o.description,
+		permission:      o.permission,
+		effect:          o.effect,
+		egressHosts:     o.egressHosts,
+		requireApproval: o.requireApproval,
+		validateOutput:  o.validateOutput,
+		modelView:       o.modelView,
+		beforeTool:      o.beforeTool,
+		afterTool:       o.afterTool,
+		schema:          schema,
+		compiled:        compiled,
+		invoke: func(ctx context.Context, args string) (string, error) {
+			if args == "" {
+				args = "{}"
+			}
+			return fn(ctx, json.RawMessage(args))
+		},
+	}
+
+	app.register(def)
+	return def, nil
+}
+
 func (a *App) register(def *ToolDef) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

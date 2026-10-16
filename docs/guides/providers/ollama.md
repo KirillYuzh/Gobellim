@@ -186,7 +186,8 @@ wrapped := ollamaWindow{Client: llm, tokens: 8192} // I-06 начнёт пров
 - Не поддерживает `tool_choice` (ограничение нативного API).
 - Не задаёт `num_ctx`, `keep_alive` и прочие серверные настройки — только через
   `ProviderOptions`, и помните про замену объекта `options` целиком.
-- Не стримит: `stream` всегда `false`.
+- Не стримит: `OllamaClient` не реализует `model.Streamer`, поэтому `ChatStream`
+  откатывается на буферизованный `Chat` (один чанк `Text` + `Done`).
 - Не эмулирует `response_format`: единственный механизм — `format`.
 
 ## Смотрите также

@@ -2,68 +2,53 @@ package flow
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/gobellim/kit/internal/core"
 )
 
-func TestPipelineRunsTypedChain(t *testing.T) {
-	double, err := New("double", func(_ context.Context, _ State, in int) (int, error) {
+func TestStepRunsTypedFunction(t *testing.T) {
+	step, err := New("double", func(_ context.Context, st State, in int) (int, error) {
+		st["value"] = in
 		return in * 2, nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	label, err := New("label", func(_ context.Context, st State, in int) (string, error) {
-		st["value"] = in
+
+	res := step.Run(context.Background(), nil, 3)
+	if res.Status != StatusSuccess {
+		t.Fatalf("status = %s, err = %v", res.Status, res.Error)
+	}
+	if res.Output != 6 {
+		t.Fatalf("output = %d", res.Output)
+	}
+	if res.State["value"] != 3 {
+		t.Fatalf("state = %+v", res.State)
+	}
+}
+
+func TestStepsComposeByCallingThem(t *testing.T) {
+	double, err := New("double", func(_ context.Context, _ State, in int) (int, error) { return in * 2, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	label, err := New("label", func(_ context.Context, _ State, in int) (string, error) {
 		return fmt.Sprintf("v=%d", in), nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	res := Chain(double, label).Run(context.Background(), 3)
-	if res.Status != StatusSuccess {
-		t.Fatalf("status = %s, err = %v", res.Status, res.Error)
+	first := double.Run(context.Background(), nil, 3)
+	if first.Status != StatusSuccess {
+		t.Fatalf("first = %+v", first)
 	}
-	if res.Output != "v=6" {
-		t.Fatalf("output = %q", res.Output)
-	}
-	if len(res.Steps) != 2 || res.Steps[0].ID != "double" || res.Steps[1].ID != "label" {
-		t.Fatalf("steps = %+v", res.Steps)
-	}
-	if res.State["value"] != 6 {
-		t.Fatalf("state = %+v", res.State)
-	}
-}
-
-func TestPipelineKeepsStepOrderAcrossThreeSteps(t *testing.T) {
-	a, err := New("a", func(_ context.Context, _ State, in int) (int, error) { return in + 1, nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := New("b", func(_ context.Context, _ State, in int) (int, error) { return in * 10, nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	c, err := New("c", func(_ context.Context, _ State, in int) (string, error) {
-		return fmt.Sprintf("%d", in), nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	res := Chain3(a, b, c).Run(context.Background(), 1)
-	if res.Status != StatusSuccess || res.Output != "20" {
-		t.Fatalf("res = %+v", res)
-	}
-	ids := []string{res.Steps[0].ID, res.Steps[1].ID, res.Steps[2].ID}
-	if strings.Join(ids, ",") != "a,b,c" {
-		t.Fatalf("ids = %v", ids)
+	second := label.Run(context.Background(), first.State, first.Output)
+	if second.Status != StatusSuccess || second.Output != "v=6" {
+		t.Fatalf("second = %+v", second)
 	}
 }
 
@@ -97,17 +82,20 @@ func newApprovalStep(t *testing.T) *Step[approvalIn, approvalOut] {
 }
 
 func TestSuspendThenResume(t *testing.T) {
-	p := newApprovalStep(t).Pipeline()
+	step := newApprovalStep(t)
 
-	res := p.Run(context.Background(), approvalIn{Amount: 7})
+	res := step.Run(context.Background(), nil, approvalIn{Amount: 7})
 	if res.Status != StatusSuspended {
 		t.Fatalf("status = %s, err = %v", res.Status, res.Error)
 	}
 	if res.Suspension == nil || len(res.Snapshot) == 0 {
 		t.Fatalf("res = %+v, want a suspension and a snapshot", res)
 	}
+	if res.Suspension.Payload == nil {
+		t.Fatalf("suspension payload = %+v", res.Suspension)
+	}
 
-	resumed := p.Resume(context.Background(), res.Snapshot, approvalResume{Approved: true})
+	resumed := step.Resume(context.Background(), res.Snapshot, approvalResume{Approved: true})
 	if resumed.Status != StatusSuccess {
 		t.Fatalf("resume status = %s, err = %v", resumed.Status, resumed.Error)
 	}
@@ -117,20 +105,17 @@ func TestSuspendThenResume(t *testing.T) {
 	if resumed.State["amount"] != float64(7) {
 		t.Fatalf("state did not survive the resume: %+v", resumed.State)
 	}
-	if len(resumed.Steps) != 1 || resumed.Steps[0].Status != StatusSuccess {
-		t.Fatalf("steps = %+v", resumed.Steps)
-	}
 }
 
 func TestResumeRejectsWrongPayloadShape(t *testing.T) {
-	p := newApprovalStep(t).Pipeline()
+	step := newApprovalStep(t)
 
-	res := p.Run(context.Background(), approvalIn{Amount: 1})
+	res := step.Run(context.Background(), nil, approvalIn{Amount: 1})
 	if res.Status != StatusSuspended {
 		t.Fatalf("status = %s", res.Status)
 	}
 
-	resumed := p.Resume(context.Background(), res.Snapshot, map[string]any{"approved": "yes"})
+	resumed := step.Resume(context.Background(), res.Snapshot, map[string]any{"approved": "yes"})
 	if resumed.Status != StatusFailed {
 		t.Fatalf("status = %s, want failed", resumed.Status)
 	}
@@ -144,39 +129,33 @@ func TestResumeOnNonResumableStepFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snap, err := json.Marshal(snapshot{
-		State:     map[string]any{},
-		StepIndex: 0,
-		StepInput: json.RawMessage("1"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	res := step.Pipeline().Resume(context.Background(), snap, nil)
+	snap := []byte(`{"state":{},"step_input":1}`)
+	res := step.Resume(context.Background(), snap, nil)
 	if res.Status != StatusFailed || !errors.Is(res.Error, core.ErrInvalidArgs) {
 		t.Fatalf("res = %+v, want a failure wrapping core.ErrInvalidArgs", res)
 	}
 }
 
-func TestStepFailureStopsThePipeline(t *testing.T) {
-	boom, err := New("boom", func(_ context.Context, _ State, _ int) (int, error) {
+func TestResumeRejectsCorruptSnapshot(t *testing.T) {
+	step := newApprovalStep(t)
+	res := step.Resume(context.Background(), []byte("not json"), nil)
+	if res.Status != StatusFailed || !errors.Is(res.Error, core.ErrInvalidArgs) {
+		t.Fatalf("res = %+v", res)
+	}
+}
+
+func TestStepFailureIsReturned(t *testing.T) {
+	step, err := New("boom", func(_ context.Context, _ State, _ int) (int, error) {
 		return 0, errors.New("kaboom")
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	after, err := New("after", func(_ context.Context, _ State, in int) (int, error) { return in, nil })
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	res := Then(boom.Pipeline(), after).Run(context.Background(), 1)
-	if res.Status != StatusFailed || !strings.Contains(res.Error.Error(), "kaboom") {
+	res := step.Run(context.Background(), nil, 1)
+	if res.Status != StatusFailed || res.Error == nil || res.Error.Error() != "kaboom" {
 		t.Fatalf("res = %+v", res)
-	}
-	if len(res.Steps) != 1 || res.Steps[0].ID != "boom" || res.Steps[0].Status != StatusFailed {
-		t.Fatalf("steps = %+v, want only the failing step", res.Steps)
 	}
 }
 
@@ -188,7 +167,7 @@ func TestCanceledContextFailsTheRun(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	res := step.Pipeline().Run(ctx, 1)
+	res := step.Run(ctx, nil, 1)
 	if res.Status != StatusFailed || !errors.Is(res.Error, context.Canceled) {
 		t.Fatalf("res = %+v, want a failure wrapping context.Canceled", res)
 	}
@@ -201,7 +180,7 @@ func TestInterfaceTypesHaveNoSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res := step.Pipeline().Run(context.Background(), map[string]any{"k": "v"})
+	res := step.Run(context.Background(), nil, map[string]any{"k": "v"})
 	if res.Status != StatusSuccess {
 		t.Fatalf("status = %s, err = %v", res.Status, res.Error)
 	}

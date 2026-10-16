@@ -74,6 +74,14 @@ type Detector struct {
 	pool      *ort.Pool
 }
 
+func (d *Detector) Health() core.HealthStatus {
+	if d.pool == nil {
+		return core.HealthStatus{Detail: "gliner: session pool is not ready"}
+	}
+	st := d.pool.Stats()
+	return core.HealthStatus{OK: true, InUse: st.Size - st.Available, Capacity: st.Size}
+}
+
 func (c Config) withDefaults() Config {
 	if c.Dir == "" {
 		c.Dir = os.Getenv("KIT_MODELS_DIR")

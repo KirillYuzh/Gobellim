@@ -243,3 +243,33 @@ func TestPipelineDecodesAndRescans(t *testing.T) {
 		t.Fatalf("no L1+decode finding in %+v", v.Findings)
 	}
 }
+
+func TestPipelineDegradesOptionalLayer(t *testing.T) {
+	required := &fakeDetector{name: "L1"}
+	optional := &fakeDetector{name: "L2", err: core.ErrGuardUnavailable}
+	p, _ := New(Options{Layers: []Detector{required, optional}, Optional: []string{"L2"}})
+
+	v, err := p.Check(context.Background(), RailInput, "text")
+	if err != nil {
+		t.Fatalf("an optional layer failure must not fail the check: %v", err)
+	}
+	if !v.Degraded || v.DegradedReason == "" {
+		t.Fatalf("verdict must be marked degraded: %+v", v)
+	}
+	if v.Action != Allow {
+		t.Fatalf("action = %v, want Allow", v.Action)
+	}
+}
+
+func TestPipelineDegradedVerdictIsNotCached(t *testing.T) {
+	optional := &fakeDetector{name: "L2", err: core.ErrGuardUnavailable}
+	p, _ := New(Options{Layers: []Detector{optional}, Optional: []string{"L2"}})
+	for i := 0; i < 2; i++ {
+		if _, err := p.Check(context.Background(), RailInput, "same text"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if optional.calls != 2 {
+		t.Fatalf("degraded verdicts must not be cached: detector called %d times, want 2", optional.calls)
+	}
+}

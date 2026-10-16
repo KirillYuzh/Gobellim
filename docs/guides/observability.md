@@ -194,7 +194,9 @@ ctx = kit.WithTraceMetadata(ctx, map[string]any{"ab_arm": "b", "request_id": rid
 
 Помимо писателя в Elasticsearch документы можно направлять в дополнительные
 `trace.Sink`. `trace.NewRecorder()` — потокобезопасный in-memory sink для тестов и
-eval; `trace.Fanout` — композиция нескольких sink'ов.
+eval; `trace.Fanout` — композиция нескольких sink'ов; `trace.NewOTLP` — отправка
+документов OTLP/HTTP JSON (stdlib, без внешних зависимостей, атрибуты `gen_ai.*` и
+`kit.*`).
 
 ```go
 rec := trace.NewRecorder()
@@ -257,66 +259,38 @@ deleted, err := app.Prune(ctx, 30*24*time.Hour)
 > заполняет (см. ниже). Пока вы не начнёте проставлять стоимость, панель
 > показывает нули.
 
-## Стоимость: framework её не считает
+## Стоимость: `Config.Pricing`
 
-`trace.Usage.Cost` **есть** в модели данных, и поле мапится в ES (`usage.cost` в
-трайсе, `cost` в observation, тип `double`). Но kit заполняет только токены:
-`toTraceUsage(model.Usage)` переносит `PromptTokens`/`CompletionTokens`/
-`TotalTokens`, а `Cost` остаётся нулём всегда. `model.Usage` вообще не имеет поля
-`Cost`.
+Framework считает стоимость сам, если задан `Config.Pricing`
+(`model.Pricing{InputPerMTok, OutputPerMTok}`): `usage.cost` в trace (сумма хода) и
+`cost` в generation-observation заполняются по токенам (BR-77). Нулевая цена
+(значение по умолчанию) означает «цена неизвестна» и даёт `0`.
 
-Практический вывод: **ценообразование — ваша ответственность**, и у фасада нет
-хука, чтобы вписать стоимость в ES-документ до его сборки (sink'и работают после,
-`Processors` через `kit.Config` не выставляются). Рабочие варианты:
+```go
+app, _ := kit.New(ctx, kit.Config{
+	// ...
+	Pricing: model.Pricing{InputPerMTok: 3, OutputPerMTok: 15},
+})
+```
 
-1. **Считать стоимость на своей стороне.** Sink получает наблюдения с токенами;
-   цены за миллион токенов известны приложению:
+Если нужна другая логика (скидки, посессионная тарификация, метрика в своём сторе),
+цену по-прежнему можно посчитать на своей стороне: sink получает наблюдения с
+токенами, а несколько `trace.Sink` композится через `trace.Fanout`. Учтите: tenant
+есть только у trace, observation несёт `trace_id`, поэтому распределение по
+арендаторам склеивается по `trace_id`.
 
-   ```go
-   type price struct{ in, out float64 } // за 1M токенов
+## Health-эндпоинт: `App.Health`
 
-   type pricingSink struct {
-   	prices   map[string]price // по имени модели
-   	mu       sync.Mutex
-   	tenants  map[string]string // trace_id -> tenant (из trace)
-   }
+Для проб и алертов есть `App.Health()`: снимок очереди trace-писателя
+(`TraceQueue`/`TraceQueueCap`/`TraceDropped`), режима и версии guard и каждого
+компонента, реализующего `HealthChecker` (`guard_l2`, `embedder`, `es`, `llm`).
+`Healthy` ложен, если хоть один компонент вернул `OK=false`; у компонентов с пулом
+(ORT) видны `InUse`/`Capacity`.
 
-   func (p *pricingSink) Enqueue(t trace.Trace) {
-   	p.mu.Lock()
-   	p.tenants[t.ID] = t.Tenant
-   	p.mu.Unlock()
-   }
-
-   func (p *pricingSink) EnqueueObservation(o trace.Observation) {
-   	if o.Kind != trace.KindGeneration {
-   		return
-   	}
-   	pr, ok := p.prices[o.Model]
-   	if !ok {
-   		return
-   	}
-   	cost := float64(o.Usage.PromptTokens)/1e6*pr.in +
-   		float64(o.Usage.CompletionTokens)/1e6*pr.out
-   	p.mu.Lock()
-   	tenant := p.tenants[o.TraceID]
-   	p.mu.Unlock()
-   	metrics.Add("llm.cost", cost, "model", o.Model, "tenant", tenant)
-   }
-
-   func (p *pricingSink) EnqueueScore(trace.Score) {}
-   ```
-
-   Важно: tenant есть только у **trace**, а observation несёт `trace_id`, поэтому
-   атрибуцию по арендатору нужно склеить по `trace_id` (как выше).
-
-2. **Дописать стоимость в ES пост-обработкой** — ingest pipeline, update-by-query
-   или сайдкар, который читает `kit-observations` и складывает цены в свой индекс.
-
-3. **Завести цены в BI** поверх тех же `kit-observations`, считая деньги уже там.
-
-> [!WARNING]
-> Не полагайтесь на то, что `usage.cost`/`cost` заполнится «сам». Значение в этих
-> полях — целиком ваша зона ответственности: framework пишет ноль.
+```go
+h := app.Health()
+writeJSON(w, map[string]any{"ok": h.Healthy, "degraded": h.Degraded, "checks": h.Components})
+```
 
 ## Рецепты
 

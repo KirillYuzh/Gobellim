@@ -52,6 +52,8 @@ type Chunk struct {
 	ACL        []string
 	Text       string
 	Vector     []float32
+	EmbedModel string
+	DocVersion int64
 	Position   int
 	Source     string
 	CreatedAt  time.Time
@@ -71,9 +73,15 @@ func (c Chunk) Document() map[string]any {
 		if len(c.Vector) > 0 {
 			doc[VectorField] = c.Vector
 		}
+		if c.EmbedModel != "" {
+			doc[EmbedModelField] = c.EmbedModel
+		}
 	}
 	if c.Source != "" {
 		doc["source"] = c.Source
+	}
+	if c.DocVersion > 0 {
+		doc["doc_version"] = c.DocVersion
 	}
 	created := c.CreatedAt
 	if created.IsZero() {

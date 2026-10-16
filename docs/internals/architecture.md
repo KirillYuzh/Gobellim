@@ -4,6 +4,10 @@ kit — библиотека, а не сервис. Ей нужен один Go-
 и подключается пользователем. Раздел описывает контейнеры развёртывания,
 раскладку пакетов, зависимости, путь вызова, рантайм и границы доверия.
 
+Роли документов разведены (`D52`): этот документ владеет **раскладкой** (пакеты,
+зависимости, рантайм), **поведение** — в [Бизнес-правилах](./business-rules.md),
+**сигнатуры и инварианты** — в [Дизайне v1](./design.md).
+
 ![Компоненты: ваш сервис, kit и внешние зависимости](../architecture.svg)
 
 > [!NOTE]
@@ -31,7 +35,8 @@ Framework — библиотека. Ей нужен один процесс на
 
 ## Ресурсы и сетевые правила
 
-Ресурсы `demo` (оценка): 4 vCPU, 4 GB RAM. Оценка памяти в полной сборке: guard
+Ресурсы `demo` (оценка): 4 vCPU, 4 GB RAM **с одним L1**; полный режим с L2
+требует ≥6 GB (пиковый RSS ≈4.5 GB, см. «ORT-сессии»). Оценка памяти в полной сборке: guard
 1.2 GB весов в fp32 (≈0.4 GB в int8), эмбеддер ≈0.5 GB, остальное рантайм. GPU не
 используется. Резидентный набор процесса с загруженной guard-моделью заметно выше
 размера весов — замер в «ORT-сессии» ниже (≈4.5 GB пикового RSS после того, как у
@@ -45,22 +50,26 @@ L2 появился потолок токенов).
 
 ```
 kit/
-  kit.go principal.go tool.go retrieval.go errors.go   фасад: New, Setup, Chat, Ingest, Search, Delete, Score, Prune, Generate[T], Tool[In,Out], RetrievalTool
-  internal/core/                            общий лист: Principal + sentinel-ошибки (без зависимостей)
+  kit.go principal.go tool.go retrieval.go memory.go stream.go toolsearch.go errors.go   фасад: New, Setup, Chat, ChatStream, Health, Ingest, Search, Delete, Score, Prune, Generate[T], Tool[In,Out], RawTool, RetrievalTool, MemoryLoad/Append/Recall/Clear/Working/SetWorking
+  internal/core/                            общий лист: Principal + sentinel-ошибки + HealthStatus/HealthChecker (без зависимостей)
   internal/call/                            единый примитив вызова; штампует аудит-поля (guard/policy/text); владеет GuardRejectError (kit реэкспортирует его как kit.GuardRejectError)
   internal/ort/                             пул сессий инференса (реализацию сессии даёт вызывающий; токенайзера здесь нет)
   internal/httpjson/ internal/oauth/        общие листы для адаптеров провайдеров
   internal/id/                              генерация идентификаторов трейсов и observation
+  internal/ratelimit/                       token bucket на ключ с эвикцией простаивающих
+  internal/cache/                           LRU+TTL кэш ответов модели
   authz/                                    policy.yaml, Load/Parse, Authorize(principal, permission)
   guard/                                    Rail/Detector/Pipeline, canonical.go; L1 — rules/, L2 — gliner/ (ONNX под тегом ort, заглушка без него)
   guard/guardtest/                          AllowAll — тестовый детектор (I-15)
-  model/                                    Message, Client, openai.go vllm.go ollama.go gigachat.go, chain.go, history.go
+  model/                                    Message, Client, openai.go openai_stream.go vllm.go ollama.go gigachat.go, chain.go, history.go
   embed/                                    Embedder, presets.go, remote.go, openai.go, gigachat.go, local.go, local_ort.go
   chunk/                                    токенный чанкер + Tokenizer (по умолчанию WhitespaceTokenizer)
-  store/                                    ES interface + Request, index.go (маппинги), chunks.go, search.go, filter.go, bulk.go, maintenance.go, ensure.go
-  trace/                                    модель Langfuse, async writer (writer.go), policy.go (TextPolicy/Sampler), sink.go
+  store/                                    ES interface + Request, index.go (маппинги), chunks.go, search.go, filter.go, bulk.go, memory.go (индексы и запросы памяти), maintenance.go, ensure.go
+  trace/                                    модель Langfuse, async writer (writer.go), policy.go (TextPolicy/Sampler), sink.go, otlp.go (Sink OTLP/HTTP)
   eval/                                     детерминированные проверки трейсов (stdlib; зависит от trace, не от kit)
-  flow/                                     типизированные последовательные step-пайплайны: schema-контракт и suspend/resume (без branch/loop DSL)
+  flow/                                     один типизированный шаг `Step[In,Out]` со schema-контрактом и suspend/resume (без Pipeline/builder-DSL, D47)
+  rerank/                                   реранкер за интерфейсом Reranker + адаптер TEI/Cohere (/rerank), детерминированный `Reorder`
+  mcp/                                      клиент Model Context Protocol (stdio и streamable HTTP) + `Register` — инструменты как `mcp:<server>:<tool>`
   webfetch/                                 SSRF-защищённый инструмент исходящего HTTP (эффект egress)
   internal/importrules/                     stdlib-тест правил импортов (I-13); дублирует правила depguard из .golangci.yml
   cmd/kitctl/                               model pull, policy check, verify window/models/parity/latency
@@ -90,17 +99,17 @@ kit/
    остального модуля.
 5. `internal/core` — общий лист (Principal, sentinel-ошибки) без зависимостей;
    его импортируют все пакеты. `internal/httpjson`, `internal/oauth`,
-   `internal/id`, `internal/ort`, `internal/importrules` — тоже листья и не
-   импортируют фасад.
+   `internal/id`, `internal/ort`, `internal/ratelimit`, `internal/cache`,
+   `internal/importrules` — тоже листья и не импортируют фасад.
 6. Глобального состояния нет; `init()` не используется; всё приходит через
    конструкторы и `context.Context`.
 
 Правила `internal/importrules` перечисляют ровно те пакеты, которые им подчинены; на
-остальные (фасад `kit`, `flow`, `webfetch`, `cmd/**`, `demo/**`) ограничений нет —
-`flow` и `webfetch` свободно зависят вниз (`flow → internal/core`,
-`webfetch → kit`), а цикл исключён тем, что ни один файл под `internal/` не импортирует
-фасад. Импорт фасада из `webfetch` — обычная зависимость листа-инструмента от
-фасада, а не исключение.
+остальные (фасад `kit`, `flow`, `rerank`, `mcp`, `webfetch`, `cmd/**`, `demo/**`)
+ограничений нет — они свободно зависят вниз (`flow → internal/core`,
+`rerank → internal/core`, `webfetch → kit`, `mcp → kit`), а цикл исключён тем, что
+ни один файл под `internal/` не импортирует фасад. Импорт фасада из `webfetch` и
+`mcp` — обычная зависимость листа-инструмента от фасада, а не исключение.
 
 ![Пакеты kit и правила зависимостей](../packages.svg)
 
@@ -238,10 +247,11 @@ flowchart TD
 | Вызов запрещённого tool                                    | вычитание из схемы + повторная проверка при исполнении                                                                            | детерминированный |
 | Некорректные или вредоносные args tool                     | JSON Schema со `additionalProperties:false`, лимит размера args 32 KB                                                             | детерминированный |
 | Утечка чужих данных через поиск                            | ACL-фильтр tenant + roles внутри kNN и BM25; deny-by-default                                                                      | детерминированный |
+| Утечка чужой памяти по `thread_id`                         | фильтр `tenant` + `user_id` в истории, очистке и recall; `thread_id` сам по себе доступа не даёт (I-17)                           | детерминированный |
 | Утечка PII и секретов в ответе                             | guard rail `output` (mask); инъекция/unsafe на выходе помечаются `Detect`                                                         | правила + ML      |
 | Эксфильтрация через инструмент                             | `Effects` инструмента, host-allowlist для `Egress`, «Rule of Two» в рантайме                                                      | детерминированный |
 | PII в трейсах                                              | текст под явной политикой `Config.TraceText` (`masked` по умолчанию; `full` — opt-in с предупреждением)                           | детерминированный |
-| DoS через guard                                            | лимит `max_chars`, пул сессий, таймаут очереди, fail-closed                                                                       | детерминированный |
+| DoS через guard                                            | лимит `max_chars`, пул сессий, таймаут очереди, fail-closed (`GuardStrict`) или явная деградация (`GuardDegraded`)                | детерминированный |
 | Бесконечный цикл tools                                     | `max_steps`, `max_calls` на tool, таймаут tool                                                                                    | детерминированный |
 | Утечка секретов в логах                                    | `slog` не пишет тексты сообщений; только id, размеры, категории                                                                   | дисциплина        |
 
@@ -253,7 +263,7 @@ flowchart TD
 
 Каждый вызов оборачивается в `internal/call` и создаёт observation; trace
 создаётся на входе `Chat`, `Ingest`, `Search` и `Generate`. Модель данных
-совместима по смыслу с Langfuse: trace → observations (SPAN, GENERATION, EVENT)
+совместима по смыслу с [Langfuse](https://langfuse.com/): trace → observations (SPAN, GENERATION, EVENT)
 → scores, session как группировка по `session_id`. Подробности полей —
 [Справочник kit](../reference/kit.md) и схема ES.
 
@@ -271,7 +281,7 @@ Request-scoped метаданные можно приложить к конте�
 observation этого запроса, а значение, заданное на конкретном вызове, перекрывает
 одноимённый ключ из контекста. Так помечают трафик (A/B-плечо, request id, флаг)
 без протаскивания через каждую операцию; отдельного dot-селектора, как
-`requestContextKeys` в Mastra, нет — вызывающий передаёт ровно ту карту, которую
+`requestContextKeys` в [Mastra](https://mastra.ai/), нет — вызывающий передаёт ровно ту карту, которую
 хочет видеть в трейсе.
 
 ```mermaid
@@ -297,10 +307,15 @@ item-статус `409`/`version_conflict` считается успехом). S
 JSON-API чтения трейсов в репозитории нет: потребители читают данные из ES
 (Kibana/Grafana). Это запланировано, а не реализовано.
 
+Помимо ES-writer'а, трейсы можно направить в любой `trace.Sink` через
+`Config.Sinks`: встроен `trace.NewOTLP` (`trace/otlp.go`) — OTLP/HTTP JSON без
+внешних зависимостей, с детерминированными id (sha256), атрибутами `gen_ai.*` и
+`kit.*` и scores отдельным событием `score`.
+
 Grafana: в `deploy/grafana/` лежат provisioning ES-datasource и дашборды:
 латентность и ошибки по `name`/`kind`, токены по модели и tenant (панель
-стоимости читает `usage.cost`, но его заполняет приложение: фреймворк пишет 0 —
-см. «стоимость» в [Наблюдаемости](../concepts/observability.md)),
+стоимости читает `usage.cost`, который framework заполняет по `Config.Pricing`;
+`0`, если цена не задана — см. [Наблюдаемость](../concepts/observability.md)),
 срабатывания guard по категориям и rail, топ tools и отказы авторизации,
 таблица последних trace.
 

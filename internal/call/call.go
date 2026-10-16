@@ -21,7 +21,9 @@ const (
 	KindSearch Kind = "search"
 	KindIngest Kind = "ingest"
 	KindDelete Kind = "delete"
+	KindMemory Kind = "memory"
 	KindGuard  Kind = "guard"
+	KindRerank Kind = "rerank"
 )
 
 type Authorizer interface {
@@ -132,6 +134,7 @@ func Do[T any](ctx context.Context, deps Deps, req Req, fn func(ctx context.Cont
 			GuardModel:      deps.GuardModel,
 			PolicyHash:      deps.PolicyHash,
 			TextPolicy:      deps.TextPolicy,
+			GuardDegraded:   span.Verdict.Degraded,
 		})
 	}
 

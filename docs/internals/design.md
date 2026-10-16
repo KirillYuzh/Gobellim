@@ -1,12 +1,14 @@
 # Дизайн v1 (замороженные контракты)
 
-Этот документ — **спецификация изменений** к v1. Он фиксирует инварианты и
-сигнатуры, по которым вносятся правки в пакеты. Всё, что здесь описано, имеет
-приоритет над [architecture.md](./architecture.md) и [business-rules.md](./business-rules.md)
-там, где они расходятся; расхождения правятся в том же изменении (AGENTS.md).
+Этот документ — **контракты и инварианты v1**: сигнатуры пакетов (§3),
+обязательные свойства (§2) и **журнал изменений API** (§5). Роли документов
+разведены (`D52`): **поведение** описано в [Бизнес-правилах](./business-rules.md)
+(`BR-xx`), **раскладка пакетов и рантайм** — в [Архитектуре](./architecture.md).
+§5 — исторический список правок, а не второй контракт: нормативное утверждение
+живёт в `BR` или в §3. Расхождения правятся в том же изменении (AGENTS.md).
 
 Цель правок: привести код в соответствие с собственной спекой, закрыть найденные
-дефекты корректности и добавить функциональность, перенесённую из Mastra
+дефекты корректности и добавить функциональность, перенесённую из [Mastra](https://mastra.ai/)
 (см. §4 «Решения»).
 
 ## 1. Схемы
@@ -76,6 +78,11 @@ flowchart TD
 | I-13 | Тесты — только stdlib. Обвязка **подключена**: CI (`.github/workflows/ci.yml`) гоняет джобы build, test, race, ort-vet, lint, fumpt; `golangci-lint` (`gofumpt`, `govet`, `errcheck`, `staticcheck`, `gosec`, `depguard` и др.) и `make check` дают ту же планку локально. Правила импортов закодированы дважды — `depguard` в `.golangci.yml` и stdlib-тест `internal/importrules`. Обвязка **подключена и зелёная**: `golangci-lint` v2.13.0 локально даёт 0 замечаний, а прогоны workflow на раннере зелёные (push в `develop`/`main` и pull request). |
 | I-14 | Единственный источник правды о вердиктах — этот документ и `guardrails.md`; `BR-27`/`architecture.md` не заявляют больше, чем умеет модель.                                                                                                                                                                                                                                                                                                                                                                                                               |
 | I-15 | Публичный API не содержит «выключателей безопасности»: `AllowAll` живёт в `guard/guardtest`.                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| I-16 | Деградация guard явная: режим задаёт `Config.GuardMode` (`GuardStrict` — fail-closed по умолчанию; `GuardDegraded` — недоступный необязательный (ML) слой пропускается, вердикт помечается `Degraded`, observation — `guard_degraded`). Детерминированный слой (L1) обязателен всегда; деградировавшие вердикты не кэшируются.                                                                                                                                                                                                                            |
+| I-17 | Память ограничена парой `tenant` + `user_id` принципала: история треда, очистка и recall фильтруют по обоим. `thread_id` даёт вызывающий, поэтому сам по себе доступа не даёт; пустой `UserID` — `ErrUnauthorized`. История треда на чтении считается доверенной (замаскирована при записи) и повторно через L2 не проходит.                                                                                                                                                                                                                              |
+| I-18 | Недоверенный ввод помечается (spotlighting): результат инструмента (включая retrieval) оборачивается в `<untrusted-data>…</untrusted-data>` **после** `ModelView`, а в системный промпт добавляется напоминание трактовать этот блок как данные, а не инструкции. По умолчанию включено (`Config.Spotlight` = `SpotlightOn`); `SpotlightOff` — явный opt-in.                                                                                                                                                                                              |
+| I-19 | `ChatStream` — расширение `Chat`, а не второй путь: цикл tools, RBAC, память, бюджет и трейс работают так же. Скользящее окно (`streamMinWindow` = 400 рун) отправляет каждый кусок ответа через рельс `output` до эмиссии, удерживая хвост `streamHoldback` = 96 рун; отказ рельса даёт `Retract` и аборт. Для клиента без `model.Streamer` — откат на буферизованный `Chat` одним чанком. Инвариант потока: `Done.Final.Content` равен конкатенации выданных `Text`.                                                                                    |
+| I-20 | Остаточное ограничение стриминга документируется, а не скрывается: совпадение длиннее `streamHoldback` (96 рун) без границы предложения внутри всё ещё может пересечь окно и просочиться в уже выданный текст. Один проход guard на окно (не на весь ответ) — осознанная цена стриминга.                                                                                                                                                                                                                                                                  |
 
 ## 3. Контракты пакетов
 
@@ -140,6 +147,32 @@ func CompileFilter(f Filter) (map[string]any, error)
 ```go
 func PruneBody(olderThan time.Duration) []byte        // delete_by_query по @timestamp
 func ParseDeleteByQuery(body []byte) (deleted int, err error) // failures учитываются
+```
+
+Память (обычные индексы, не data stream):
+
+```go
+func MemoryMessagesIndexBody(dims int) []byte // vector/embed_model — только если dims > 0
+func MemoryWorkingIndexBody() []byte
+
+type MemoryMessage struct {
+	ID, ThreadID, Tenant, UserID, Role, Content string
+	Vector     []float32
+	EmbedModel string
+	Seq        int64 // монотонный ключ порядка; created_at (date) хранит только мс
+	CreatedAt  time.Time
+}
+func MemoryBulkBody(msgs []MemoryMessage, dims int) ([]byte, error)
+
+func MemoryHistoryBody(tenant, userID, threadID string, limit int) []byte
+func MemoryRecallBody(tenant, userID string, vector []float32, topK, numCandidates int) ([]byte, error)
+func MemoryClearBody(tenant, userID, threadID string) []byte
+
+type WorkingMemory struct { ThreadID, Tenant, UserID string; Data map[string]any; UpdatedAt time.Time }
+func MemoryWorkingID(tenant, threadID string) string // sha256-hex, path-safe
+
+type MemoryHit struct { Role, Content string; CreatedAt time.Time; Score float64 }
+func ParseMemorySearch(body []byte) ([]MemoryHit, error)
 ```
 
 ### 3.3 `trace`
@@ -243,6 +276,10 @@ type Verdict struct {
 - `maskRunes` остаётся, но перед маскированием спаны объединяются и
   сортируются; приоритет категорий задаётся таблицей.
 - `AllowAll` переезжает в `guard/guardtest`.
+- `Options.Optional []string` — имена необязательных слоёв; упавший optional-слой
+  не роняет проверку, а помечает вердикт `Verdict.Degraded = true` и заполняет
+  `Verdict.DegradedReason`. Деградировавшие вердикты не кладутся в кэш.
+- `Verdict` получает `Degraded bool` и `DegradedReason string` (I-16).
 
 ### 3.5 `embed`
 
@@ -297,6 +334,13 @@ type Request struct {
 
 // Capability сообщает, поддерживает ли провайдер/модель нативную схему.
 func SupportsNativeSchema(client Client) bool
+
+// Streamer — необязательное расширение Client (I-19). Клиент без него не
+// реализует стриминг, и kit.ChatStream откатывается на буферизованный Chat.
+type Streamer interface {
+	Client
+	ChatStream(ctx context.Context, req Request, onDelta func(string) error) (Response, error)
+}
 ```
 
 - Цепочка фолбэков и ретраев (item 8 §6 частично + §4.5):
@@ -340,6 +384,10 @@ type Structurer struct {
 // (без валидации: декодирование — на вызывающем). Проза фенсится, чтобы читалась как данные.
 func (s Structurer) Structure(ctx context.Context, prose string) (string, error)
 ```
+
+- `Usage` получает `Cost float64`; добавлен тип `Pricing{InputPerMTok, OutputPerMTok}`
+  с методом `Cost(Usage) float64`. `kit.Config.Pricing` задаёт цену модели; при
+  ненулевом значении `Chat`/`Generate` заполняют `usage.cost` и `cost` (BR-77).
 
 ### 3.7 `eval` (новый пакет, item 7)
 
@@ -414,9 +462,9 @@ func Run(ctx context.Context, rec *trace.Recorder, cases []Case,
 
 ```go
 type Config struct {
-	// ... ES, LLM, Embedder, Policy, GuardL2, GuardMaxChars, GuardCacheSize,
-	//     Tokenizer, ChunkSize, ChunkOverlap, MaxSteps, MaxCallsPerTool,
-	//     ToolTimeout, ArgsMaxBytes, TopK, Logger
+	// ... ES, LLM, Pricing, Embedder, Policy, GuardL2, GuardMode, GuardMaxChars,
+	//     GuardCacheSize, Tokenizer, ChunkSize, ChunkOverlap, MaxSteps,
+	//     MaxCallsPerTool, ToolTimeout, ArgsMaxBytes, TopK, Logger
 	TraceText      trace.TextPolicy
 	Sampler        trace.Sampler
 	HideInput      bool
@@ -425,12 +473,49 @@ type Config struct {
 	MaxTotalTokens int          // бюджет хода (0 — без лимита)
 	Egress         EgressPolicy // Rule of Two и allowlist инструментов
 	Approver       Approver     // вызывается для tool с RequireApproval
+	Spotlight      SpotlightMode  // I-18; ноль = SpotlightOn
+	RateLimit      RateLimit      // лимит операций на тенанта; ноль = выкл.
+	ResponseCache  ResponseCache  // LRU+TTL ответов модели без tools; ноль = выкл.
+	MemoryLimit    int            // BR-82; DefaultMemoryLimit = 20
+	MemoryRecall   int            // BR-82; 0 = выкл.
 	BeforeToolCall BeforeToolHook // app-level hook; per-tool hook его заменяет
 	AfterToolCall  AfterToolHook  // app-level hook; per-tool hook его заменяет
 }
 
 type EgressPolicy struct {
 	RuleOfTwo bool // запрет эгресса, если на ходу был недоверенный ввод и приватные данные
+}
+
+// RateLimit — token bucket на тенанта (ключ — Principal.Tenant).
+type RateLimit struct {
+	PerSecond float64
+	Burst     int
+}
+
+// ResponseCache кэширует ответы модели только для вызовов без tools.
+type ResponseCache struct {
+	Size int           // число записей; 0 — кэш выключен
+	TTL  time.Duration // 0 — без истечения
+}
+
+// SpotlightMode управляет пометкой недоверенного контента (I-18).
+type SpotlightMode int
+
+const (
+	SpotlightOn  SpotlightMode = iota // по умолчанию
+	SpotlightOff
+)
+
+// ChatStream — стриминг расширением Chat (I-19). Вызывающий обязан вычитать
+// канал до закрытия.
+func (a *App) ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamChunk, error)
+
+type StreamChunk struct {
+	Text    string        // подтверждённый, уже проверенный текст
+	Retract bool          // клиент отбрасывает показанное; поток абортится ошибкой
+	Done    bool          // последний чанк, с собранным Final
+	Final   model.Message
+	Err     error
 }
 ```
 
@@ -480,6 +565,34 @@ type AfterToolHook func(ctx context.Context, info ToolCallInfo, result string, e
 - «ходовые» хуки: до вызова — RBAC, approval (по fingerprint, consume-once), egress-политика, затем `BeforeToolCall`; после исполнения — `AfterToolCall`, за ним guard результата (**последним**), `ValidateOutput`, `ModelView`. Ошибка хука становится результатом-ошибкой модели (I-11), если она не фатальна.
 - `ArgsMaxBytes`, `max_steps`, `max_calls`, timeout — как было;
 - бюджет хода (`MaxTotalTokens`) → `ErrBudget`.
+
+Память (item 2.1):
+
+```go
+type ChatRequest struct {
+	// ... System, Messages, SessionID, Temperature, MaxTokens, ToolChoice, Tags
+	ThreadID string // задан — Chat читает и пишет память треда
+}
+// Config получает MemoryLimit (DefaultMemoryLimit = 20) и MemoryRecall (0 — выкл.).
+
+func (a *App) MemoryLoad(ctx context.Context, threadID string, limit int) ([]model.Message, error)
+func (a *App) MemoryAppend(ctx context.Context, threadID string, msgs ...model.Message) error
+func (a *App) MemoryRecall(ctx context.Context, query string, topK int) ([]MemoryHit, error)
+func (a *App) MemoryClear(ctx context.Context, threadID string) (int, error)
+func (a *App) MemoryWorking(ctx context.Context, threadID string) (map[string]any, error)
+func (a *App) MemorySetWorking(ctx context.Context, threadID string, data map[string]any) error
+
+type MemoryHit struct {
+	Role      model.Role
+	Content   string
+	Score     float64
+	CreatedAt time.Time
+}
+```
+
+- `Chat` с `ThreadID`: `MemoryLoad` (последние `MemoryLimit` сообщений) перед новым ходом, `MemoryAppend` (сообщения хода + ответ) после успеха; при `MemoryRecall > 0` и наличии эмбеддера в системное сообщение добавляется блок recall.
+- Право `memory` (`authz.PermMemory`); `internal/call` получает `KindMemory`; каждый публичный memory-вызов создаёт trace (`name = "memory"`, `metadata.op`).
+- `store.EnsureSchema` создаёт `kit-memory-messages` и `kit-memory-working`.
 
 ## 4. Решения (дополнение к decisions.md)
 
@@ -562,6 +675,10 @@ README описывают именно это поведение.
 - `Response.FinishReason` (`FinishStop/ToolCalls/Length/ContentFilter/Other`),
   `ParseFinishReason`; `Request.SchemaMode` (`SchemaNative/Inline/System`),
   `SupportsNativeSchema`; `Request.ToolChoice`, `Seed`, `Stop`, `ProviderOptions`.
+- `Streamer` (`ChatStream(ctx, req, onDelta)`) — необязательное расширение `Client`;
+  `model/openai_stream.go` реализует его для `openai`/`vllm` (SSE, сборка
+  фрагментов tool_calls по индексу, `stream_options.include_usage`). `ollama` и
+  `gigachat` стриминг не реализуют и идут через откат (I-19).
 - `Chain(ChainConfig, ...Client)`: фолбэк-цепочка с ретраями и `Retry-After`.
 - `Chain` не реализует `SupportsNativeSchema`, поэтому `SupportsNativeSchema(chain)`
   = `false`: `kit.Generate`/`model.Structurer` инлайнят схему даже при
@@ -597,6 +714,9 @@ README описывают именно это поведение.
 - `Config.MaxTotalTokens` → `ErrBudget`; `Config.Egress.RuleOfTwo`;
   `Config.TraceText`, `Config.Sampler`, `Config.HideInput`, `Config.HideOutput`,
   `Config.Sinks`.
+- `Config.Spotlight` (`SpotlightOn`/`SpotlightOff`) и типы `SpotlightMode`,
+  `RateLimit{PerSecond, Burst}`, `ResponseCache{Size, TTL}`; `App.ChatStream` и
+  `StreamChunk` (см. §5.12).
 - Ошибка инструмента возвращается модели как `{"error": "..."}` (I-11); отказ
   RBAC и ошибки провайдера по-прежнему прерывают ход; неизвестный инструмент —
   результат-ошибка; на последнем шаге цикла `tool_choice` = `none`.
@@ -621,12 +741,11 @@ README описывают именно это поведение.
 ### 5.8 `flow`, `webfetch`, `cmd/kitctl verify` и новые хелперы
 
 - `flow` (новый пакет): `State`, `Status` (`success`/`failed`/`suspended`),
-  `Suspension`/`Suspend`, `Step[In,Out]`, `New`, `NewResumable`, `Pipeline`,
-  `StepResult`, `Result[Out]`; пакетные generic-функции `Then`, `Chain`, `Chain3`
-  (метод в Go не объявляет свои параметры типа); `Step.Pipeline`,
-  `Pipeline.Run`/`RunWithState`/`Resume` через `Result.Snapshot`.
+  `Suspension`/`Suspend`, `Step[In,Out]`, `New`, `NewResumable`, `Result[Out]`;
+  `Step.Run`/`Step.Resume` через `Result.Snapshot`.
   Схемы выводятся из Go-типов, входы/выходы/resume валидируются в рантайме.
-  Branch/parallel/foreach/loop DSL намеренно отсутствует (D31).
+  Branch/parallel/foreach/loop DSL и объект `Pipeline` намеренно отсутствуют
+  (D31; `Pipeline`/`Then`/`Chain` удалены в D47).
 - `webfetch` (новый пакет): `Config` (`AllowHosts`, `MaxBytes`, `Timeout`,
   `MaxRedirects`, `Headers`), `In` (`url`), `Out` (`status`, `content_type`,
   `text`, `truncated`), `New(app, name, cfg)`. Регистрируется через
@@ -643,3 +762,86 @@ README описывают именно это поведение.
 - CI: `.github/workflows/ci.yml` (build, test, race, ort-vet, lint, fumpt),
   `.golangci.yml` (`gofumpt`, `govet`, `errcheck`, `staticcheck`, `gosec`, `depguard`
   и др.), `Makefile` (`make check`) и `internal/importrules` (I-13).
+
+### 5.9 Часть 1 шлифовки (P0)
+
+- `kit.Config.GuardMode` (`GuardStrict`/`GuardDegraded`), `guard.Options.Optional`,
+  `guard.Verdict.Degraded`/`DegradedReason`; observation несёт `guard_degraded` (I-16).
+- `kit.Config.Pricing` (`model.Pricing`), `model.Usage.Cost`; `usage.cost`/`cost`
+  заполняются framework'ом (BR-77).
+- Право `chat` на операцию `Chat` (`authz.PermChat`, BR-76).
+- `store.Chunk.EmbedModel` + поле `embed_model` в `kit-chunks`;
+  `store.SearchQuery.EmbedModel` фильтрует поиск по текущей модели эмбеддера (BR-79).
+
+### 5.10 Память (часть 2.1)
+
+- `store`: индексы `kit-memory-messages` / `kit-memory-working`;
+  `MemoryMessage`/`WorkingMemory`/`MemoryHit`; `MemoryMessagesIndexBody`,
+  `MemoryWorkingIndexBody`, `MemoryBulkBody`, `MemoryHistoryBody`,
+  `MemoryRecallBody`, `MemoryClearBody`, `MemoryWorkingID`, `ParseMemorySearch`.
+- `kit`: `ChatRequest.ThreadID`, `Config.MemoryLimit`, `Config.MemoryRecall`;
+  операции `MemoryLoad/Append/Recall/Clear/Working/SetWorking`;
+  `MemoryHit`, `DefaultMemoryLimit` = 20, `DefaultMemoryTopK` = 5 (I-17).
+- `authz.PermMemory` (`memory`); `call.KindMemory` (`memory`).
+
+### 5.11 Часть 2.2–2.6 (spotlighting, лимиты, ingest, кэш, OTLP)
+
+- **Spotlighting (2.2, I-18):** `Config.Spotlight` (`SpotlightOn`/`SpotlightOff`);
+  `spotlight()` оборачивает результат инструмента (после `ModelView`) в
+  `<untrusted-data>\n…\n</untrusted-data>`, в системный промпт через `joinSystem`
+  добавляется напоминание (`spotlightReminder`) трактовать блок как данные.
+- **Rate limit (2.4):** `internal/ratelimit` (token bucket на ключ с эвикцией
+  простаивающих); `kit.RateLimit{PerSecond, Burst}` и `App.limiter`; применятся в
+  `Chat`/`ChatStream`/`Ingest`/`Search`/`Delete`/`Generate`/`Score` и memory-операциях;
+  исчерпание — `ErrRateLimited`.
+- **Атомарный ingest (2.5):** `store.Chunk.DocVersion`, поле `doc_version` (`long`),
+  id чанка `<docID>#<version>#<i>`; новый `store.DeleteByDocVersionBody(docID, tenant,
+keepVersion)`. `Ingest` пишет новые чанки (`_bulk?refresh=wait_for`) **первым**
+  действием и только затем удаляет прежние версии (`_delete_by_query` с
+  `doc_id`+`tenant` и `must_not[term doc_version]`) — сбой между шагами даёт
+  дубликаты (самоисцеляющиеся), но не потерю (BR-87).
+- **Кэш ответов (2.6):** `internal/cache` (LRU+TTL); `kit.ResponseCache{Size, TTL}`;
+  ключ — sha256 от `{model, messages, tools, temperature, maxTokens, toolChoice,
+jsonSchema, schemaMode, seed, stop}`. Кэшируются только ответы **без tools**;
+  попадание — `metadata.cache = "hit"`, стоимость `0`, токены из кэшированного
+  ответа (BR-88).
+- **OTLP-синк (2.3):** `trace.NewOTLP(trace.OTLPOptions{...})` реализует `trace.Sink`
+  (OTLP/HTTP JSON, stdlib); детерминированные id (sha256), атрибуты `gen_ai.*` и
+  `kit.*`, scores — событием `score`. Подключается через `Config.Sinks`.
+
+### 5.12 Стриминг (часть 3, I-19/I-20)
+
+- `model.Streamer` (`ChatStream`) и `model/openai_stream.go` (SSE для
+  `openai`/`vllm`; `ollama` и `gigachat` идут через откат).
+- `App.ChatStream(ctx, req) (<-chan StreamChunk, error)`, `StreamChunk{Text, Retract,
+Done, Final, Err}`; скользящее окно `windowGuard` (`streamMinWindow` = 400,
+  `streamHoldback` = 96, резка по границе `\n . ! ? ; :`); один проход guard на
+  окно; `Retract` при отказе рельса `output`. Клиент без `model.Streamer`
+  получает буферизованный `Chat` одним чанком `Text` + `Done`. Вызывающий обязан
+  вычитать канал до закрытия.
+
+### 5.13 Часть 3 (сужение `flow`, health, реранкинг, поиск инструментов, MCP)
+
+- **`flow` сужен (D47):** удалены `Pipeline`, `Then`, `Chain`, `Chain3`,
+  `Step.Pipeline`, `StepResult`; остались `Step[In,Out]` с `Run(ctx, st, in)` и
+  `Resume(ctx, snapshot, data)` и `Result[Out]{Status, Output, Error, Suspension,
+Snapshot, State}`.
+- **Health (D48):** `internal/core` получает `HealthStatus{OK, Detail, InUse,
+Capacity}` и `HealthChecker`; `kit` их алиасит (`kit.HealthStatus`,
+  `kit.HealthChecker`). `trace.Writer.QueueDepth`/`QueueCapacity`, `ort.Pool.Stats`;
+  `guard/gliner` и локальный `embed` реализуют `Health()`. `App.Health()`
+  возвращает `Health{Healthy, Degraded, GuardMode, GuardVersion, TraceQueue,
+TraceQueueCap, TraceDropped, Components}`.
+- **Реранкинг (D49):** новый пакет `rerank` (`Reranker`, `Rank`, `Reorder`,
+  `TEIConfig`/`NewTEI`); `Config.Reranker`, `Config.RerankCandidates`,
+  `SearchRequest.Rerank`; `call.KindRerank`; кандидатов `TopK ×
+DefaultRerankMultiplier`.
+- **Поиск по инструментам (D50):** `Config.ToolSearch{Enabled, Threshold, TopK}`,
+  `DefaultToolSearchThreshold` = 20, `DefaultToolSearchTopK` = 8; `allowedToolSpecs`
+  учитывает последнее сообщение пользователя; лексическое ранжирование
+  (`toolsearch.go`).
+- **MCP и `RawTool` (D51):** `kit.RawTool(app, name, schema, fn, opts...)` —
+  инструмент со схемой дословно. Новый пакет `mcp`: `New`, `Initialize`,
+  `ListTools`, `CallTool`, `Close`, `ServerInfo`, `Tool`, `CallResult`, `Content`;
+  транспорты stdio и streamable HTTP; `Register(ctx, app, client, opts...)`
+  регистрирует `mcp:<server>:<tool>` с эффектом `Egress`.

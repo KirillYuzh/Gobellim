@@ -10,6 +10,8 @@ import (
 )
 
 const (
+	PermChat     = "chat"
+	PermMemory   = "memory"
 	PermSearch   = "search"
 	PermIngest   = "ingest"
 	PermDelete   = "delete"

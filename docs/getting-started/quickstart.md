@@ -184,6 +184,7 @@ default: deny
 roles:
   user:
     permissions:
+      - chat
       - search
       - ingest
       - tool:get_weather

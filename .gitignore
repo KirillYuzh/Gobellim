@@ -32,6 +32,12 @@ go.work.sum
 models/
 .ort/
 
+# Local Go build cache
+.gotmp/
+
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Temporary working notes
+REFACTOR-PLAN.md
