@@ -534,6 +534,10 @@ type StreamChunk struct {
 - `Prune(ctx, olderThan)` — удаление старых трейсов (ретенция).
 - `RetrievalTool(app, name, opts...)` — инструмент поиска по KB как типизированный `Tool`
   (item 10).
+- `CallTool(ctx, name, args)` (D54) — вызов одного инструмента тем же путём, что
+  `Chat` (право, валидация, approval, egress, хуки, guard `tool_result`);
+  неопределённый инструмент — `ErrToolNotFound`. Нужен не-модельным вызывающим
+  (MCP-сервер, `mcp.FromTool`).
 
 `Tool` дополняется опциями (items 4, 5, 12, I-10):
 
@@ -847,3 +851,10 @@ DefaultRerankMultiplier`.
   `ListTools`, `CallTool`, `Close`, `ServerInfo`, `Tool`, `CallResult`, `Content`;
   транспорты stdio и streamable HTTP; `Register(ctx, app, client, opts...)`
   регистрирует `mcp:<server>:<tool>` с эффектом `Egress`.
+- **MCP-сервер и `CallTool` (D54):** `mcp.NewServer(ServerConfig{Name, Version, Tools,
+AllowedOrigins, Logger})`, `mcp.ServerTool`, `mcp.FromTool(app, def)`,
+  `Server.ServeStdio(ctx, in, out)` и `Server.Handler()` (streamable HTTP, только
+  `POST`). Методы `initialize`, `ping`, `tools/list`, `tools/call`; неизвестный
+  инструмент — ошибка JSON-RPC, ошибка обработчика — `CallResult.IsError`; запрос с
+  заголовком `Origin` отклоняется, пока источник не в `AllowedOrigins`.
+  `kit.App.CallTool(ctx, name, args)` — одиночный вызов инструмента через примитив.

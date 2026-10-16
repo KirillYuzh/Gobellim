@@ -55,17 +55,18 @@ is a separate `ChatStream` operation that also goes through the guard.
 
 ### Operations at a glance
 
-| Operation     | Permission | Scope                                                 |
-| ------------- | ---------- | ----------------------------------------------------- |
-| `Chat`        | `chat`     | permissions are checked again on every tool call      |
-| `ChatStream`  | `chat`     | same turn as `Chat`, guarded sliding-window stream    |
-| `Memory*`     | `memory`   | thread history, semantic recall and working memory    |
-| `Generate[T]` | `generate` | input and output guard, `ErrorStrategy`               |
-| `Ingest`      | `ingest`   | needs `Tenant` and an `Embedder`                      |
-| `Search`      | `search`   | needs `Tenant`, an `Embedder`; `SearchRequest.Filter` |
-| `Delete`      | `delete`   | needs `Tenant`                                        |
-| `Prune`       | `prune`    | deletes traces/observations older than a duration     |
-| `Score`       | `trace`    | records a score on a trace                            |
+| Operation     | Permission    | Scope                                                       |
+| ------------- | ------------- | ----------------------------------------------------------- |
+| `Chat`        | `chat`        | permissions are checked again on every tool call            |
+| `ChatStream`  | `chat`        | same turn as `Chat`, guarded sliding-window stream          |
+| `CallTool`    | `tool:<name>` | one registered tool through the same call path (MCP server) |
+| `Memory*`     | `memory`      | thread history, semantic recall and working memory          |
+| `Generate[T]` | `generate`    | input and output guard, `ErrorStrategy`                     |
+| `Ingest`      | `ingest`      | needs `Tenant` and an `Embedder`                            |
+| `Search`      | `search`      | needs `Tenant`, an `Embedder`; `SearchRequest.Filter`       |
+| `Delete`      | `delete`      | needs `Tenant`                                              |
+| `Prune`       | `prune`       | deletes traces/observations older than a duration           |
+| `Score`       | `trace`       | records a score on a trace                                  |
 
 `Ingest`, `Search` and `Delete` require a non-empty `Tenant` in the principal, so an
 operation can never widen across tenants. `Prune` is a global, time-based retention

@@ -37,17 +37,17 @@ roles:
 
 Права объявлены константами в `authz`; рантайм проверяет их через `authz.Policy.Authorize(principal, permission)`.
 
-| Константа              | Значение      | Где проверяется                                                               |
-| ---------------------- | ------------- | ----------------------------------------------------------------------------- |
-| `authz.PermChat`       | `chat`        | `App.Chat`: вызов модели и весь цикл инструментов.                            |
-| `authz.PermMemory`     | `memory`      | Операции памяти и `App.Chat` с `ThreadID`.                                    |
-| `authz.PermSearch`     | `search`      | `App.Search`: и вызов эмбеддера `Query()`, и `_msearch`.                      |
-| `authz.PermIngest`     | `ingest`      | `App.Ingest`: вызов эмбеддера `Passages()` и запись чанков.                   |
-| `authz.PermDelete`     | `delete`      | `App.Delete`.                                                                 |
-| `authz.PermTrace`      | `trace`       | `App.Score`.                                                                  |
-| `authz.PermGenerate`   | `generate`    | `Generate[T]`.                                                                |
-| `authz.PermPrune`      | `prune`       | `App.Prune`.                                                                  |
-| `authz.ToolPermission` | `tool:<name>` | Исполнение инструмента и вычитание запрещённых из схемы (`allowedToolSpecs`). |
+| Константа              | Значение      | Где проверяется                                                                                       |
+| ---------------------- | ------------- | ----------------------------------------------------------------------------------------------------- |
+| `authz.PermChat`       | `chat`        | `App.Chat`: вызов модели и весь цикл инструментов.                                                    |
+| `authz.PermMemory`     | `memory`      | Операции памяти и `App.Chat` с `ThreadID`.                                                            |
+| `authz.PermSearch`     | `search`      | `App.Search`: и вызов эмбеддера `Query()`, и `_msearch`.                                              |
+| `authz.PermIngest`     | `ingest`      | `App.Ingest`: вызов эмбеддера `Passages()` и запись чанков.                                           |
+| `authz.PermDelete`     | `delete`      | `App.Delete`.                                                                                         |
+| `authz.PermTrace`      | `trace`       | `App.Score`.                                                                                          |
+| `authz.PermGenerate`   | `generate`    | `Generate[T]`.                                                                                        |
+| `authz.PermPrune`      | `prune`       | `App.Prune`.                                                                                          |
+| `authz.ToolPermission` | `tool:<name>` | Исполнение инструмента и вычитание запрещённых из схемы (`allowedToolSpecs`), а также `App.CallTool`. |
 
 `"*"` (`wildcard`) в списке прав роли разрешает любое право. Пустое право (`""`) проверку пропускает: так проходят внутренние операции без собственного публичного права. `App.Chat` требует права `chat`. Права ролей объединяются: достаточно совпадения в любой из ролей принципала.
 

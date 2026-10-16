@@ -169,6 +169,27 @@ h := app.Health()
 if !h.Healthy { log.Printf("unhealthy: %+v", h.Components) }
 ```
 
+### CallTool
+
+```go
+func (a *App) CallTool(ctx context.Context, name string, args json.RawMessage) (string, error)
+```
+
+Вызывает один зарегистрированный инструмент по имени тем же путём, что `Chat`:
+право инструмента, валидация аргументов и лимит размера, approval, egress-политика,
+хуки, guard `tool_result` и `ModelView`. Принципал берётся из `context.Context`.
+Возвращает то, что увидела бы модель: ошибка инструмента приходит как
+результат-ошибка (I-11). Неизвестный инструмент — `ErrToolNotFound`, невалидные или
+слишком большие аргументы — `ErrInvalidArgs`, отказ политики — `ErrUnauthorized`.
+Операция нужна не-модельным вызывающим — MCP-серверу
+([`mcp.FromTool`](../concepts/mcp.md)), — чтобы вызов нельзя было провести в обход
+примитива (BR-96).
+
+```go
+ctx = kit.WithPrincipal(ctx, kit.Principal{UserID: "u-1", Roles: []string{"user"}, Tenant: "acme"})
+out, err := app.CallTool(ctx, "get_weather", json.RawMessage(`{"city":"Москва"}`))
+```
+
 ### Ingest
 
 ```go
@@ -781,7 +802,7 @@ Sentinels объявлены в `kit/errors.go` (реэкспорт из `intern
 | `ErrApprovalRequired` | Инструмент с `RequireApproval`, а `Approver` не задан, отказал или одобрение этого fingerprint уже израсходовано.                                                                                   |
 | `ErrTool`             | Зарезервирован под падение внутри инструмента; фасад возвращает такие сбои модели как результат, а не как ошибку.                                                                                   |
 | `ErrRateLimited`      | Лимит на тенанта исчерпан (`Config.RateLimit`, BR-86) до обращения к провайдеру; 429 провайдера приходит как `ErrProvider`.                                                                         |
-| `ErrToolNotFound`     | Зарезервирован: неизвестный инструмент сейчас возвращается модели результатом-ошибкой, а не этим sentinel’ом.                                                                                       |
+| `ErrToolNotFound`     | Возвращается `App.CallTool` для неизвестного инструмента; в `Chat` неизвестный инструмент — результат-ошибка модели.                                                                                |
 | `ErrNotFound`         | Зарезервирован для приложения и адаптеров; операции фасада его не возвращают.                                                                                                                       |
 
 Разбор по слоям и что видит клиент — [Ошибки](./errors.md).

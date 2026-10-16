@@ -56,17 +56,18 @@ MCP-сервера (`mcp.Register`) или переупорядочьте выд
 
 ### Операции сразу
 
-| Операция      | Право      | Область                                                |
-| ------------- | ---------- | ------------------------------------------------------ |
-| `Chat`        | `chat`     | права проверяются заново на каждый вызов инструмента   |
-| `ChatStream`  | `chat`     | тот же ход, что `Chat`, но с guard'ом скользящего окна |
-| Память        | `memory`   | история, recall и working; нужны `Tenant` и `UserID`   |
-| `Generate[T]` | `generate` | input/output guard, `ErrorStrategy`                    |
-| `Ingest`      | `ingest`   | нужен непустой `Tenant` и `Embedder`                   |
-| `Search`      | `search`   | нужен `Tenant`, `Embedder`; `SearchRequest.Filter`     |
-| `Delete`      | `delete`   | нужен `Tenant`                                         |
-| `Prune`       | `prune`    | удаляет трейсы/observations старше заданного срока     |
-| `Score`       | `trace`    | записывает оценку трейса                               |
+| Операция      | Право         | Область                                                |
+| ------------- | ------------- | ------------------------------------------------------ |
+| `Chat`        | `chat`        | права проверяются заново на каждый вызов инструмента   |
+| `ChatStream`  | `chat`        | тот же ход, что `Chat`, но с guard'ом скользящего окна |
+| `CallTool`    | `tool:<name>` | один инструмент тем же путём (MCP-сервер)              |
+| Память        | `memory`      | история, recall и working; нужны `Tenant` и `UserID`   |
+| `Generate[T]` | `generate`    | input/output guard, `ErrorStrategy`                    |
+| `Ingest`      | `ingest`      | нужен непустой `Tenant` и `Embedder`                   |
+| `Search`      | `search`      | нужен `Tenant`, `Embedder`; `SearchRequest.Filter`     |
+| `Delete`      | `delete`      | нужен `Tenant`                                         |
+| `Prune`       | `prune`       | удаляет трейсы/observations старше заданного срока     |
+| `Score`       | `trace`       | записывает оценку трейса                               |
 
 `Ingest`, `Search` и `Delete` требуют непустого `Tenant` в принципале:
 операция не может расшириться на другие тенанты. `Prune` — глобальная ретенция по

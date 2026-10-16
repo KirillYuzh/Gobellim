@@ -50,7 +50,7 @@ L2 появился потолок токенов).
 
 ```
 kit/
-  kit.go principal.go tool.go retrieval.go memory.go stream.go toolsearch.go errors.go   фасад: New, Setup, Chat, ChatStream, Health, Ingest, Search, Delete, Score, Prune, Generate[T], Tool[In,Out], RawTool, RetrievalTool, MemoryLoad/Append/Recall/Clear/Working/SetWorking
+  kit.go principal.go tool.go calltool.go retrieval.go memory.go stream.go toolsearch.go errors.go   фасад: New, Setup, Chat, ChatStream, Health, CallTool, Ingest, Search, Delete, Score, Prune, Generate[T], Tool[In,Out], RawTool, RetrievalTool, MemoryLoad/Append/Recall/Clear/Working/SetWorking
   internal/core/                            общий лист: Principal + sentinel-ошибки + HealthStatus/HealthChecker (без зависимостей)
   internal/call/                            единый примитив вызова; штампует аудит-поля (guard/policy/text); владеет GuardRejectError (kit реэкспортирует его как kit.GuardRejectError)
   internal/ort/                             пул сессий инференса (реализацию сессии даёт вызывающий; токенайзера здесь нет)
@@ -69,7 +69,7 @@ kit/
   eval/                                     детерминированные проверки трейсов (stdlib; зависит от trace, не от kit)
   flow/                                     один типизированный шаг `Step[In,Out]` со schema-контрактом и suspend/resume (без Pipeline/builder-DSL, D47)
   rerank/                                   реранкер за интерфейсом Reranker + адаптер TEI/Cohere (/rerank), детерминированный `Reorder`
-  mcp/                                      клиент Model Context Protocol (stdio и streamable HTTP) + `Register` — инструменты как `mcp:<server>:<tool>`
+  mcp/                                      клиент Model Context Protocol (stdio и streamable HTTP) + `Register` — инструменты как `mcp:<server>:<tool>`; сервер `NewServer`/`FromTool` отдаёт инструменты наружу через `App.CallTool`
   webfetch/                                 SSRF-защищённый инструмент исходящего HTTP (эффект egress)
   internal/importrules/                     stdlib-тест правил импортов (I-13); дублирует правила depguard из .golangci.yml
   cmd/kitctl/                               model pull, policy check, verify window/models/parity/latency
