@@ -35,10 +35,62 @@ _Безопасные LLM-примитивы для Go._ RAG, вызов инс�
 его.
 
 **Ограничено по построению.** Число шагов, лимит вызовов на инструмент, таймауты
-и размер аргументов задаёт рантайм, а не промпт. Стриминга нет: проверка выхода
+и размер аргументов задаёт рантайм, а не промпт. Стриминг отсутствует, потому что проверка выхода
 требует ответ целиком.
 
+### Операции сразу
+
+| Операция      | Право      | Область                                              |
+| ------------- | ---------- | ---------------------------------------------------- |
+| `Chat`        | —          | права проверяются заново на каждый вызов инструмента |
+| `Generate[T]` | `generate` | input/output guard, `ErrorStrategy`                  |
+| `Ingest`      | `ingest`   | нужен непустой `Tenant` и `Embedder`                 |
+| `Search`      | `search`   | нужен `Tenant`, `Embedder`; `SearchRequest.Filter`   |
+| `Delete`      | `delete`   | нужен `Tenant`                                       |
+| `Prune`       | `prune`    | удаляет трейсы/observations старше заданного срока   |
+| `Score`       | `trace`    | записывает оценку трейса                             |
+
+`Ingest`, `Search` и `Delete` требуют непустого `Tenant` в принципале:
+операция не может расшириться на другие тенанты. `Prune` — глобальная ретенция по
+времени: ему нужны принципал и право `prune`, а не тенант.
+
 ## В коде
+
+Ваш клиент Elasticsearch — единственное место, которое знает про транспорт,
+заголовки и `refresh`: kit вызывает `store.ES` с явным `store.Request` и никогда
+не выводит тип контента из пути.
+
+```go
+type httpES struct {
+	base string
+	hc   *http.Client
+}
+
+func (c *httpES) Do(ctx context.Context, req store.Request) (int, []byte, error) {
+	var body io.Reader
+	if len(req.Body) > 0 {
+		body = bytes.NewReader(req.Body)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, req.Method, c.base+req.EffectivePath(), body)
+	if err != nil {
+		return 0, nil, err
+	}
+	if len(req.Body) > 0 {
+		ct := req.ContentType
+		if ct == "" {
+			ct = "application/json" // значение по умолчанию; kit не выводит его из пути
+		}
+		httpReq.Header.Set("Content-Type", ct)
+	}
+	resp, err := c.hc.Do(httpReq)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	return resp.StatusCode, data, err
+}
+```
 
 ```go
 app, err := kit.New(ctx, kit.Config{
@@ -85,18 +137,33 @@ type Ticket struct {
 	Summary  string `json:"summary"`
 }
 
-ticket, err := kit.Generate[Ticket](ctx, app, kit.GenerateRequest{
-	Prompt: "Классифицируй: выгрузка упала у трёх тенантов.",
+// Generate — полноценная операция примитива: нужны принципал, право generate
+// и input/output guard.
+fallback := Ticket{Severity: 3, Summary: "нужна ручная разборка"}
+ticket, err := kit.Generate[Ticket](ctx, app, kit.GenerateRequest[Ticket]{
+	Prompt:        "Классифицируй: выгрузка упала у трёх тенантов.",
+	ErrorStrategy: kit.Fallback, // Strict (по умолчанию) | Warn | Fallback
+	Fallback:      &fallback,
 })
+if ticket.UsedFallback {
+	// ответ модели не декодировался в Ticket; вернулось значение Fallback
+}
+_ = ticket.FinishReason // model.FinishStop, FinishLength, FinishToolCalls, ...
 ```
 
 ```go
 // RAG: чанкинг, эмбеддинги и индексация, затем поиск BM25 + kNN под ACL вызывающего.
 err = app.Ingest(ctx, kit.Doc{ID: "policy-1", Text: text, ACL: []string{"user"}})
-hits, err := app.Search(ctx, kit.SearchRequest{Query: "правила возврата", TopK: 5})
+hits, err := app.Search(ctx, kit.SearchRequest{
+	Query: "правила возврата",
+	TopK:  5,
+	// Filter сужает выборку по метаданным; AND-ится с ACL-фильтром принципала.
+	Filter: store.Filter{"doc_id": "policy-1", "position": map[string]any{"$gte": 2}},
+})
 
-// Delete и score идут через тот же шлагбаум.
+// Delete, prune и score идут через тот же шлагбаум.
 err = app.Delete(ctx, "policy-1")
+deleted, err := app.Prune(ctx, 30*24*time.Hour) // ретенция: трейсы и observations
 err = app.Score(ctx, trace.Score{TraceID: traceID, Name: "helpful", Value: 1})
 ```
 
@@ -111,7 +178,7 @@ err = app.Score(ctx, trace.Score{TraceID: traceID, Name: "helpful", Value: 1})
 | «Сколько идёт доставка в другой город?»  | 2–5 рабочих дней, 400 ₽              |
 | «Какова гарантия на электронику?»        | 12 месяцев                           |
 | «Можно ли купить в рассрочку?»           | да, «0-0-6» от 3000 ₽                |
-| «Как связаться с поддержкой?»            | 8 800 555-35-35, круглосуточно       |
+| «Как связаться с поддержкой?»            | 8 999 888-77-66, круглосуточно       |
 | «Как получить 5% кэшбэка?»               | от 50 000 ₽                          |
 | «Какая погода в Москве?»                 | реальная погода — только для `admin` |
 

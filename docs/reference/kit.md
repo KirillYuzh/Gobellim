@@ -13,25 +13,40 @@ fn`). Добавлять middleware или обходить политику н�
 Поля конфигурации. Значения по умолчанию применяются в `kit.New`, если поле
 оставлено нулевым.
 
-| Поле              | Тип               | По умолчанию                  | Назначение                                                              |
-| ----------------- | ----------------- | ----------------------------- | ----------------------------------------------------------------------- |
-| `ES`              | `store.ES`        | — (обязательно)               | Клиент Elasticsearch пишет пользователь.                                |
-| `LLM`             | `model.Client`    | — (обязательно)               | Клиент чата.                                                            |
-| `Embedder`        | `embed.Embedder`  | `nil`                         | Нужен только для `Ingest` и `Search`; чат-приложение может не задавать. |
-| `Policy`          | `*authz.Policy`   | — (обязательно)               | Разобранный `policy.yaml`.                                              |
-| `GuardL2`         | `guard.Detector`  | `nil`                         | ML-слой guard; при `nil` остаётся только детерминированный L1.          |
-| `GuardMaxChars`   | `int`             | `8000`                        | Лимит текста для guard.                                                 |
-| `GuardCacheSize`  | `int`             | `4096`                        | Размер LRU-кэша вердиктов guard.                                        |
-| `Tokenizer`       | `chunk.Tokenizer` | `chunk.WhitespaceTokenizer{}` | Токенайзер чанкера (в ORT-сборке — из `internal/ort`).                  |
-| `ChunkSize`       | `int`             | `400`                         | Токенов в чанке.                                                        |
-| `ChunkOverlap`    | `int`             | `80`                          | Перекрытие чанков.                                                      |
-| `MaxSteps`        | `int`             | `8`                           | Лимит цикла «модель → инструменты → модель».                            |
-| `MaxCallsPerTool` | `int`             | `3`                           | Лимит вызовов одного инструмента.                                       |
-| `ToolTimeout`     | `time.Duration`   | `30s`                         | Таймаут одного вызова инструмента.                                      |
-| `ArgsMaxBytes`    | `int`             | `32768`                       | Лимит размера аргументов инструмента.                                   |
-| `TopK`            | `int`             | `10`                          | Хитов поиска по умолчанию.                                              |
-| `TraceStoreRaw`   | `bool`            | `false`                       | Писать в трейсы необработанный текст вместо маскированного.             |
-| `Logger`          | `*slog.Logger`    | `slog.Default()`              | Логи; тексты сообщений в них не попадают.                               |
+| Поле              | Тип                | По умолчанию                      | Назначение                                                                        |
+| ----------------- | ------------------ | --------------------------------- | --------------------------------------------------------------------------------- |
+| `ES`              | `store.ES`         | — (обязательно)                   | Клиент Elasticsearch пишет пользователь.                                          |
+| `LLM`             | `model.Client`     | — (обязательно)                   | Клиент чата.                                                                      |
+| `Embedder`        | `embed.Embedder`   | `nil`                             | Нужен только для `Ingest` и `Search`; чат-приложение может не задавать.           |
+| `Policy`          | `*authz.Policy`    | — (обязательно)                   | Разобранный `policy.yaml`.                                                        |
+| `GuardL2`         | `guard.Detector`   | `nil`                             | ML-слой guard; при `nil` остаётся только детерминированный L1.                    |
+| `GuardMaxChars`   | `int`              | `8000` (`guard.DefaultMaxChars`)  | Лимит текста для guard.                                                           |
+| `GuardCacheSize`  | `int`              | `4096` (`guard.DefaultCacheSize`) | Размер LRU-кэша вердиктов guard.                                                  |
+| `Tokenizer`       | `chunk.Tokenizer`  | `chunk.WhitespaceTokenizer{}`     | Токенайзер чанкера; ORT-токенайзера в сборке нет.                                 |
+| `ChunkSize`       | `int`              | `400` (`chunk.DefaultSize`)       | Токенов в чанке.                                                                  |
+| `ChunkOverlap`    | `int`              | `80` (`chunk.DefaultOverlap`)     | Перекрытие чанков, `< ChunkSize`.                                                 |
+| `MaxSteps`        | `int`              | `8` (`DefaultMaxSteps`)           | Лимит цикла «модель → инструменты → модель».                                      |
+| `MaxCallsPerTool` | `int`              | `3` (`DefaultMaxCallsPerTool`)    | Лимит вызовов одного инструмента.                                                 |
+| `ToolTimeout`     | `time.Duration`    | `30s` (`DefaultToolTimeout`)      | Таймаут одного вызова инструмента.                                                |
+| `ArgsMaxBytes`    | `int`              | `32768` (`DefaultArgsMaxBytes`)   | Лимит размера аргументов инструмента.                                             |
+| `TopK`            | `int`              | `10` (`DefaultTopK`)              | Хитов поиска по умолчанию.                                                        |
+| `Logger`          | `*slog.Logger`     | `slog.Default()`                  | Логи; тексты сообщений в них не попадают.                                         |
+| `TraceText`       | `trace.TextPolicy` | `trace.TextMasked`                | Политика текста трейсов: `masked` (по умолчанию) или `full` (opt-in).             |
+| `Sampler`         | `trace.Sampler`    | `nil` (значит «всегда»)           | Решение о записи трейса по `trace_id`.                                            |
+| `HideInput`       | `bool`             | `false`                           | Обнулять поле `input` во всех документах.                                         |
+| `HideOutput`      | `bool`             | `false`                           | Обнулять поле `output` во всех документах.                                        |
+| `Sinks`           | `[]trace.Sink`     | `nil`                             | Дополнительные приёмники документов (например, `trace.NewRecorder`).              |
+| `MaxTotalTokens`  | `int`              | `0` (без лимита)                  | Бюджет токенов хода; при превышении — `ErrBudget`.                                |
+| `Egress`          | `EgressPolicy`     | нулевое (правило выключено)       | Правила эгресса инструментов (`RuleOfTwo`).                                       |
+| `Approver`        | `Approver`         | `nil`                             | Кто решает по инструментам с `RequireApproval`; без него — `ErrApprovalRequired`. |
+| `BeforeToolCall`  | `BeforeToolHook`   | `nil`                             | App-level before-хук; хук инструмента его заменяет.                               |
+| `AfterToolCall`   | `AfterToolHook`    | `nil`                             | App-level after-хук; хук инструмента его заменяет.                                |
+
+`DefaultMaxSteps`, `DefaultMaxCallsPerTool`, `DefaultToolTimeout`, `DefaultArgsMaxBytes` и `DefaultTopK` — константы пакета `kit`. `GuardMaxChars`, `GuardCacheSize`, `ChunkSize` и `ChunkOverlap` добираются конструкторами `guard.New` и `chunk.New` из констант `guard.*` и `chunk.*`.
+
+`TraceText` в режиме `full` печатает предупреждение при `New`: в ES пойдёт необработанный текст. Значения `Sampler` разбираются из строки `always|never|ratio:<float>` функцией `trace.SamplerFromString`.
+
+Слой L2 (`GuardL2`) конструируется отдельно — `gliner.New(gliner.Config{...})` в ORT-сборке. Поля `Dir`, `Model`, `Sessions`, `Wait`, `MaxTokens`: `Dir` по умолчанию берётся из `KIT_MODELS_DIR`, затем `./models`; `Model` — `hivetrace__gliner-guard-omni`; `Sessions` — 2; `Wait` — 2 с; `MaxTokens` — `DefaultMaxTokens` = 512 (кламп до `max_sequence_length` модели). Метки, пороги, `prefix_ids`, позиции маркеров и `category_map` детектор читает из `<dir>/<model>/config.json`, а не из Go-конфига.
 
 Полная таблица значений с правилами — [Конфигурация](./configuration.md).
 
@@ -60,8 +75,21 @@ func (a *App) Setup(ctx context.Context) error
 func (a *App) Close(ctx context.Context) error
 ```
 
-Закрывает очередь trace-писателя и дописывает остаток. Вызывайте при остановке
-сервиса.
+Закрывает очередь trace-писателя и дописывает остаток. Клиенты ES, LLM и
+эмбеддера `App` не закрывает — их жизненным циклом управляет приложение.
+Вызывайте при остановке сервиса.
+
+### App.Guard, GuardVersion, PolicyHash
+
+```go
+func (a *App) Guard() *guard.Pipeline
+func (a *App) GuardVersion() string
+func (a *App) PolicyHash() string
+```
+
+`Guard` отдаёт сам конвейер (например, для проверки версии вне `App`).
+`GuardVersion` и `PolicyHash` — те же значения, что штампуются в трейсы и
+observation (I-08).
 
 ## Операции
 
@@ -72,7 +100,8 @@ func (a *App) Chat(ctx context.Context, req ChatRequest) (model.Message, error)
 ```
 
 Гоняет guard, модель и инструменты в цикле и возвращает финальное сообщение.
-Стриминга нет.
+Стриминга нет. На последнем шаге цикла `tool_choice` становится `none`, чтобы
+модель отвечала, а не открывала вызов, который уже не исполнится.
 
 ```go
 msg, err := app.Chat(ctx, kit.ChatRequest{
@@ -88,7 +117,10 @@ func (a *App) Ingest(ctx context.Context, doc Doc) error
 ```
 
 Чанкует документ, считает ACL и эмбеддинги, пишет чанки в Elasticsearch.
-Отклонённый guard чанк уходит в карантин и не индексируется.
+Отклонённый guard чанк пишется маркером с `quarantined: true` без текста и
+вектора и не возвращается поиском. Перед записью прежние чанки документа
+(`doc_id` + `tenant`) удаляются, чтобы повторная индексация не оставляла хвосты.
+Требует непустой `Doc.ID`, `Embedder` и `Tenant` принципала.
 
 ### Search
 
@@ -97,7 +129,8 @@ func (a *App) Search(ctx context.Context, req SearchRequest) ([]SearchHit, error
 ```
 
 Гибридный поиск: kNN и BM25 через `_msearch`, слияние RRF в Go, top-k. Всегда
-добавляет ACL-фильтр принципала.
+добавляет ACL-фильтр принципала (tenant + roles) и `quarantined: false`, плюс
+необязательный `req.Filter`.
 
 ### Delete
 
@@ -105,7 +138,17 @@ func (a *App) Search(ctx context.Context, req SearchRequest) ([]SearchHit, error
 func (a *App) Delete(ctx context.Context, docID string) error
 ```
 
-Удаляет чанки документа по `doc_id` с фильтром `tenant` принципала.
+Удаляет чанки документа по `doc_id` с фильтром `tenant` принципала. Проверяет
+`deleted`/`failures` ответа `_delete_by_query` (частичное удаление — ошибка).
+
+### Prune
+
+```go
+func (a *App) Prune(ctx context.Context, olderThan time.Duration) (int, error)
+```
+
+Удаляет trace и observation старше `olderThan` по `@timestamp` (ретенция) и
+возвращает число удалённых документов. Требует права `prune`.
 
 ### Score
 
@@ -118,19 +161,24 @@ func (a *App) Score(ctx context.Context, s trace.Score) error
 ### Generate
 
 ```go
-func Generate[T any](ctx context.Context, app *App, req GenerateRequest) (T, error)
+func Generate[T any](ctx context.Context, app *App, req GenerateRequest[T]) (Generated[T], error)
 ```
 
-Просит модель вернуть значение типа `T` по JSON Schema, выведенной из `T`, и
-декодирует ответ в `T`.
+Полноценная операция примитива: принципал, право `generate`, input/output guard,
+трейс. Просит модель вернуть значение типа `T` по JSON Schema, выведенной из `T`,
+и декодирует ответ в `T`. `System` уходит ролью `system`. При `SchemaNative` и
+отсутствии поддержки у провайдера схема автоматически инлайнится.
 
 ```go
-type Verdict struct {
-    OK     bool   `json:"ok"`
-    Reason string `json:"reason"`
+type Review struct {
+    Approved bool   `json:"approved"`
+    Notes    string `json:"notes"`
 }
 
-v, err := kit.Generate[Verdict](ctx, app, kit.GenerateRequest{Prompt: "Проверь заявку"})
+g, err := kit.Generate[Review](ctx, app, kit.GenerateRequest[Review]{Prompt: "Проверь заявку"})
+// g.Value   — декодированное значение
+// g.Raw     — сырой (уже прошедший guard) ответ
+// g.UsedFallback — true, если сработала стратегия Fallback
 ```
 
 ## Типы
@@ -149,7 +197,7 @@ type Principal struct {
 | -------- | ---------- | ------------------------------------------------ |
 | `UserID` | `string`   | Идентификатор для трейсов и сообщений об отказе. |
 | `Roles`  | `[]string` | Роли для проверки RBAC.                          |
-| `Tenant` | `string`   | Тенант; ограничивает запись и поиск.             |
+| `Tenant` | `string`   | Тенант; обязателен для ingest/search/delete.     |
 
 ### ChatRequest
 
@@ -160,6 +208,8 @@ type ChatRequest struct {
     SessionID   string
     Temperature *float64
     MaxTokens   int
+    ToolChoice  string
+    Tags        []string
 }
 ```
 
@@ -170,6 +220,8 @@ type ChatRequest struct {
 | `SessionID`   | `string`          | Идентификатор сессии для трейсов.                       |
 | `Temperature` | `*float64`        | Температура генерации; `nil` — значение провайдера.     |
 | `MaxTokens`   | `int`             | Лимит токенов ответа; `0` — значение провайдера.        |
+| `ToolChoice`  | `string`          | `""`, `auto`, `none`, `required` или имя инструмента.   |
+| `Tags`        | `[]string`        | Метки, записываемые на trace.                           |
 
 ### Doc
 
@@ -193,15 +245,17 @@ type Doc struct {
 
 ```go
 type SearchRequest struct {
-    Query string
-    TopK  int
+    Query  string
+    TopK   int
+    Filter store.Filter
 }
 ```
 
-| Поле    | Тип      | Назначение                                         |
-| ------- | -------- | -------------------------------------------------- |
-| `Query` | `string` | Текст запроса; пустой возвращает `ErrInvalidArgs`. |
-| `TopK`  | `int`    | Число хитов; `0` — берётся `Config.TopK`.          |
+| Поле     | Тип            | Назначение                                                                   |
+| -------- | -------------- | ---------------------------------------------------------------------------- |
+| `Query`  | `string`       | Текст запроса; пустой возвращает `ErrInvalidArgs`.                           |
+| `TopK`   | `int`          | Число хитов; `0` — берётся `Config.TopK`.                                    |
+| `Filter` | `store.Filter` | Фильтр метаданных (см. [Elasticsearch](./elasticsearch.md)); AND-ится с ACL. |
 
 ### SearchHit
 
@@ -226,34 +280,104 @@ type SearchHit struct {
 ### GenerateRequest
 
 ```go
-type GenerateRequest struct {
-    Prompt      string
-    System      string
-    MaxTokens   int
-    Temperature *float64
-    SessionID   string
+type GenerateRequest[T any] struct {
+    Prompt           string
+    System           string
+    MaxTokens        int
+    Temperature      *float64
+    SessionID        string
+    SchemaMode       model.SchemaMode
+    ErrorStrategy    ErrorStrategy
+    Fallback         *T
+    Tags             []string
+    StructuringModel model.Client // опциональный второй вызов
 }
 ```
 
-| Поле          | Тип        | Назначение                        |
-| ------------- | ---------- | --------------------------------- |
-| `Prompt`      | `string`   | Запрос к модели.                  |
-| `System`      | `string`   | Системный промпт.                 |
-| `MaxTokens`   | `int`      | Лимит токенов ответа.             |
-| `Temperature` | `*float64` | Температура генерации.            |
-| `SessionID`   | `string`   | Идентификатор сессии для трейсов. |
+| Поле               | Тип                | Назначение                                                              |
+| ------------------ | ------------------ | ----------------------------------------------------------------------- |
+| `Prompt`           | `string`           | Запрос к модели.                                                        |
+| `System`           | `string`           | Системный промпт.                                                       |
+| `MaxTokens`        | `int`              | Лимит токенов ответа.                                                   |
+| `Temperature`      | `*float64`         | Температура генерации.                                                  |
+| `SessionID`        | `string`           | Идентификатор сессии для трейсов.                                       |
+| `SchemaMode`       | `model.SchemaMode` | Как передать схему; `SchemaNative` без поддержки провайдера инлайнится. |
+| `ErrorStrategy`    | `ErrorStrategy`    | Что делать, если ответ не декодируется в `T`.                           |
+| `Fallback`         | `*T`               | Значение по умолчанию для стратегии `Fallback`; обязательно для неё.    |
+| `Tags`             | `[]string`         | Метки на trace.                                                         |
+| `StructuringModel` | `model.Client`     | Второй вызов при неудачном прямом декодировании (см. ниже).             |
+
+Если задан `StructuringModel`, то при неполадке прямого декодирования в `T` (и до применения `ErrorStrategy`) kit делает одну попытку через `model.Structurer`: просит модель переписать прошлый ответ по той же схеме и декодирует результат. Вызов идёт через `internal/call`, пишется **отдельной** observation (с `metadata.structuring = true`) и **не** добавляет usage к итогу хода.
+
+### Generated
+
+```go
+type Generated[T any] struct {
+    Value        T
+    Raw          string
+    UsedFallback bool
+    FinishReason model.FinishReason
+}
+```
+
+| Поле           | Тип                  | Назначение                                  |
+| -------------- | -------------------- | ------------------------------------------- |
+| `Value`        | `T`                  | Декодированное значение.                    |
+| `Raw`          | `string`             | Сырой ответ (уже прошедший output guard).   |
+| `UsedFallback` | `bool`               | `true`, если вернулось значение `Fallback`. |
+| `FinishReason` | `model.FinishReason` | Причина остановки модели.                   |
+
+### ErrorStrategy
+
+```go
+type ErrorStrategy int
+
+const (
+    Strict   ErrorStrategy = iota // ошибка (по умолчанию)
+    Warn                          // предупреждение в лог, `Raw` возвращается
+    Fallback                      // вернуть `Fallback` и пометить `UsedFallback`
+)
+```
 
 ## Принципал в контексте
 
 ```go
 func WithPrincipal(ctx context.Context, p Principal) context.Context
 func PrincipalFrom(ctx context.Context) (Principal, bool)
+
+func WithTraceMetadata(ctx context.Context, md map[string]any) context.Context
+func TraceMetadataFrom(ctx context.Context) map[string]any
 ```
 
 `WithPrincipal` кладёт принципала в контекст. `PrincipalFrom` читает его и
 сообщает, найден ли он. Без принципала операции возвращают `ErrUnauthorized`.
 
+`WithTraceMetadata` прикладывает request-scoped метаданные: они попадают в
+`metadata` **каждой** observation, порождённой этим контекстом (обёртка над
+`core.WithSpanMetadata`). Значение, заданное на конкретном вызове, перекрывает
+одноимённый ключ из контекста. `TraceMetadataFrom` читает их обратно (или `nil`).
+Отдельного dot-селектора, как `requestContextKeys` в Mastra, нет — передаётся ровно
+та карта, которую надо записать.
+
 ## Инструменты
+
+### Effect
+
+```go
+type Effect int
+
+const (
+    EffectRead   Effect = iota // читает состояние
+    EffectWrite                // меняет состояние
+    EffectEgress               // отправляет данные за границу доверия
+)
+
+func (e Effect) String() string
+func (e Effect) IsEgress() bool
+```
+
+Эффект — свойство инструмента, а не модели: рантайм применяет правила эгресса, не
+спрашивая модель (I-10).
 
 ### kit.Tool
 
@@ -265,22 +389,70 @@ func Tool[In, Out any](app *App, name string, fn func(ctx context.Context, in In
 `Out` сериализуется для модели.
 
 ```go
-kit.Tool(app, "get_weather", getWeather, kit.Desc("Return the weather by city."))
+kit.Tool(app, "get_weather", getWeather,
+    kit.Desc("Return the weather by city."),
+    kit.Effects(kit.EffectEgress),
+    kit.EgressHosts("wttr.in"),
+)
 ```
 
-### kit.Desc и kit.Perm
+### Опции инструмента
 
 ```go
 type ToolOption func(*toolOptions)
 
 func Desc(s string) ToolOption
 func Perm(p string) ToolOption
+func Effects(e Effect) ToolOption
+func EgressHosts(hosts ...string) ToolOption
+func RequireApproval(b bool) ToolOption
+func ValidateOutput(b bool) ToolOption
+func ModelView(f func(string) string) ToolOption
+func BeforeToolCall(h BeforeToolHook) ToolOption
+func AfterToolCall(h AfterToolHook) ToolOption
 ```
 
-| Функция    | Назначение                                       |
-| ---------- | ------------------------------------------------ |
-| `kit.Desc` | Описание инструмента для модели.                 |
-| `kit.Perm` | Переопределяет право; по умолчанию `tool:<имя>`. |
+| Функция               | Назначение                                                                      |
+| --------------------- | ------------------------------------------------------------------------------- |
+| `kit.Desc`            | Описание инструмента для модели.                                                |
+| `kit.Perm`            | Переопределяет право; по умолчанию `tool:<имя>`.                                |
+| `kit.Effects`         | Эффект инструмента (`Read`/`Write`/`Egress`).                                   |
+| `kit.EgressHosts`     | Host-allowlist для `Egress`: проверяются хосты URL в аргументах. Пусто — любой. |
+| `kit.RequireApproval` | Перед вызовом спрашивать `Config.Approver`.                                     |
+| `kit.ValidateOutput`  | Проверять результат по JSON Schema выходного типа (несовпадение не фатально).   |
+| `kit.ModelView`       | Что видит модель вместо результата; на приложение не влияет.                    |
+| `kit.BeforeToolCall`  | Before-хук этого инструмента; заменяет `Config.BeforeToolCall`.                 |
+| `kit.AfterToolCall`   | After-хук этого инструмента; заменяет `Config.AfterToolCall`.                   |
+
+### Хуки инструмента
+
+```go
+type ToolCallInfo struct {
+    UserID      string
+    Tenant      string
+    Tool        string
+    Args        string
+    Fingerprint string // хэш tool + канонических аргументов
+    Effect      Effect
+    CallIndex   int // 1-based счётчик вызовов этого инструмента в ходе
+}
+
+type BeforeToolHook func(ctx context.Context, info ToolCallInfo) (proceed bool, output string, err error)
+type AfterToolHook  func(ctx context.Context, info ToolCallInfo, result string, err error) (string, error)
+```
+
+| Поле          | Назначение                                           |
+| ------------- | ---------------------------------------------------- |
+| `Fingerprint` | Хэш инструмента и канонических аргументов.           |
+| `Effect`      | Эффект инструмента (`Read`/`Write`/`Egress`).        |
+| `CallIndex`   | Номер вызова этого инструмента в текущем ходе (с 1). |
+
+Правило разрешения: хук на инструменте **заменяет** одноимённый хук уровня приложения
+(`Config.BeforeToolCall`/`AfterToolCall`), а не складывается с ним. `BeforeToolHook`
+идёт после валидации аргументов и до исполнения (`proceed=false` подставляет `output`
+и пропускает инструмент); `AfterToolHook` — всегда, и может переписать результат или
+ошибку. Guard результата (`tool_result`) выполняется **последним**, после обоих хуков.
+Подробнее — [Инструменты: хуки](../concepts/tools.md).
 
 ### ToolDef
 
@@ -288,11 +460,80 @@ func Perm(p string) ToolOption
 func (t *ToolDef) Name() string
 func (t *ToolDef) Description() string
 func (t *ToolDef) Permission() string
+func (t *ToolDef) Effect() Effect
+func (t *ToolDef) EgressHosts() []string
+func (t *ToolDef) RequireApproval() bool
+func (t *ToolDef) ValidateOutput() bool
 func (t *ToolDef) Schema() json.RawMessage
+func (t *ToolDef) ModelView(result string) string
+func (t *ToolDef) Fingerprint(args string) string
 ```
 
-Дескриптор зарегистрированного инструмента. Возвращается из `kit.Tool`; аргументы
-валидируются по схеме со `"additionalProperties": false`.
+Дескриптор зарегистрированного инструмента. Аргументы валидируются по схеме со
+`"additionalProperties": false`. `Fingerprint` — стабильный хэш имени инструмента
+и канонических аргументов; approval привязан именно к нему.
+
+### Approval
+
+```go
+type EgressPolicy struct {
+    RuleOfTwo bool
+}
+
+type ApprovalRequest struct {
+    UserID      string
+    Tenant      string
+    Tool        string
+    Args        string
+    Fingerprint string
+    Effect      Effect
+}
+
+type Approver interface {
+    Approve(ctx context.Context, req ApprovalRequest) (bool, error)
+}
+
+type ApproverFunc func(ctx context.Context, req ApprovalRequest) (bool, error)
+```
+
+| Поле          | Назначение                                                              |
+| ------------- | ----------------------------------------------------------------------- |
+| `RuleOfTwo`   | Запрет эгресса в ходе, где уже был недоверенный ввод (untrusted input). |
+| `Fingerprint` | Хэш `tool` + канонических аргументов; реализация обязана его потребить. |
+
+`Approver` вызывается только для инструментов с `RequireApproval`. Одобрение **расходуется
+один раз за ход**: рантайм помнит уже использованные fingerprint'ы этого хода, и повтор
+того же fingerprint даёт `ErrApprovalRequired` (approve-once/replay-N невозможно). Другой
+набор аргументов — другой fingerprint и отдельное одобрение; в новом ходе счётчик
+начинается заново.
+
+### RetrievalTool
+
+```go
+const DefaultRetrievalToolName = "search_knowledge"
+
+func RetrievalTool(app *App, name string, opts ...ToolOption) (*ToolDef, error)
+
+type RetrievalIn struct {
+    Query string `json:"query"`
+    TopK  int    `json:"top_k,omitempty"`
+}
+
+type RetrievalHit struct {
+    DocID    string `json:"doc_id"`
+    Text     string `json:"text"`
+    Position int    `json:"position"`
+}
+
+type RetrievalOut struct {
+    Hits []RetrievalHit `json:"hits"`
+}
+```
+
+Регистрирует типизированный инструмент поверх собственного гибридного поиска
+приложения. Идёт тем же путём вызова: проверяется право инструмента, а `Search`
+ещё раз проверяет право поиска и ACL-фильтр, поэтому ACL применяется дважды.
+Требует настроенный `Embedder`.
 
 ## Константы
 
@@ -306,37 +547,54 @@ func (t *ToolDef) Schema() json.RawMessage
 
 Значения по умолчанию живут и в других пакетах:
 
-| Константа                    | Значение | Пакет   |
-| ---------------------------- | -------- | ------- |
-| `chunk.DefaultSize`          | `400`    | `chunk` |
-| `chunk.DefaultOverlap`       | `80`     | `chunk` |
-| `guard.DefaultMaxChars`      | `8000`   | `guard` |
-| `guard.DefaultCacheSize`     | `4096`   | `guard` |
-| `store.DefaultTopK`          | `10`     | `store` |
-| `store.DefaultRRFRankConst`  | `60`     | `store` |
-| `store.DefaultILMDays`       | `30`     | `store` |
-| `trace.DefaultQueueSize`     | `4096`   | `trace` |
-| `trace.DefaultBatchSize`     | `500`    | `trace` |
-| `trace.DefaultFlushInterval` | `2s`     | `trace` |
-| `trace.DefaultMaxBatchBytes` | `5 MB`   | `trace` |
-| `trace.DefaultMaxRetries`    | `3`      | `trace` |
-| `trace.DefaultRetryBackoff`  | `200ms`  | `trace` |
+| Константа                      | Значение | Пакет          |
+| ------------------------------ | -------- | -------------- |
+| `chunk.DefaultSize`            | `400`    | `chunk`        |
+| `chunk.DefaultOverlap`         | `80`     | `chunk`        |
+| `guard.DefaultMaxChars`        | `8000`   | `guard`        |
+| `guard.DefaultCacheSize`       | `4096`   | `guard`        |
+| `store.DefaultTopK`            | `10`     | `store`        |
+| `store.MaxTopK`                | `1000`   | `store`        |
+| `store.MaxNumCandidates`       | `10000`  | `store`        |
+| `store.DefaultRRFRankConst`    | `60`     | `store`        |
+| `store.DefaultILMDays`         | `30`     | `store`        |
+| `trace.DefaultQueueSize`       | `4096`   | `trace`        |
+| `trace.DefaultBatchSize`       | `500`    | `trace`        |
+| `trace.DefaultFlushInterval`   | `2s`     | `trace`        |
+| `trace.DefaultMaxBatchBytes`   | `5 MB`   | `trace`        |
+| `trace.DefaultMaxRetries`      | `3`      | `trace`        |
+| `trace.DefaultRetryBackoff`    | `200ms`  | `trace`        |
+| `trace.DefaultMaxStringLength` | `131072` | `trace`        |
+| `trace.DefaultMaxDepth`        | `8`      | `trace`        |
+| `trace.DefaultMaxArrayLength`  | `50`     | `trace`        |
+| `trace.DefaultMaxObjectKeys`   | `50`     | `trace`        |
+| `embed.DefaultSessions`        | `2`      | `embed`        |
+| `embed.DefaultBatchSize`       | `32`     | `embed`        |
+| `gliner.DefaultSessions`       | `2`      | `guard/gliner` |
+| `gliner.DefaultMaxTokens`      | `512`    | `guard/gliner` |
 
 ## Ошибки
 
-Sentinels объявлены в `kit/errors.go`; матчинг — через `errors.Is`.
+Sentinels объявлены в `kit/errors.go` (реэкспорт из `internal/core`); матчинг —
+через `errors.Is`. Отказы guard дополнительно доступны через `errors.As` как
+`*kit.GuardRejectError` (алиас типа из `internal/call`; поля `Rail`,
+`Tripwire`, `Version`).
 
-| Sentinel              | Когда возвращается                                                                                                                                              |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ErrInvalidConfig`    | `New`: нет `ES`, `LLM` или `Policy`; невалидный `policy.yaml`; `Ingest` без `Embedder` или с пустым `ID`; инструмент без имени или обработчика.                 |
-| `ErrUnauthorized`     | Принципала нет в контексте или он пуст; роль не имеет права.                                                                                                    |
-| `ErrGuardReject`      | Rail `input` или `output` вернул reject.                                                                                                                        |
-| `ErrGuardUnavailable` | Guard недоступен (fail-closed).                                                                                                                                 |
-| `ErrProvider`         | Ошибка провайдера LLM, эмбеддера или Elasticsearch; не удалось декодировать ответ в `Generate`.                                                                 |
-| `ErrToolNotFound`     | Модель запросила инструмент, которого нет или который запрещён.                                                                                                 |
-| `ErrInvalidArgs`      | Аргументы не разобрались как JSON, не прошли схему или превысили `ArgsMaxBytes`; пустой `SearchRequest.Query`; нет сообщений ролей `user`/`assistant` в `Chat`. |
-| `ErrMaxSteps`         | Исчерпаны `MaxSteps` или `MaxCallsPerTool`.                                                                                                                     |
-| `ErrNotFound`         | Документ или индекс не найдены.                                                                                                                                 |
+| Sentinel              | Когда возвращается                                                                                                                                                                                  |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ErrInvalidConfig`    | `New`: нет `ES`, `LLM` или `Policy`; невалидный `policy.yaml`; `Ingest` без `Embedder` или с пустым `ID`; `Generate` со стратегией `Fallback` без `Fallback`; инструмент без имени или обработчика. |
+| `ErrUnauthorized`     | Принципала нет в контексте или он пуст; роль не имеет права; `Ingest`/`Search`/`Delete` без `Tenant`; эгресс заблокирован «Rule of Two»/host-allowlist.                                             |
+| `ErrGuardReject`      | Rail `input` вернул reject (fast-fail) в `Chat`/`Generate`.                                                                                                                                         |
+| `ErrGuardUnavailable` | Guard недоступен (fail-closed).                                                                                                                                                                     |
+| `ErrProvider`         | Ошибка провайдера LLM, эмбеддера или Elasticsearch; не удалось декодировать ответ в `Generate`; ошибка чтения/записи ES.                                                                            |
+| `ErrInvalidArgs`      | Аргументы не разобрались как JSON или не прошли схему (как результат-ошибка инструмента); пустой `SearchRequest.Query`; нет сообщений ролей `user`/`assistant` в `Chat`.                            |
+| `ErrMaxSteps`         | Исчерпан `MaxSteps` цикла.                                                                                                                                                                          |
+| `ErrBudget`           | Превышен `Config.MaxTotalTokens`.                                                                                                                                                                   |
+| `ErrApprovalRequired` | Инструмент с `RequireApproval`, а `Approver` не задан, отказал или одобрение этого fingerprint уже израсходовано.                                                                                   |
+| `ErrTool`             | Зарезервирован под падение внутри инструмента; фасад возвращает такие сбои модели как результат, а не как ошибку.                                                                                   |
+| `ErrRateLimited`      | Зарезервирован под `429` провайдера (часть контракта лимитов, I-09); сейчас фасад его не возвращает.                                                                                                |
+| `ErrToolNotFound`     | Зарезервирован: неизвестный инструмент сейчас возвращается модели результатом-ошибкой, а не этим sentinel’ом.                                                                                       |
+| `ErrNotFound`         | Зарезервирован для приложения и адаптеров; операции фасада его не возвращают.                                                                                                                       |
 
 Разбор по слоям и что видит клиент — [Ошибки](./errors.md).
 

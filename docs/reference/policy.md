@@ -4,12 +4,12 @@
 
 ## Формат
 
-| Ключ                       | Значение     | Правило                                                                |
-| -------------------------- | ------------ | ---------------------------------------------------------------------- |
-| `version`                  | `1`          | Другое значение → `ErrInvalidConfig`.                                  |
-| `default`                  | `deny`       | Допустимо только `deny`; иначе `ErrInvalidConfig`.                     |
-| `roles`                    | отображение  | Имя роли → набор `permissions`.                                        |
-| `roles.<name>.permissions` | список строк | Права роли: `search`, `ingest`, `delete`, `trace`, `tool:<name>`, `*`. |
+| Ключ                       | Значение     | Правило                                                                                     |
+| -------------------------- | ------------ | ------------------------------------------------------------------------------------------- |
+| `version`                  | `1`          | Другое значение → `ErrInvalidConfig`.                                                       |
+| `default`                  | `deny`       | Допустимо только `deny`; иначе `ErrInvalidConfig`.                                          |
+| `roles`                    | отображение  | Имя роли → набор `permissions`.                                                             |
+| `roles.<name>.permissions` | список строк | Права роли: `search`, `ingest`, `delete`, `trace`, `generate`, `prune`, `tool:<name>`, `*`. |
 
 Полный пример:
 
@@ -42,9 +42,15 @@ roles:
 | `authz.PermIngest`     | `ingest`      | `App.Ingest`: вызов эмбеддера `Passages()` и запись чанков.                   |
 | `authz.PermDelete`     | `delete`      | `App.Delete`.                                                                 |
 | `authz.PermTrace`      | `trace`       | `App.Score`.                                                                  |
+| `authz.PermGenerate`   | `generate`    | `Generate[T]`.                                                                |
+| `authz.PermPrune`      | `prune`       | `App.Prune`.                                                                  |
 | `authz.ToolPermission` | `tool:<name>` | Исполнение инструмента и вычитание запрещённых из схемы (`allowedToolSpecs`). |
 
 `"*"` (`wildcard`) в списке прав роли разрешает любое право. Пустое право (`""`) проверку пропускает: `App.Chat` права не требует, но принципал в контексте обязателен. Права ролей объединяются: достаточно совпадения в любой из ролей принципала.
+
+`Ingest`, `Search` и `Delete` дополнительно требуют непустой `Tenant` принципала: без него операция возвращает `ErrUnauthorized` (иначе поиск и запись расширились бы на все тенанты с той же ролью). `Prune` сейчас проверяет только принципала и право `prune`; проверка тената в коде отсутствует — расхождение с `design.md` §5.6.
+
+Отказ по праву несёт `ErrUnauthorized`; ошибка разбора политики — `ErrInvalidConfig`.
 
 ## Строгий режим
 

@@ -41,7 +41,12 @@ go build ./... && go vet ./... && go test ./...
 
 ### Зависимости
 
-Прямых зависимостей в сборке по умолчанию три.
+Прямых зависимостей в сборке по умолчанию четыре: `gopkg.in/yaml.v3`,
+`github.com/invopop/jsonschema`, `github.com/santhosh-tekuri/jsonschema/v6` и
+`golang.org/x/text` (NFKC-нормализация в `guard`). Ещё две
+(`github.com/yalue/onnxruntime_go`, `github.com/daulet/tokenizers`) нужны только
+сборке с тегом `ort` и в `go.mod` помечены как обычные требования, потому что
+`go mod tidy` учитывает все теги сборки.
 
 | Модуль                                     | Для чего                                         |
 | ------------------------------------------ | ------------------------------------------------ |
@@ -58,8 +63,9 @@ go build ./... && go vet ./... && go test ./...
 
 ### Сборка с ONNX Runtime
 
-ORT-сборка нужна только для локального guard L2 и локального эмбеддера. Под тегом
-`ort` guard L2 — реальный ONNX-детектор (`guard/gliner`), без Python в рантайме.
+ORT-сборка нужна только для локального guard L2 (`guard/gliner`) и локального
+эмбеддера (`embed.NewLocal`). Под тегом `ort` оба используют ONNX Runtime через
+cgo, без Python в рантайме.
 
 ```sh
 CGO_ENABLED=1 CGO_LDFLAGS="-L.ort/lib" go build -tags ort ./...
@@ -71,20 +77,79 @@ CGO_ENABLED=1 CGO_LDFLAGS="-L.ort/lib" go build -tags ort ./...
 - При запуске нужна `libonnxruntime.dylib`/`.so`; путь к библиотеке задаёт
   `KIT_ORT_LIB` (по умолчанию `.ort/lib/libonnxruntime.dylib` или `.so`).
 
-Модели загружаются заранее командой `kitctl model pull` (`cmd/kitctl`).
+Модели загружаются заранее командой `kitctl model pull <org/name>` (`cmd/kitctl`).
 Guard-модель воспроизводится скриптом экспорта — [`tools/gliner`](../../tools/gliner/README.md).
 
 > [!NOTE]
-> Без тега `ort` слой guard L2 — заглушка, а `embed.NewLocal` возвращает ошибку.
-> Сборка по умолчанию годится для чата и работы через удалённые провайдеры.
+> Без тега `ort` слой guard L2 — заглушка, а `embed.NewLocal` возвращает
+> `ErrInvalidConfig`. Сборка по умолчанию годится для чата и работы через удалённые
+> провайдеры.
+
+### Локальный эмбеддер
+
+Локальный эмбеддер — ONNX-энкодер в процессе, без внешнего сервера эмбеддингов.
+Он требует ORT-сборки (см. выше) и существует только под тегом `ort`.
+
+```go
+emb, err := embed.NewLocal(embed.LocalConfig{
+	Dir:   "models", // корень весов; по умолчанию KIT_MODELS_DIR или ./models
+	Model: "intfloat/multilingual-e5-small",
+})
+if err != nil {
+	return err // без -tags ort или без весов — ErrInvalidConfig
+}
+app, err := kit.New(ctx, kit.Config{ES: es, LLM: llm, Policy: policy, Embedder: emb})
+```
+
+Размерность берётся из графа; `LocalConfig.Sessions` (по умолчанию `2`) задаёт
+размер пула ORT-сессий.
+
+Пресеты:
+
+| Модель                       | Pooling | Префиксы                | Норма |
+| ---------------------------- | ------- | ----------------------- | ----- |
+| `intfloat/multilingual-e5-*` | mean    | `query: ` / `passage: ` | L2    |
+| `BAAI/bge-m3`                | CLS     | —                       | L2    |
+
+`Query()` и `Passages()` разделены, поэтому префикс нельзя забыть: `Ingest`
+использует `Passages()`, `Search` — `Query()`.
+
+Неизвестная модель описывается файлом `kit_embedder.json` рядом с весами:
+
+```json
+{
+  "pooling": "mean",
+  "query_prefix": "query: ",
+  "passage_prefix": "passage: ",
+  "normalize": true,
+  "max_len": 512
+}
+```
+
+Без пресета и без `kit_embedder.json` `NewLocal` возвращает `ErrInvalidConfig`.
+
+### Скачивание весов
+
+```sh
+go run ./cmd/kitctl model pull intfloat/multilingual-e5-small
+```
+
+`kitctl model pull <org/name>` скачивает `model.onnx`, `tokenizer.json` и
+`config.json` в `<models_dir>/<org>__<name>/` (`/` в имени заменяется на `__`).
+Затем тот же путь читает `NewLocal`.
+
+В сборке demo набор `EMBED_LOCAL=true` (вместе с `-tags ort`) переключает бота с
+внешнего сервера эмбеддингов на локальный энкодер из `models/`; тогда `EMBED_MODEL`
+задаёт локальную модель (размерность берётся из графа). Подробности — в
+[demo](../../demo/README.ru.md).
 
 ### Каталог моделей
 
 Модель лежит в `<models_dir>/<org>__<name>/` и содержит три файла: `model.onnx`,
 `tokenizer.json`, `config.json`.
 
-`models_dir` берётся из опции (`embed.Dir`, `gliner.Config.Dir`), переменной
-`KIT_MODELS_DIR` или по умолчанию — `./models`. Например,
+`models_dir` берётся из опции (`embed.LocalConfig.Dir`, `gliner.Config.Dir`),
+переменной `KIT_MODELS_DIR` или по умолчанию — `./models`. Например,
 `intfloat/multilingual-e5-small` ожидается в
 `./models/intfloat__multilingual-e5-small/`, guard L2 — в
 `./models/hivetrace__gliner-guard-omni/`.
