@@ -76,6 +76,11 @@ type Verdict struct {
 	Text     string
 	Tripwire *Tripwire
 	Version  string
+
+	// Degraded is true when an optional layer failed and the verdict was
+	// produced by the remaining layers. DegradedReason holds the layer errors.
+	Degraded       bool
+	DegradedReason string
 }
 
 type Detector interface {
@@ -89,7 +94,12 @@ const (
 )
 
 type Options struct {
-	Layers      []Detector
+	Layers []Detector
+	// Optional lists layer names whose failure does not fail the check. An
+	// optional layer that errors is skipped and the verdict is marked
+	// Degraded; a required layer that errors fails the check. Empty means
+	// every layer is required (fail-closed).
+	Optional    []string
 	MaxChars    int
 	CacheSize   int
 	Version     string
@@ -98,6 +108,7 @@ type Options struct {
 
 type Pipeline struct {
 	layers      []Detector
+	optional    map[string]bool
 	maxChars    int
 	cache       *lru
 	version     string
@@ -111,8 +122,13 @@ func New(opts Options) (*Pipeline, error) {
 	if opts.CacheSize <= 0 {
 		opts.CacheSize = DefaultCacheSize
 	}
+	optional := make(map[string]bool, len(opts.Optional))
+	for _, name := range opts.Optional {
+		optional[name] = true
+	}
 	return &Pipeline{
 		layers:      opts.Layers,
+		optional:    optional,
 		maxChars:    opts.MaxChars,
 		cache:       newLRU(opts.CacheSize),
 		version:     opts.Version,
@@ -130,17 +146,23 @@ func (p *Pipeline) Check(ctx context.Context, rail Rail, text string) (Verdict, 
 	key := p.cacheKey(Canonicalize(inspected))
 
 	findings, ok := p.cache.get(key)
+	var degraded []string
 	if !ok {
-		fs, err := p.detect(ctx, inspected, utf8.RuneCountInString(text))
+		fs, deg, err := p.detect(ctx, inspected, utf8.RuneCountInString(text))
 		if err != nil {
 			return Verdict{}, err
 		}
 		findings = fs
-		p.cache.put(key, findings)
+		degraded = deg
+		if len(degraded) == 0 {
+			p.cache.put(key, findings)
+		}
 	}
 
 	v := decide(rail, text, findings)
 	v.Version = p.version
+	v.Degraded = len(degraded) > 0
+	v.DegradedReason = strings.Join(degraded, "; ")
 	if v.Action != Allow && p.onViolation != nil {
 		p.onViolation(v)
 	}
@@ -165,18 +187,23 @@ func truncateRunes(text string, max int) string {
 	return text
 }
 
-func (p *Pipeline) detect(ctx context.Context, inspected string, total int) ([]Finding, error) {
+func (p *Pipeline) detect(ctx context.Context, inspected string, total int) ([]Finding, []string, error) {
 	canonical := Canonicalize(inspected)
 
 	var findings []Finding
+	var degraded []string
 	for _, layer := range p.layers {
 		fs, err := layer.Detect(ctx, canonical)
 		if err != nil {
-			return nil, fmt.Errorf("guard: layer %s: %w", layer.Name(), err)
+			if p.optional[layer.Name()] {
+				degraded = append(degraded, layer.Name()+": "+err.Error())
+				continue
+			}
+			return nil, nil, fmt.Errorf("guard: layer %s: %w", layer.Name(), err)
 		}
 		findings = append(findings, fs...)
 		if rejectCapable(fs) {
-			return findings, nil
+			return findings, degraded, nil
 		}
 	}
 
@@ -188,7 +215,11 @@ func (p *Pipeline) detect(ctx context.Context, inspected string, total int) ([]F
 			}
 			fs, err := layer.Detect(ctx, decoded)
 			if err != nil {
-				return nil, fmt.Errorf("guard: layer %s (decoded): %w", layer.Name(), err)
+				if p.optional[layer.Name()] {
+					degraded = append(degraded, layer.Name()+" (decoded): "+err.Error())
+					continue
+				}
+				return nil, nil, fmt.Errorf("guard: layer %s (decoded): %w", layer.Name(), err)
 			}
 			for _, f := range fs {
 				f.Start = 0
@@ -198,7 +229,7 @@ func (p *Pipeline) detect(ctx context.Context, inspected string, total int) ([]F
 			}
 		}
 	}
-	return findings, nil
+	return findings, degraded, nil
 }
 
 func rejectCapable(fs []Finding) bool {
