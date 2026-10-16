@@ -222,5 +222,6 @@ go run ./demo/cmd/bot
 ## Смотрите также
 
 - [Chat](../concepts/chat.md) — цикл «модель → инструмент → модель»
+- [Провайдеры (how-to)](../guides/providers/overview.md) — как выбрать и подключить провайдера
 - [Справочник kit](../reference/kit.md) — все поля `Config`, `ChatRequest`, `SearchRequest`
 - [Ошибки](../reference/errors.md) — sentinel-ошибки и что они значат

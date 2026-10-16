@@ -190,6 +190,7 @@ err = app.Score(ctx, trace.Score{TraceID: traceID, Name: "helpful", Value: 1})
 
 - [Запускаемый пример →](./demo)
 - [Документация →](./docs)
+- [Руководства (how-to) →](./docs/guides) — рецепты задач, в том числе подключение провайдеров
 
 ## Лицензия
 

@@ -137,5 +137,7 @@
 
 - [Справочник kit](./kit.md) — `kit.New` и жизненный цикл
 - [Провайдеры](./providers.md) — конфиги `model` и `embed`
+- [Производительность](../guides/performance.md) — латентность, память и ручки
+- [Деплой](../guides/deployment.md) — режимы сборки, гейты и откат
 - [Устройство](../internals/architecture.md) — рантайм, ORT и сборка
 - [Бизнес-правила](../internals/business-rules.md) — источники лимитов `BR-xx`

@@ -68,7 +68,7 @@ flowchart TD
 | I-05 | Fail-closed различим: недоступность модели — `ErrGuardUnavailable`; битая конфигурация/модель на старте — `ErrInvalidConfig`.                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | I-06 | Окно guard не уже окна модели: если клиент реализует `model.ContextWindow`, `New` сверяет `guard.max_chars` с `ContextTokens()` и возвращает `ErrInvalidConfig` при превышении. Окно модели в токенах, лимит guard в рунах — это верхняя оценка, а не точная гарантия.                                                                                                                                                                                                                                                                                    |
 | I-07 | В трейсы не попадает необработанный текст по умолчанию. Политика текста трейса — явная: `masked` / `full`.                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| I-08 | Вердикт guard воспроизводим: в observation пишутся версия guard, хэш политики, id и хэш модели.                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| I-08 | Вердикт guard воспроизводим: в observation пишутся версия guard (`<policy_hash>/<layer_id>`, имена слоёв через `+`), хэш политики и имя слоя L2 (`guard_model` = `"L2"`).                                                                                                                                                                                                                                                                                                                                                                                 |
 | I-09 | Лимиты и деньги — часть контракта: `ErrBudget` (бюджет хода) и `ErrRateLimited` (429 от провайдера); `Retry-After` учитывается в `internal/httpjson`; таймауты приходят как `context.DeadlineExceeded`/`ErrProvider`.                                                                                                                                                                                                                                                                                                                                     |
 | I-10 | Эгресс — явное свойство инструмента (`Effects`), хосты — allowlist; «Rule of Two» проверяется рантаймом.                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | I-11 | Ошибка инструмента — данные для модели: результат приходит как `{"error": "..."}`, и ход продолжается. Прерывают ход: отказ авторизации (RBAC и эгресс-политика), ошибка провайдера, отмена/дедлайн контекста, отсутствие требуемого подтверждения (`ErrApprovalRequired`) и исчерпание одного ретрая на невалидные аргументы (BR-23).                                                                                                                                                                                                                    |
@@ -86,7 +86,7 @@ flowchart TD
 ```go
 var (
 	ErrTool             = errors.New("kit: tool error")        // падение внутри инструмента
-	ErrBudget           = errors.New("kit: budget exceeded")   // лимит токенов/стоимости
+	ErrBudget           = errors.New("kit: budget exceeded")   // лимит токенов хода
 	ErrRateLimited      = errors.New("kit: rate limited")      // 429 от провайдера
 	ErrApprovalRequired = errors.New("kit: approval required") // tool требует подтверждения
 )
@@ -187,7 +187,9 @@ type Options struct {
 ```
 
 `Trace`/`Observation` получают поля версии guard и политики текста:
-`GuardVersion`, `GuardModel`, `PolicyHash`, `TextPolicy` (для аудита, I-08).
+`GuardVersion` (`<policy_hash>/<layer_id>`, имена слоёв через `+`, например
+`L1+L2`), `GuardModel` (`Detector.Name()` слоя L2 — у поставляемого детектора
+`"L2"`), `PolicyHash` (хэш `policy.yaml`) и `TextPolicy` (для аудита, I-08).
 
 `Observation` получает `Tags []string` (отдельно от `Metadata`, item 9).
 
@@ -489,7 +491,7 @@ type AfterToolHook func(ctx context.Context, info ToolCallInfo, result string, e
 | D24 | Sampling трейсов детерминирован по `trace_id`                                                          | воспроизводимость eval и снижение нагрузки на ES                                                                                                                                                     | случайная выборка              |
 | D25 | Эгресс — свойство инструмента + Rule of Two в рантайме                                                 | защита от эксфильтрации без ML                                                                                                                                                                       | доверие к модели               |
 | D26 | Ошибка инструмента — результат для модели                                                              | цикл не рушится на первой ошибке инструмента                                                                                                                                                         | падение хода                   |
-| D27 | Модель guard версионируется; версия и хэш политики пишутся в трейс                                     | апгрейд guard — смена политики, а не патч                                                                                                                                                            | безусловный кэш вердиктов      |
+| D27 | Guard версионируется строкой «хэш политики + имена слоёв»; версия и хэш политики пишутся в трейс       | апгрейд guard — смена политики, а не патч                                                                                                                                                            | безусловный кэш вердиктов      |
 | D28 | L2 отвечает за семантику (safety и таксономия), L1 — за структурированные ID (карты, ИНН, SNILS, IBAN) | данные GLiNER Guard: model-only F1 на RU-ID ≈ 0; правила дешевле; Go-сторона поддерживает полную таксономию модели (N групп, `thresholds`, `category_map`), поставляемый артефакт — компактный (D35) | ML на структурированных ID     |
 | D29 | Схемная инъекция выбирается по возможностям провайдера (`SchemaMode`)                                  | провайдеры различаются в поддержке `response_format`                                                                                                                                                 | обязательный `response_format` |
 | D30 | Пакет `eval` с детерминированными проверками вместо LLM-судей                                          | воспроизводимо, без стоимости и без сети                                                                                                                                                             | LLM-as-judge для авторизации   |
@@ -537,6 +539,10 @@ README описывают именно это поведение.
 - `Canonicalize`, `DecodedVariants` (I-03); `Action` дополнен `Detect`;
   `Verdict.Tripwire`, `Verdict.Version`; `Tripwire{Reason, RuleID, Metadata}`;
   `Options.Version`, `Options.OnViolation`, `Pipeline.Version()`.
+- `Options.Version`/`Pipeline.Version()` — строка `<policy_hash>/<layer_id>`
+  (`layer_id` — имена детекторов через `+`; `kit.New` строит её из хэша политики
+  и `layerID`), а аудит-поле `guard_model` — `Detector.Name()` слоя L2 (`"L2"`),
+  не имя каталога модели (I-08).
 - L1 расширен: `BANK_CARD` (Luhn), `IBAN` (mod-97), `CVV`, `PASSPORT`,
   `JWT`, `BEARER`, `GOOGLE_API_KEY`, `SLACK_TOKEN`; regex-паттерны инъекций.
 - `AllowAll` переехал в `guard/guardtest` (I-15).
@@ -557,6 +563,9 @@ README описывают именно это поведение.
   `ParseFinishReason`; `Request.SchemaMode` (`SchemaNative/Inline/System`),
   `SupportsNativeSchema`; `Request.ToolChoice`, `Seed`, `Stop`, `ProviderOptions`.
 - `Chain(ChainConfig, ...Client)`: фолбэк-цепочка с ретраями и `Retry-After`.
+- `Chain` не реализует `SupportsNativeSchema`, поэтому `SupportsNativeSchema(chain)`
+  = `false`: `kit.Generate`/`model.Structurer` инлайнят схему даже при
+  `SchemaNative`, если все звенья цепочки умеют нативную.
 - `History`/`Counter`/`ByteCounter`: обрезка истории по бюджету с сохранением пар
   `tool_call`/`tool` и стабильного системного префикса.
 - `internal/httpjson`: `Config`, `NewClient` (ретраи, `Retry-After`),

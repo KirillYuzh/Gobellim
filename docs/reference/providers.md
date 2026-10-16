@@ -44,6 +44,11 @@ kit не привязан к вендору. Клиент чата — инте�
 `kit.Generate` при `SchemaNative` без поддержки провайдера автоматически инлайнит
 схему (D29).
 
+> [!NOTE]
+> `model.Chain` не форвардит `SupportsNativeSchema`, поэтому цепочка считается не
+> поддерживающей нативную схему: `kit.Generate`/`model.Structurer` инлайнят схему,
+> даже если нативную схему поддерживают все звенья.
+
 ## ToolChoice, Seed, Stop, ProviderOptions
 
 Поле `Request.ToolChoice` — `""`, `"auto"`, `"none"`, `"required"` или имя
@@ -77,7 +82,8 @@ func Chain(cfg ChainConfig, clients ...Client) (Client, error)
 `model.Chain` пробует клиентов по порядку. Звено ретраится при retryable-ошибке
 (транспорт, `408`, `425`, `429`, `5xx`) до `MaxRetries`, уважая `Retry-After`;
 иначе цепочка переходит к следующему звену. `Model()` возвращает модель первого
-клиента.
+клиента. `Chain` не реализует `SupportsNativeSchema`, поэтому для цепочки схема
+всегда инлайнится (см. «Схемная инъекция»).
 
 ```go
 type Counter interface{ Count(text string) int }
@@ -94,8 +100,13 @@ func (h History) Trim(msgs []Message) []Message
 (никогда не выбрасывается), пары `tool_call`/`tool` (не оставляет висячих вызовов)
 и стабильный системный префикс для prompt-кэша.
 
-Нижний HTTP-слой — `internal/httpjson`: `Config`, `NewClient` (ретраи), `StatusError`,
-`IsRetryable`, `RetryAfter`.
+Нижний HTTP-слой — непубличный пакет `internal/httpjson` (`Config`, `NewClient`,
+`StatusError`, `IsRetryable`, `RetryAfter`); импортировать его приложение не может.
+Ретраи включает транспорт, который строит только `httpjson.NewClient`. Адаптеры
+`model` и `embed` используют `httpjson.Client(hc)`, возвращающий переданный
+`*http.Client` как есть, поэтому **свой `HTTPClient` получает одну попытку**, а
+`nil` — обычный клиент с таймаутом 60 с: сам `internal/httpjson` при пользовательском
+клиенте ретраев не делает. Пользовательский механизм ретраев — `model.Chain`.
 
 ## GigaChatConfig
 
@@ -152,10 +163,13 @@ type Embedder interface {
 
 Неизвестную локальную модель описывают файлом `kit_embedder.json` рядом с весами: `embed.LoadFileConfig(path)` читает JSON в строгом режиме (`DisallowUnknownFields`) с полями `pooling`, `query_prefix`, `passage_prefix`, `normalize`, `max_len`. Значения по умолчанию: `pooling` = `mean`, `max_len` = `512`. Неизвестный `pooling`, неизвестное поле или ошибка разбора дают `ErrInvalidConfig`. Если `NewLocal` не находит ни пресет, ни `kit_embedder.json`, он также возвращает `ErrInvalidConfig`.
 
-Каталог весов — `<models_dir>/<org>__<name>/` (`embed.ModelDir`; `/` в имени модели заменяется на `__`); `models_dir` берётся из опции `embed.Dir`, переменной `KIT_MODELS_DIR` или `./models`.
+Каталог весов — `<models_dir>/<org>__<name>/` (`embed.ModelDir`; `/` в имени модели заменяется на `__`); `models_dir` берётся из опции `embed.LocalConfig.Dir`, переменной `KIT_MODELS_DIR` или `./models`.
 
 > [!NOTE]
 > `Embedder` обязателен только операциям `Ingest` и `Search`. Чат-приложению он не нужен: `kit.New` принимает `Embedder: nil`, а `App.Setup` в этом случае пропускает индекс чанков.
+
+> [!WARNING]
+> **Размерность индекса чанков фиксируется при `App.Setup`.** `Setup` вызывает `store.EnsureSchema(ctx, es, Embedder.Dim())`, а индекс `kit-chunks` создаётся только когда `Dim() > 0`. У удалённых эмбеддеров (`embed.NewOpenAI`, `embed.NewGigaChat`) до первого вызова `Dim()` возвращает сконфигурированное `Dim`, а при `Dim == 0` — `0`; размерность из ответа подставляется уже в рантайме, при первом `embed`. Поэтому с удалённым эмбеддером и без явного `Dim` `App.Setup` **не создаёт** индекс `kit-chunks`, и первый `Ingest` падает на отсутствующем индексе — задайте `Dim` заранее. `EnsureSchema` идемпотентен и **не сверяет** размерности, поэтому смена размерности эмбеддера требует переиндексации: пересоздайте индекс и повторите `Ingest`.
 
 ## Смотрите также
 
@@ -163,3 +177,9 @@ type Embedder interface {
 - [Конфигурация](./configuration.md) — `KIT_MODELS_DIR`, `KIT_ORT_LIB` и лимиты эмбеддера
 - [Поиск](../concepts/retrieval.md) — как эмбеддер используется при ingest и search
 - [Установка](../getting-started/installation.md) — сборка с `-tags ort`
+
+Руководства (how-to):
+
+- [Как подключить провайдера](../guides/providers/overview.md) — выбор, матрица возможностей, `kit.Config{LLM: …}`, `model.Chain`
+- [OpenAI-совместимые](../guides/providers/openai-compatible.md), [Ollama](../guides/providers/ollama.md), [vLLM](../guides/providers/vllm.md), [GigaChat](../guides/providers/gigachat.md) — пошаговая настройка, рецепты и troubleshooting
+- [Эмбеддеры](../guides/providers/embeddings.md) — `Query`/`Passages`, пресеты, `Dim()` и переиндексация

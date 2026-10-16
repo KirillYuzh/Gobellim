@@ -243,6 +243,7 @@ func writeError(w http.ResponseWriter, err error) {
 ## Смотрите также
 
 - [Конфигурация](../reference/configuration.md) — `GuardL2`, `GuardMaxChars`, `GuardCacheSize`, `guard.l2.max_tokens`
+- [Как настроить guardrails](../guides/guardrails.md) — слои, пороги и бюджет латентности
 - [Бизнес-правила](../internals/business-rules.md) — `BR-24`…`BR-33`, `BR-70`…`BR-72`
 - [Решения](../internals/decisions.md) — `D28`, `D34`, `D35`
 - [Ошибки](../reference/errors.md) — `ErrGuardReject`, `ErrGuardUnavailable`

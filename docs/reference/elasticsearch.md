@@ -66,29 +66,29 @@ func RawRequest(method, path string, body []byte, contentType string) Request
 
 ## kit-traces
 
-| Поле                      | Тип                         | Назначение                              |
-| ------------------------- | --------------------------- | --------------------------------------- |
-| `@timestamp`              | `date`                      | Время окончания trace.                  |
-| `trace_id`                | `keyword`                   | Идентификатор trace.                    |
-| `name`                    | `keyword`                   | `chat`, `ingest`, `search`, `generate`. |
-| `user_id`                 | `keyword`                   | Принципал.                              |
-| `session_id`              | `keyword`                   | Группировка по сессии.                  |
-| `tenant`                  | `keyword`                   | Тенант принципала.                      |
-| `input`                   | `text`                      | Вход (под политикой текста; см. ниже).  |
-| `output`                  | `text`                      | Выход.                                  |
-| `tags`                    | `keyword`                   | Метки.                                  |
-| `kind`                    | `keyword`                   | `SCORE` на документе оценки.            |
-| `score`                   | `double`                    | Значение оценки (документ score).       |
-| `comment`                 | `text`                      | Комментарий оценки (документ score).    |
-| `guard_version`           | `keyword`                   | Аудит: версия guard (I-08).             |
-| `guard_model`             | `keyword`                   | Аудит: id модели guard.                 |
-| `policy_hash`             | `keyword`                   | Аудит: хэш политики.                    |
-| `text_policy`             | `keyword`                   | Аудит: `masked` или `full`.             |
-| `metadata`                | `object` (`enabled: false`) | Произвольные данные, не индексируются.  |
-| `usage.prompt_tokens`     | `integer`                   | Токены промпта.                         |
-| `usage.completion_tokens` | `integer`                   | Токены ответа.                          |
-| `usage.total_tokens`      | `integer`                   | Всего токенов.                          |
-| `usage.cost`              | `double`                    | Стоимость.                              |
+| Поле                      | Тип                         | Назначение                                                              |
+| ------------------------- | --------------------------- | ----------------------------------------------------------------------- |
+| `@timestamp`              | `date`                      | Время окончания trace.                                                  |
+| `trace_id`                | `keyword`                   | Идентификатор trace.                                                    |
+| `name`                    | `keyword`                   | `chat`, `ingest`, `search`, `generate`.                                 |
+| `user_id`                 | `keyword`                   | Принципал.                                                              |
+| `session_id`              | `keyword`                   | Группировка по сессии.                                                  |
+| `tenant`                  | `keyword`                   | Тенант принципала.                                                      |
+| `input`                   | `text`                      | Вход (под политикой текста; см. ниже).                                  |
+| `output`                  | `text`                      | Выход.                                                                  |
+| `tags`                    | `keyword`                   | Метки.                                                                  |
+| `kind`                    | `keyword`                   | `SCORE` на документе оценки.                                            |
+| `score`                   | `double`                    | Значение оценки (документ score).                                       |
+| `comment`                 | `text`                      | Комментарий оценки (документ score).                                    |
+| `guard_version`           | `keyword`                   | Аудит: версия guard, `<policy_hash>/<layer_id>` (I-08).                 |
+| `guard_model`             | `keyword`                   | Аудит: имя слоя guard (например, `L2`).                                 |
+| `policy_hash`             | `keyword`                   | Аудит: хэш политики.                                                    |
+| `text_policy`             | `keyword`                   | Аудит: `masked` или `full`.                                             |
+| `metadata`                | `object` (`enabled: false`) | Произвольные данные, не индексируются.                                  |
+| `usage.prompt_tokens`     | `integer`                   | Токены промпта.                                                         |
+| `usage.completion_tokens` | `integer`                   | Токены ответа.                                                          |
+| `usage.total_tokens`      | `integer`                   | Всего токенов.                                                          |
+| `usage.cost`              | `double`                    | Стоимость. Framework пишет `0`; цену проставляет приложение (см. ниже). |
 
 Score пишется сюда же: `kind: SCORE`, `trace_id`, `name`, `score`, `comment`.
 
@@ -108,8 +108,8 @@ Score пишется сюда же: `kind: SCORE`, `trace_id`, `name`, `score`, 
 | `guard_rail`        | `keyword`                   | Rail guard при срабатывании.                                                                                                                                                                    |
 | `guard_action`      | `keyword`                   | `allow`, `detect`, `mask`, `reject`.                                                                                                                                                            |
 | `guard_categories`  | `keyword`                   | Категории находок (`PII`, `SECRET`, `INJECTION`, `UNSAFE`).                                                                                                                                     |
-| `guard_version`     | `keyword`                   | Аудит: версия guard (I-08).                                                                                                                                                                     |
-| `guard_model`       | `keyword`                   | Аудит: id модели guard.                                                                                                                                                                         |
+| `guard_version`     | `keyword`                   | Аудит: версия guard, `<policy_hash>/<layer_id>` (I-08).                                                                                                                                         |
+| `guard_model`       | `keyword`                   | Аудит: имя слоя guard (например, `L2`).                                                                                                                                                         |
 | `policy_hash`       | `keyword`                   | Аудит: хэш политики.                                                                                                                                                                            |
 | `text_policy`       | `keyword`                   | Аудит: `masked` или `full`.                                                                                                                                                                     |
 | `tags`              | `keyword`                   | Метки.                                                                                                                                                                                          |
@@ -122,10 +122,13 @@ Score пишется сюда же: `kind: SCORE`, `trace_id`, `name`, `score`, 
 | `prompt_tokens`     | `integer`                   | Токены промпта.                                                                                                                                                                                 |
 | `completion_tokens` | `integer`                   | Токены ответа.                                                                                                                                                                                  |
 | `total_tokens`      | `integer`                   | Всего токенов.                                                                                                                                                                                  |
-| `cost`              | `double`                    | Стоимость.                                                                                                                                                                                      |
+| `cost`              | `double`                    | Стоимость. Framework пишет `0`; цену проставляет приложение (см. ниже).                                                                                                                         |
 | `metadata`          | `object` (`enabled: false`) | Не индексируется.                                                                                                                                                                               |
 
 Пустые поля (`error_kind`, `guard_*`, аудит-поля) в документ не попадают.
+
+> [!NOTE]
+> Стоимость framework не считает: поля `usage.cost` (trace) и `cost` (observation) есть в маппинге и пишутся, но `model.Usage` не несёт `Cost`, поэтому `toTraceUsage` переносит только токены, и framework всегда пишет `0`. Ценообразование — ответственность приложения (свой `trace.Sink` или внешняя аналитика): через `kit.Config` хука для этого нет — `Processors` не выведены наружу, а sink видит документ уже собранным.
 
 ## Что создаёт App.Setup
 
@@ -205,5 +208,6 @@ store.Filter{"doc_id": "1", "position": map[string]any{"$gte": 2}}
 
 - [Справочник kit](./kit.md) — `App.Setup`, `Search`, `Ingest`, `Delete`, `Prune`
 - [Поиск](../concepts/retrieval.md) — гибридный поиск и слияние RRF
+- [Как индексировать и искать](../guides/retrieval.md) — рецепты записи и чтения
 - [Наблюдаемость](../concepts/observability.md) — трейсы и оценки
 - [Конфигурация](./configuration.md) — лимиты и значения по умолчанию трейсинга

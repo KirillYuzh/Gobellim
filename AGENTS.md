@@ -12,6 +12,8 @@ override the specification.
 4. `docs/internals/business-rules.md` — the BR-xx rules your change must keep true.
 5. `docs/internals/plan.md` — current stage and Definition of Done.
 
+`docs/guides/` is the how-to layer — task recipes (providers, structured output, tool calling, guardrails, retrieval, observability, eval, pipelines, errors, deployment, performance, security). `docs/concepts/` is the explanation layer, and `docs/reference/` is the lookup layer; see `docs/guides/README.md` for the Diátaxis split.
+
 ## Rules
 
 - If code and docs disagree, fix the docs in the same change.
@@ -26,7 +28,7 @@ override the specification.
 
 | Path                                                           | What                                                                                                                 |
 | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `docs/`                                                        | the specification: `getting-started/`, `concepts/`, `reference/`, `internals/`                                       |
+| `docs/`                                                        | the specification: `getting-started/`, `concepts/` (explanation), `reference/`, `guides/` (how-to), `internals/`     |
 | `*.go` (root)                                                  | the `kit` facade: `New`, `Chat`, `Ingest`, `Search`, `Delete`, `Score`, `Prune`, `Generate`, `Tool`, `RetrievalTool` |
 | `internal/`                                                    | call primitive, core types, ORT pool, shared helpers                                                                 |
 | `internal/importrules/`                                        | stdlib-only test enforcing the package dependency rules (I-13)                                                       |

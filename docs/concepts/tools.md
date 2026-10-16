@@ -292,5 +292,7 @@ if _, err := kit.RetrievalTool(app, "search_knowledge"); err != nil {
 ## Смотрите также
 
 - [Справочник kit](../reference/kit.md) — `kit.Tool`, `Desc`, `Perm`, `Effects`, `BeforeToolCall`, `AfterToolCall`, `RetrievalTool`
+- [Как вызывать инструменты](../guides/tool-calling.md) — пошаговая настройка и разбор сбоев
+- [Безопасность](../guides/security.md) — эгресс, RBAC/ACL и пределы фреймворка
 - [Бизнес-правила](../internals/business-rules.md) — `BR-15`…`BR-23`, `BR-51`, `BR-53`, `BR-61`, `BR-62`
 - [demo](../../demo/README.ru.md) — реальный инструмент погоды
