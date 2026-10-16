@@ -154,6 +154,18 @@ go run ./demo/cmd/tui
 
 Флаги: `-url` (или `KIT_BOT_URL`), `-timeout`. `NO_COLOR` отключает цвета.
 
+## Трейсы
+
+Чтение трейсов, observations и оценок прямо из Elasticsearch:
+
+```sh
+go run ./demo/cmd/traces                      # 20 последних трейсов
+go run ./demo/cmd/traces -name chat -tenant bot
+go run ./demo/cmd/traces -trace <trace-id>    # один трейс целиком
+```
+
+Флаги: `-url` (или `KIT_ES_URL`), `-limit`, `-name`, `-tenant`, `-trace`.
+
 ## Postman
 
 ```sh

@@ -152,6 +152,18 @@ the bot.
 
 Flags: `-url` (or `KIT_BOT_URL`), `-timeout`. `NO_COLOR` disables the colors.
 
+## Traces
+
+Read traces, observations and scores straight from Elasticsearch:
+
+```sh
+go run ./demo/cmd/traces                      # the 20 latest traces
+go run ./demo/cmd/traces -name chat -tenant bot
+go run ./demo/cmd/traces -trace <trace-id>    # one trace in full
+```
+
+Flags: `-url` (or `KIT_ES_URL`), `-limit`, `-name`, `-tenant`, `-trace`.
+
 ## Postman
 
 ```sh

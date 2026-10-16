@@ -304,8 +304,9 @@ item-статус `409`/`version_conflict` считается успехом). S
 `dropped` (логируется `slog.Warn`); запрос никогда не блокируется трейсингом.
 `App.Close(ctx)` сбрасывает очередь.
 
-JSON-API чтения трейсов в репозитории нет: потребители читают данные из ES
-(Kibana/Grafana). Это запланировано, а не реализовано.
+JSON-API чтения трейсов нет: потребители читают ES (Kibana/Grafana) или CLI-ридер
+`demo/cmd/traces` (список трейсов и разбор одного с observations и scores).
+JSON-API остаётся запланированным.
 
 Помимо ES-writer'а, трейсы можно направить в любой `trace.Sink` через
 `Config.Sinks`: встроен `trace.NewOTLP` (`trace/otlp.go`) — OTLP/HTTP JSON без

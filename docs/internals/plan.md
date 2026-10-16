@@ -246,7 +246,7 @@ check`. Обвязка зелёная: прогоны на раннере про
 - [x] Богатый экспорт L2 — opt-in (`export.py --schema full`): Go принимает
       полную таксономию (32 сущности + 5 групп = 70 меток); артефакт генерируется
       локально, дефолтный экспорт остаётся компактным (D35).
-- [ ] JSON-API чтения трейсов — запланирован, не реализован.
+- [x] CLI-ридер трейсов `demo/cmd/traces` (список + `-trace <id>` с observations и scores); JSON-API не реализован.
 - [x] `usage.cost`/`cost` заполняются framework'ом по `Config.Pricing` (`model.Pricing`); нулевая цена даёт `0`.
 - [x] Guard: режим `Config.GuardMode` (`GuardStrict`/`GuardDegraded`), деградация видна в observation (`guard_degraded`) (I-16).
 - [x] Право `chat` на операцию `Chat` (`authz.PermChat`).
