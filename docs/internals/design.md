@@ -72,7 +72,7 @@ flowchart TD
 | I-07 | В трейсы не попадает необработанный текст по умолчанию. Политика текста трейса — явная: `masked` / `full`.                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | I-08 | Вердикт guard воспроизводим: в observation пишутся версия guard (`<policy_hash>/<layer_id>`, имена слоёв через `+`), хэш политики и имя слоя L2 (`guard_model` = `"L2"`).                                                                                                                                                                                                                                                                                                                                                                                 |
 | I-09 | Лимиты и деньги — часть контракта: `ErrBudget` (бюджет хода) и `ErrRateLimited` (лимит на тенанта); `Retry-After` учитывается в `internal/httpjson` при 429 провайдера; таймауты приходят как `context.DeadlineExceeded`/`ErrProvider`.                                                                                                                                                                                                                                                                                                                   |
-| I-10 | Эгресс — явное свойство инструмента (`Effects`), хосты — allowlist; «Rule of Two» проверяется рантаймом.                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| I-10 | Эгресс — явное свойство инструмента (`Effects`); политика хостов обязательна (`EgressHosts` или `EgressAny`), пустая — отказ; «Rule of Two» проверяется рантаймом.                                                                                                                                                                                                                                                                                                                                                                                        |
 | I-11 | Ошибка инструмента — данные для модели: результат приходит как `{"error": "..."}`, и ход продолжается. Прерывают ход: отказ авторизации (RBAC и эгресс-политика), ошибка провайдера, отмена/дедлайн контекста, отсутствие требуемого подтверждения (`ErrApprovalRequired`) и исчерпание одного ретрая на невалидные аргументы (BR-23).                                                                                                                                                                                                                    |
 | I-12 | Контракт ES-запроса явный: метод, путь, тип контента, refresh, идемпотентность — поля запроса, а не вывод из строки пути.                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | I-13 | Тесты — только stdlib. Обвязка **подключена**: CI (`.github/workflows/ci.yml`) гоняет джобы build, test, race, ort-vet, lint, fumpt; `golangci-lint` (`gofumpt`, `govet`, `errcheck`, `staticcheck`, `gosec`, `depguard` и др.) и `make check` дают ту же планку локально. Правила импортов закодированы дважды — `depguard` в `.golangci.yml` и stdlib-тест `internal/importrules`. Обвязка **подключена и зелёная**: `golangci-lint` v2.13.0 локально даёт 0 замечаний, а прогоны workflow на раннере зелёные (push в `develop`/`main` и pull request). |
@@ -540,6 +540,7 @@ type StreamChunk struct {
 ```go
 func Effects(e Effects) ToolOption            // Read | Write | Egress
 func EgressHosts(hosts ...string) ToolOption  // allowlist для Egress
+func EgressAny() ToolOption                   // явный отказ от allowlist: любой хост
 func RequireApproval(b bool) ToolOption
 func ValidateOutput(b bool) ToolOption        // item 5: валидация выхода
 func ModelView(f func(string) string) ToolOption // item 4: что видит модель
@@ -699,9 +700,9 @@ README описывают именно это поведение.
   требуют непустой `Tenant` (иначе `ErrUnauthorized`). `Prune` требует
   принципала и право `prune`, но не тенант: это глобальное действие
   эксплуатации по времени (как ILM), а не тенант-скоупная операция.
-- `Tool`-опции: `Effects`, `EgressHosts`, `RequireApproval`, `ValidateOutput`,
-  `ModelView`, `BeforeToolCall`, `AfterToolCall`; `Config.Approver`, `ApproverFunc`,
-  `ApprovalRequest.Fingerprint` (хэш `tool` + канонических аргументов).
+- `Tool`-опции: `Effects`, `EgressHosts`, `EgressAny`, `RequireApproval`,
+  `ValidateOutput`, `ModelView`, `BeforeToolCall`, `AfterToolCall`; `Config.Approver`,
+  `ApproverFunc`, `ApprovalRequest.Fingerprint` (хэш `tool` + канонических аргументов).
   Хук на инструменте **заменяет** хук приложения (`Config.BeforeToolCall`/
   `AfterToolCall`), а не складывается с ним; `ToolCallInfo` несёт `Fingerprint` и
   `CallIndex`. Одобрение расходуется один раз за ход (повтор того же fingerprint →
@@ -749,7 +750,8 @@ README описывают именно это поведение.
 - `webfetch` (новый пакет): `Config` (`AllowHosts`, `MaxBytes`, `Timeout`,
   `MaxRedirects`, `Headers`), `In` (`url`), `Out` (`status`, `content_type`,
   `text`, `truncated`), `New(app, name, cfg)`. Регистрируется через
-  `Effects(EffectEgress)` + `EgressHosts(...)`, поэтому host-allowlist и Rule of Two
+  `Effects(EffectEgress)` + `EgressHosts(...)` (при пустом `AllowHosts` — `EgressAny()`),
+  поэтому host-allowlist и Rule of Two
   рантайма применяются тоже; SSRF-проверки — в dialer'е (включая CGNAT `100.64.0.0/10`
   и ULA `fc00::/7`), с потолками редиректов и тела; не-2xx — данные (D33).
 - `cmd/kitctl verify` (новые подкоманды): `window` (I-06), `models`

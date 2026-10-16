@@ -898,8 +898,11 @@ func (a *App) checkEgress(def *ToolDef, args string, t *turn) error {
 		return fmt.Errorf("kit: tool %s: egress blocked after untrusted input in this turn: %w",
 			def.name, core.ErrUnauthorized)
 	}
-	if len(def.egressHosts) == 0 {
+	if def.egressAny {
 		return nil
+	}
+	if len(def.egressHosts) == 0 {
+		return fmt.Errorf("kit: tool %s: egress tool has no host allowlist; add EgressHosts or EgressAny: %w", def.name, core.ErrUnauthorized)
 	}
 	for _, host := range urlHosts(args) {
 		if !hostAllowed(host, def.egressHosts) {

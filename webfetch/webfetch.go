@@ -77,13 +77,19 @@ func New(app *kit.App, name string, cfg Config) (*kit.ToolDef, error) {
 	}
 	f := &fetcher{cfg: c, client: newClient(c)}
 
-	return kit.Tool(app, name, func(ctx context.Context, in In) (Out, error) {
-		return f.fetch(ctx, in.URL)
-	},
+	opts := []kit.ToolOption{
 		kit.Desc("Fetch a URL over http or https and return the response body as text. Only public hosts are reachable."),
 		kit.Effects(kit.EffectEgress),
-		kit.EgressHosts(c.AllowHosts...),
-	)
+	}
+	if len(c.AllowHosts) > 0 {
+		opts = append(opts, kit.EgressHosts(c.AllowHosts...))
+	} else {
+		opts = append(opts, kit.EgressAny())
+	}
+
+	return kit.Tool(app, name, func(ctx context.Context, in In) (Out, error) {
+		return f.fetch(ctx, in.URL)
+	}, opts...)
 }
 
 func newClient(cfg Config) *http.Client {

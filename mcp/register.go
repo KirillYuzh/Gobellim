@@ -17,10 +17,11 @@ func ToolPrefix(server, tool string) string {
 }
 
 // Register lists the server's tools and registers each one with the app. Every
-// tool gets the Egress effect (an MCP server is an outbound dependency, so the
-// Rule of Two and host policy still apply) and the caller-supplied options are
-// applied on top, so the caller can replace the description, require approval
-// or narrow the effect.
+// tool gets the Egress effect plus EgressAny (an MCP server is an arbitrary
+// outbound dependency, so the Rule of Two and an explicit "any host" opt-in still
+// apply); the caller-supplied options are applied on top, so the caller can
+// narrow the host policy with EgressHosts, replace the description, require
+// approval or narrow the effect.
 //
 // The input schema is taken from the server verbatim; a schema the JSON Schema
 // compiler rejects fails registration with ErrInvalidConfig rather than being
@@ -45,6 +46,7 @@ func Register(ctx context.Context, app *kit.App, c *Client, opts ...kit.ToolOpti
 		base := []kit.ToolOption{
 			kit.Desc(t.Description),
 			kit.Effects(kit.EffectEgress),
+			kit.EgressAny(),
 		}
 		def, err := kit.RawTool(app, ToolPrefix(c.Name(), t.Name), t.InputSchema, callHandler(c, t.Name), append(base, opts...)...)
 		if err != nil {

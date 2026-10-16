@@ -165,21 +165,23 @@ kit.Tool(app, "get_weather", getWeather,
 | --------------------- | -------------------------------------------------------------------------------------- |
 | `Effect`              | `Read` / `Write` / `Egress`; рантайм применяет правила, не спрашивая модель            |
 | `EgressHosts(hosts…)` | извлекает хосты URL из аргументов (`urlHosts`) и сверяет с allowlist по границе домена |
+| `EgressAny()`         | явный opt-in «любой хост»; пустой allowlist без него — отказ                           |
 | `Egress.RuleOfTwo`    | запрещает эгресс в ходе, где уже был недоверенный ввод (`untrusted`)                   |
 | Отказ                 | `ErrUnauthorized`, **фатально для хода**                                               |
 
 Совпадение хоста — по границе домена: `a==host` или `host` оканчивается на
 `.a`. Глобы и `"*"` **не** работают как wildcard.
 
-> [!WARNING]
-> `EgressHosts` без аргументов (пустой allowlist) означает «любой хост»: при
-> `EffectEgress` без allowlist защищает только `RuleOfTwo`. Всегда задавайте
-> `EgressHosts`, если инструмент реально ходит в сеть.
+> [!NOTE]
+> Egress-инструмент обязан объявить политику хостов: `EgressHosts(...)` или
+> явный `EgressAny()`. Пустой allowlist **без** `EgressAny()` — отказ
+> (`ErrUnauthorized`, fail-closed), поэтому «забыть» про хосты нельзя.
 
 ### SSRF-позиция `webfetch`
 
 `webfetch.New(app, name, cfg)` регистрирует инструмент как `EffectEgress` +
-`EgressHosts(cfg.AllowHosts…)`, поэтому рантаймовые правила применимы и к нему.
+`EgressHosts(cfg.AllowHosts…)` (при пустом `AllowHosts` — явный `EgressAny()`),
+поэтому рантаймовые правила применимы и к нему.
 Сам фетч дополнительно закрыт на уровне транспорта:
 
 | Контроль             | Где                                                                                                        | Что закрывает                             |
@@ -317,7 +319,7 @@ flowchart TD
 | `Tenant` и `Roles` из доверенного источника                      | никогда из тела запроса                                             |
 | `policy.yaml` — deny-by-default, без лишних `"*"`                | `kitctl policy check ./policy.yaml`                                 |
 | ACL задан для каждого документа                                  | `Doc.ACL` заполнен при `Ingest`; проверить поиском от другой роли   |
-| Инструменты получили `Effects` и `EgressHosts`                   | ни одного `EffectEgress` без allowlist                              |
+| Инструменты получили `Effects` и политику хостов                 | ни одного `EffectEgress` без `EgressHosts` или `EgressAny`          |
 | `Egress.RuleOfTwo` включён для агентов с внешними данными        | `Config.Egress.RuleOfTwo = true`                                    |
 | `RequireApproval` на необратимых действиях + реальный `Approver` | `kit.RequireApproval(true)`, `Config.Approver`                      |
 | Guard L2 включён и fail-closed                                   | `GuardL2` задан; окно сверено (I-06)                                |

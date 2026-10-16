@@ -590,6 +590,7 @@ func Desc(s string) ToolOption
 func Perm(p string) ToolOption
 func Effects(e Effect) ToolOption
 func EgressHosts(hosts ...string) ToolOption
+func EgressAny() ToolOption
 func RequireApproval(b bool) ToolOption
 func ValidateOutput(b bool) ToolOption
 func ModelView(f func(string) string) ToolOption
@@ -597,17 +598,18 @@ func BeforeToolCall(h BeforeToolHook) ToolOption
 func AfterToolCall(h AfterToolHook) ToolOption
 ```
 
-| Функция               | Назначение                                                                      |
-| --------------------- | ------------------------------------------------------------------------------- |
-| `kit.Desc`            | Описание инструмента для модели.                                                |
-| `kit.Perm`            | Переопределяет право; по умолчанию `tool:<имя>`.                                |
-| `kit.Effects`         | Эффект инструмента (`Read`/`Write`/`Egress`).                                   |
-| `kit.EgressHosts`     | Host-allowlist для `Egress`: проверяются хосты URL в аргументах. Пусто — любой. |
-| `kit.RequireApproval` | Перед вызовом спрашивать `Config.Approver`.                                     |
-| `kit.ValidateOutput`  | Проверять результат по JSON Schema выходного типа (несовпадение не фатально).   |
-| `kit.ModelView`       | Что видит модель вместо результата; на приложение не влияет.                    |
-| `kit.BeforeToolCall`  | Before-хук этого инструмента; заменяет `Config.BeforeToolCall`.                 |
-| `kit.AfterToolCall`   | After-хук этого инструмента; заменяет `Config.AfterToolCall`.                   |
+| Функция               | Назначение                                                                    |
+| --------------------- | ----------------------------------------------------------------------------- |
+| `kit.Desc`            | Описание инструмента для модели.                                              |
+| `kit.Perm`            | Переопределяет право; по умолчанию `tool:<имя>`.                              |
+| `kit.Effects`         | Эффект инструмента (`Read`/`Write`/`Egress`).                                 |
+| `kit.EgressHosts`     | Host-allowlist для `Egress`: проверяются хосты URL в аргументах.              |
+| `kit.EgressAny`       | Явный opt-in «любой хост»; без него пустой allowlist — отказ.                 |
+| `kit.RequireApproval` | Перед вызовом спрашивать `Config.Approver`.                                   |
+| `kit.ValidateOutput`  | Проверять результат по JSON Schema выходного типа (несовпадение не фатально). |
+| `kit.ModelView`       | Что видит модель вместо результата; на приложение не влияет.                  |
+| `kit.BeforeToolCall`  | Before-хук этого инструмента; заменяет `Config.BeforeToolCall`.               |
+| `kit.AfterToolCall`   | After-хук этого инструмента; заменяет `Config.AfterToolCall`.                 |
 
 ### Хуки инструмента
 
@@ -647,6 +649,7 @@ func (t *ToolDef) Description() string
 func (t *ToolDef) Permission() string
 func (t *ToolDef) Effect() Effect
 func (t *ToolDef) EgressHosts() []string
+func (t *ToolDef) EgressAny() bool
 func (t *ToolDef) RequireApproval() bool
 func (t *ToolDef) ValidateOutput() bool
 func (t *ToolDef) Schema() json.RawMessage

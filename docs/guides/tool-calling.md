@@ -131,7 +131,8 @@ def.permission)`). Запрещённые инструменты **не попа
 - **host allowlist**: из аргументов регуляркой извлекаются хосты URL
   (`urlHosts`), каждый обязан совпасть с `EgressHosts` по границе домена
   (`example.com` покрывает `cdn.example.com`, но не `notexample.com`); пустой
-  `EgressHosts` **не** ограничивает хосты — это явный opt-in «любой хост»;
+  `EgressHosts` без `EgressAny()` — отказ (`ErrUnauthorized`), а `EgressAny()`
+  — явный opt-in «любой хост»;
 - **Rule of Two**: если `Config.Egress.RuleOfTwo == true` и на этом ходу уже был
   недоверенный ввод (`turn.untrusted` — любая маска или находка guard на любом
   рельсе), эгресс запрещён.

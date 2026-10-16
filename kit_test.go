@@ -448,13 +448,26 @@ func TestEgressHostAllowlist(t *testing.T) {
 
 func TestRuleOfTwoBlocksEgressAfterUntrustedInput(t *testing.T) {
 	app := &App{cfg: Config{Egress: EgressPolicy{RuleOfTwo: true}}}
-	def := &ToolDef{name: "send", effect: EffectEgress}
+	def := &ToolDef{name: "send", effect: EffectEgress, egressAny: true}
 
 	if err := app.checkEgress(def, `{}`, &turn{}); err != nil {
 		t.Fatalf("clean turn: %v", err)
 	}
 	if err := app.checkEgress(def, `{}`, &turn{untrusted: true}); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("untrusted turn err = %v, want ErrUnauthorized", err)
+	}
+}
+
+func TestEgressWithoutHostPolicyIsDenied(t *testing.T) {
+	app := &App{cfg: Config{}}
+	open := &ToolDef{name: "open", effect: EffectEgress}
+	if err := app.checkEgress(open, `{"url":"https://any.example.com"}`, &turn{}); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("egress without a host policy err = %v, want ErrUnauthorized", err)
+	}
+
+	allowed := &ToolDef{name: "allowed", effect: EffectEgress, egressAny: true}
+	if err := app.checkEgress(allowed, `{"url":"https://any.example.com"}`, &turn{}); err != nil {
+		t.Fatalf("EgressAny rejected: %v", err)
 	}
 }
 

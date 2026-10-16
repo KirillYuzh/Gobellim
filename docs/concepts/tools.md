@@ -149,7 +149,7 @@ kit.Tool(app, "close_ticket", closeTicket,
 if _, err := kit.Tool(app, "send_report", sendReport,
 	kit.Desc("Отправить отчёт на внешний webhook."),
 	kit.Effects(kit.EffectEgress),        // Read | Write | Egress
-	kit.EgressHosts("hooks.example.com"), // allowlist из аргументов; пусто = любой хост
+	kit.EgressHosts("hooks.example.com"), // allowlist хостов из аргументов; без неё нужен EgressAny()
 	kit.RequireApproval(true),            // спросить Approver до вызова
 	kit.ValidateOutput(true),             // проверить результат по схеме Out
 	kit.ModelView(func(s string) string { return "отчёт отправлен" }),
@@ -168,7 +168,8 @@ if _, err := kit.Tool(app, "close_ticket", closeTicket,
 ```
 
 - `Effects(kit.EffectEgress)` — инструмент может вынести данные за границу доверия.
-- `EgressHosts(...)` — allowlist хостов из аргументов; пустой список означает «любой хост» и является явным opt-in.
+- `EgressHosts(...)` — allowlist хостов из аргументов; пустой список **без** `EgressAny()` — отказ (`ErrUnauthorized`, fail-closed).
+- `EgressAny()` — явный opt-in «любой хост»: нужен, когда инструмент ходит наружу, но URL не в аргументах.
 - `RequireApproval(true)` — рантайм вызывает `Config.Approver`. Без `Approver` такой вызов даёт `ErrApprovalRequired`.
 - `ValidateOutput(true)` — результат проверяется по JSON Schema типа `Out`; несовпадение логируется, но не фатально.
 - `ModelView(fn)` — что видит модель вместо результата; приложению уходит исходная строка.
@@ -195,7 +196,7 @@ app, err := kit.New(ctx, kit.Config{
 
 ### Эгресс и веб-фетч
 
-`EffectEgress` описывает инструмент, а рантайм применяет два правила: host-allowlist, найденный в аргументах (`EgressHosts`, совпадение по границе домена), и «Rule of Two». Отказ любого из них — `ErrUnauthorized` и прерывание хода.
+`EffectEgress` описывает инструмент, а рантайм применяет два правила: host-allowlist, найденный в аргументах (`EgressHosts`, совпадение по границе домена), и «Rule of Two». Egress-инструмент обязан объявить политику хостов — `EgressHosts(...)` либо явный `EgressAny()`; пустая политика — отказ (`ErrUnauthorized`), как и отказ любого правила.
 
 Встроенный инструмент исходящего HTTP — пакет `webfetch`. Он SSRF-защищён и регистрируется с эффектом egress, поэтому рантаймовые правила применяются к нему так же, как к любому другому egress-инструменту.
 
@@ -206,7 +207,7 @@ import (
 )
 
 if _, err := webfetch.New(app, "web_fetch", webfetch.Config{
-	AllowHosts:   []string{"docs.example.com"}, // пусто = любой хост, прошедший SSRF-проверки
+	AllowHosts:   []string{"docs.example.com"}, // пусто = любой публичный хост (проверки SSRF в dialer)
 	MaxBytes:     1 << 20,                       // 1 MiB по умолчанию
 	Timeout:      15 * time.Second,
 	MaxRedirects: 5,

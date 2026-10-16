@@ -56,6 +56,7 @@ type ToolDef struct {
 	permission      string
 	effect          Effect
 	egressHosts     []string
+	egressAny       bool
 	requireApproval bool
 	validateOutput  bool
 	modelView       func(string) string
@@ -77,6 +78,8 @@ func (t *ToolDef) Permission() string { return t.permission }
 func (t *ToolDef) Effect() Effect { return t.effect }
 
 func (t *ToolDef) EgressHosts() []string { return append([]string(nil), t.egressHosts...) }
+
+func (t *ToolDef) EgressAny() bool { return t.egressAny }
 
 func (t *ToolDef) RequireApproval() bool { return t.requireApproval }
 
@@ -146,6 +149,7 @@ type toolOptions struct {
 	permission      string
 	effect          Effect
 	egressHosts     []string
+	egressAny       bool
 	requireApproval bool
 	validateOutput  bool
 	modelView       func(string) string
@@ -162,6 +166,8 @@ func Effects(e Effect) ToolOption { return func(o *toolOptions) { o.effect = e }
 func EgressHosts(hosts ...string) ToolOption {
 	return func(o *toolOptions) { o.egressHosts = append([]string(nil), hosts...) }
 }
+
+func EgressAny() ToolOption { return func(o *toolOptions) { o.egressAny = true } }
 
 func RequireApproval(b bool) ToolOption { return func(o *toolOptions) { o.requireApproval = b } }
 
@@ -210,6 +216,7 @@ func Tool[In, Out any](app *App, name string, fn func(ctx context.Context, in In
 		permission:      o.permission,
 		effect:          o.effect,
 		egressHosts:     o.egressHosts,
+		egressAny:       o.egressAny,
 		requireApproval: o.requireApproval,
 		validateOutput:  o.validateOutput,
 		modelView:       o.modelView,
@@ -288,6 +295,7 @@ func RawTool(app *App, name string, schema json.RawMessage, fn func(ctx context.
 		permission:      o.permission,
 		effect:          o.effect,
 		egressHosts:     o.egressHosts,
+		egressAny:       o.egressAny,
 		requireApproval: o.requireApproval,
 		validateOutput:  o.validateOutput,
 		modelView:       o.modelView,
