@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
 )
@@ -32,33 +33,127 @@ var homoglyphs = map[rune]rune{
 // invisible/homoglyph/full-width normalisation, then NFKC again — the second
 // pass composes sequences that the case folding made composable.
 func Canonicalize(text string) string {
-	if text == "" {
-		return ""
-	}
-	// NFKC leaves a rune unnormalised when the text carries invalid UTF-8, so the
-	// result would not be a fixed point: sanitise first.
-	s := strings.ToValidUTF8(text, "\uFFFD")
-	return norm.NFKC.String(fold(norm.NFKC.String(s)))
+	out, _ := canonicalizeMap(text)
+	return out
 }
 
-func fold(s string) string {
+// runeSpans maps every rune of a derived string to the half-open range of runes
+// in the source string that produced it. Ranges are ordered and never empty, so a
+// derived span [a,b) covers source [start[a], end[b-1]).
+type runeSpans struct {
+	start []int
+	end   []int
+}
+
+func (s runeSpans) len() int { return len(s.start) }
+
+// canonicalizeMap returns Canonicalize(text) together with the source range of
+// every rune of the result, indexing []rune(text). Offsets from a detector are in
+// canonical space, but text is masked in the original space: canonicalisation can
+// drop runes (zero-width, bidi) or join them, so findings must be mapped back or a
+// mask would cover the wrong characters and leak the tail of a span.
+func canonicalizeMap(text string) (string, runeSpans) {
+	san, sp1 := sanitizeSpans(text)
+	nfc1, sp2 := nfkcSpans(san)
+	folded, sp3 := foldSpans(nfc1)
+	out, sp4 := nfkcSpans(folded)
+	return out, composeSpans(composeSpans(composeSpans(sp4, sp3), sp2), sp1)
+}
+
+// sanitizeSpans mirrors strings.ToValidUTF8(text, "\uFFFD"): each maximal run of
+// invalid bytes collapses to a single U+FFFD. Spans index []rune(text), where
+// []rune counts every invalid byte as its own rune.
+func sanitizeSpans(text string) (string, runeSpans) {
+	var b strings.Builder
+	b.Grow(len(text))
+	var sp runeSpans
+	for i, ri := 0, 0; i < len(text); {
+		r, size := utf8.DecodeRuneInString(text[i:])
+		if r == utf8.RuneError && size == 1 {
+			j := i + 1
+			for j < len(text) {
+				if _, sz := utf8.DecodeRuneInString(text[j:]); sz != 1 {
+					break
+				}
+				j++
+			}
+			b.WriteRune(utf8.RuneError)
+			sp.start = append(sp.start, ri)
+			sp.end = append(sp.end, ri+(j-i))
+			i, ri = j, ri+(j-i)
+			continue
+		}
+		b.WriteRune(r)
+		sp.start = append(sp.start, ri)
+		sp.end = append(sp.end, ri+1)
+		i, ri = i+size, ri+1
+	}
+	return b.String(), sp
+}
+
+// nfkcSpans applies NFKC one normalisation segment at a time, so it can report
+// which source runes produced each output rune. Splitting at NFKC boundaries
+// keeps the concatenation of the per-segment results equal to normalising the
+// whole string.
+func nfkcSpans(s string) (string, runeSpans) {
 	var b strings.Builder
 	b.Grow(len(s))
+	var sp runeSpans
+	for i, ri := 0, 0; i < len(s); {
+		j := i + norm.NFKC.NextBoundaryInString(s[i:], true)
+		if j <= i || j > len(s) {
+			j = len(s)
+		}
+		seg := s[i:j]
+		out := norm.NFKC.String(seg)
+		in := utf8.RuneCountInString(seg)
+		for range out {
+			sp.start = append(sp.start, ri)
+			sp.end = append(sp.end, ri+in)
+		}
+		b.WriteString(out)
+		i, ri = j, ri+in
+	}
+	return b.String(), sp
+}
+
+// foldSpans is the case/invisible/homoglyph/digit fold, rune for rune. An
+// invisible rune emits nothing, so it owns no canonical rune.
+func foldSpans(s string) (string, runeSpans) {
+	var b strings.Builder
+	b.Grow(len(s))
+	var sp runeSpans
+	ri := 0
 	for _, r := range s {
 		switch {
 		case r >= 0xFF10 && r <= 0xFF19:
 			b.WriteRune('0' + (r - 0xFF10))
-			continue
 		case isInvisible(r):
+			ri++
 			continue
+		default:
+			if folded, ok := homoglyphs[r]; ok {
+				b.WriteRune(folded)
+			} else {
+				b.WriteRune(unicode.ToLower(r))
+			}
 		}
-		if folded, ok := homoglyphs[r]; ok {
-			b.WriteRune(folded)
-			continue
-		}
-		b.WriteRune(unicode.ToLower(r))
+		sp.start = append(sp.start, ri)
+		sp.end = append(sp.end, ri+1)
+		ri++
 	}
-	return b.String()
+	return b.String(), sp
+}
+
+// composeSpans folds two hops into one: a maps a derived string to an
+// intermediate one, b maps that intermediate to the original.
+func composeSpans(a, b runeSpans) runeSpans {
+	out := runeSpans{start: make([]int, len(a.start)), end: make([]int, len(a.start))}
+	for i := range a.start {
+		out.start[i] = b.start[a.start[i]]
+		out.end[i] = b.end[a.end[i]-1]
+	}
+	return out
 }
 
 var (

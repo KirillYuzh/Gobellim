@@ -173,7 +173,7 @@ flowchart TD
 ## Апгрейд guard-модели — это смена политики
 
 Вердикт guard кэшируется LRU (`GuardCacheSize`, по умолчанию 4096); ключ — версия
-guard плюс канонический текст. Версию собирает `kit.New`:
+guard плюс инспектируемый текст. Версию собирает `kit.New`:
 
 ```
 guard_version = <policy_hash>/<layer_id>     // например "9f3c…/L1+L2"

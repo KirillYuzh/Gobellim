@@ -215,18 +215,21 @@ pin-схемой продолжает работать. Экспорт и parity
 ![Путь вызова: authz, guard, span, fn](../call-path.svg)
 
 Путь вызова после шлифовки: принципал берётся из контекста, проверяется право,
-каноникализация и decode-and-rescan выполняются до обоих слоёв guard, решение
-принимает таблица (allow/mask/detect/reject), и только потом идёт сама операция;
-трейс маскирован, версионирован и сэмплирован.
+каноникализация и decode-and-rescan выполняются до слоёв guard, но потоки у них
+разные — L1 читает канонический текст, L2 — исходный, а находки L1 переводятся в
+исходные координаты (`I-03`, `I-21`). Решение принимает таблица
+(allow/mask/detect/reject), и только потом идёт сама операция; трейс маскирован,
+версионирован и сэмплирован.
 
 ```mermaid
 flowchart TD
     A["операция: Chat / Ingest / Search / Generate"] --> B["principal из context"]
     B --> C["authz: permission"]
     C --> D["canonicalize + decode-and-rescan"]
-    D --> E["guard L1: фразы, regex, контрольные суммы"]
-    E --> F["guard L2: ONNX-детектор"]
-    F --> G["decide: категория x рельс"]
+    D --> E["guard L1: фразы, regex, контрольные суммы — канонический текст"]
+    D --> F["guard L2: ONNX-детектор — исходный текст"]
+    E --> G["decide: категория x рельс"]
+    F --> G
     G -->|reject| H["GuardRejectError + tripwire"]
     G -->|mask / detect / allow| I["текст под политикой рельса"]
     I --> J["fn: LLM / tool / embed / ES"]

@@ -21,9 +21,10 @@ flowchart TD
     A["Oперация: Chat / Ingest / Search / Generate"] --> B["principal из context"]
     B --> C["authz: permission"]
     C --> D["canonicalize + decode-and-rescan"]
-    D --> E["guard rules L1: фразы, regex, контрольные суммы"]
-    E --> F["guard ML L2: ONNX detector"]
-    F --> G["decide: категория x рельс"]
+    D --> E["guard rules L1: канонический текст"]
+    D --> F["guard ML L2: исходный текст"]
+    E --> G["decide: категория x рельс"]
+    F --> G
     G -->|reject| H["ErrGuardReject + tripwire"]
     G -->|mask| I["маскированный текст"]
     G -->|allow| I
@@ -35,11 +36,12 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    T["текст"] --> CAN["canonicalize"]
+    T["текст"] --> CAN["canonicalize (+ map в исходные руны)"]
     CAN --> DEC["decode-and-rescan"]
-    DEC --> L1["rules L1"]
-    L1 --> L2["ML L2"]
-    L2 --> DECIDE["decide(rail, findings)"]
+    DEC --> L1["rules L1 — канонический текст"]
+    DEC --> L2["ML L2 — исходный текст"]
+    L1 --> DECIDE["decide(rail, findings)"]
+    L2 --> DECIDE
     DECIDE --> V["Verdict: action + findings + text"]
 ```
 
@@ -64,8 +66,8 @@ flowchart TD
 | ID   | Инвариант                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | I-01 | Любой I/O (LLM, tool, embed, ES, guard) идёт через `internal/call`. Обойти политику нельзя: `Generate` — такая же операция примитива.                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| I-02 | Детекторы guard не зависят от рельса. Рельс влияет только на решение (`decide`), а не на детекцию. Кэш вердиктов ключуется каноническим текстом и версией guard.                                                                                                                                                                                                                                                                                                                                                                                          |
-| I-03 | Каноникализация и decode-and-rescan выполняются **до** L1 и L2; оба слоя видят один и тот же канонический текст.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| I-02 | Детекторы guard не зависят от рельса. Рельс влияет только на решение (`decide`), а не на детекцию. Кэш вердиктов ключуется **инспектируемым текстом** и версией guard (`D66`).                                                                                                                                                                                                                                                                                                                                                                            |
+| I-03 | Каноникализация и decode-and-rescan выполняются **до** слоёв guard, но слои видят **разные потоки**: L1 — канонический текст (гомоглифы и zero-width обезврежены), L2 — текст как есть (транслитерация вне обучающего распределения модели). Находки обеих сторон выражаются в координатах исходного текста (`I-21`, `D64`).                                                                                                                                                                                                                              |
 | I-04 | Mask перезаписывает текст: последующие слои и последующие рельсы видят маску, а не исходные значения.                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | I-05 | Fail-closed различим: недоступность модели — `ErrGuardUnavailable`; битая конфигурация/модель на старте — `ErrInvalidConfig`.                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | I-06 | Окно guard не шире окна модели: если клиент реализует `model.ContextWindow`, `New` сверяет `guard.max_chars` с `ContextTokens()` и возвращает `ErrInvalidConfig` при превышении. Окно модели в токенах, лимит guard в рунах — это верхняя оценка, а не точная гарантия.                                                                                                                                                                                                                                                                                   |
@@ -83,6 +85,7 @@ flowchart TD
 | I-18 | Недоверенный ввод помечается (spotlighting): результат инструмента (включая retrieval) оборачивается в `<untrusted-data>…</untrusted-data>` **после** `ModelView`, а в системный промпт добавляется напоминание трактовать этот блок как данные, а не инструкции. По умолчанию включено (`Config.Spotlight` = `SpotlightOn`); `SpotlightOff` — явный opt-in.                                                                                                                                                                                              |
 | I-19 | `ChatStream` — расширение `Chat`, а не второй путь: цикл tools, RBAC, память, бюджет и трейс работают так же. Скользящее окно (`streamMinWindow` = 400 рун) отправляет каждый кусок ответа через рельс `output` до эмиссии, удерживая хвост `streamHoldback` = 96 рун; отказ рельса даёт `Retract` и аборт. Для клиента без `model.Streamer` — откат на буферизованный `Chat` одним чанком. Инвариант потока: `Done.Final.Content` равен конкатенации выданных `Text`.                                                                                    |
 | I-20 | Остаточное ограничение стриминга документируется, а не скрывается: совпадение длиннее `streamHoldback` (96 рун) без границы предложения внутри всё ещё может пересечь окно и просочиться в уже выданный текст. Один проход guard на окно (не на весь ответ) — осознанная цена стриминга.                                                                                                                                                                                                                                                                  |
+| I-21 | Смещения находок даны в координатах исходного текста. `canonicalizeMap` отдаёт для каждой канонической руны диапазон исходных рун, поэтому находка L1 отображается обратно и маска накрывает ровно сопоставленный ввод, даже если каноникализация руну отбросила (zero-width, bidi) или склеила (комбинирующая последовательность). Слой с `UsesNaturalText() == true` получает исходный текст, и его смещения уже верны (`D63`, `D64`).                                                                                                                  |
 
 ## 3. Контракты пакетов
 
@@ -285,6 +288,11 @@ type Substitution struct {
   находка есть, текст не меняется.
 - `canonicalize(text) string`: NFKC (`golang.org/x/text/unicode/norm`), case-fold,
   удаление zero-width/bidi, фолдинг кириллических гомоглифов, нормализация цифр.
+- `canonicalizeMap(text) (string, runeSpans)`: то же плюс диапазон исходных рун для
+  каждой канонической руны; `canonicalize` — тонкая обёртка над ней (I-21, D63).
+- `NaturalText` — необязательная возможность `Detector`: слой, у которого
+  `UsesNaturalText() == true`, получает исходный текст, остальные — канонический;
+  `guard/gliner` её объявляет (I-03, D64).
 - `decodedVariants(text) []string`: base64/hex/percent-encoded фрагменты,
   декодированные и переданные повторно в L1.
 - L1 (`guard/rules`) дополняется: `Luhn` для карт, `IBAN mod-97`, `CVV`,
@@ -681,7 +689,7 @@ README описывают именно это поведение.
 ### 5.3 `guard`
 
 - `Detector.Detect(ctx, text)` — без рельса (I-02); детекция один раз, решение по
-  таблице `decide(rail, findings)`; кэш по каноническому тексту и версии.
+  таблице `decide(rail, findings)`; кэш по инспектируемому тексту и версии (D66).
 - `Canonicalize`, `DecodedVariants` (I-03); `Action` дополнен `Detect`;
   `Verdict.Tripwire`, `Verdict.Version`; `Tripwire{Reason, RuleID, Metadata}`;
   `Options.Version`, `Options.OnViolation`, `Pipeline.Version()`.
@@ -699,6 +707,15 @@ README описывают именно это поведение.
   `fold` → снова NFKC (D56).
 - `Options.WindowChars` — окно детекции: текст длиннее сканируется перекрывающимися
   окнами (D60); `DefaultWindowChars` = 1024.
+- `canonicalizeMap` + `remapSpan`: находки L1 переводятся из канонического
+  пространства в исходное, поэтому маска накрывает весь сопоставленный диапазон
+  (I-21, D63).
+- `NaturalText`: L2 (`UsesNaturalText() == true`) получает исходный текст, L1 —
+  канонический (I-03, D64). Окно 1024 руны ≈ 275 токенов при потолке 512, поэтому
+  `prepare` ничего не отбрасывает (`TestWindowFitsTokenBudget`, BR-70).
+- Группы классификации учитывают роль: информационные задачи (`intent`, `tone` и т. п.)
+  без явного `category_map` вердикта не дают; `thresholdFor` предпочитает порог
+  метки, затем `threshold`, затем `cls_threshold` экспорта (D65).
 
 ### 5.4 `embed`
 
@@ -930,9 +947,21 @@ AllowedOrigins, Logger})`, `mcp.ServerTool`, `mcp.FromTool(app, def)`,
 ### 5.18 Окно детекции, fail-closed `ValidateOutput`, русский анализатор (D60–D62)
 
 - `guard.Options.WindowChars` (дефолт `DefaultWindowChars` = 1024,
-  `Config.GuardWindowChars`): `Pipeline.windows` режет канонический текст на
-  перекрывающиеся окна, находки смещаются на смещение окна и дедуплицируются.
+  `Config.GuardWindowChars`): `Pipeline.windows` режет поток слоя на перекрывающиеся
+  окна (L1 — канонический текст, L2 — исходный), находки смещаются на смещение окна
+  и дедуплицируются.
 - `ValidateOutput(true)` — fail-closed: несовпадение со схемой `Out` даёт модели
   error-result и помечает ход недоверенным (раньше — только `slog.Warn`).
 - `store.ChunksIndexBody`/`MemoryMessagesIndexBody` создают текстовые поля с
   анализатором `russian` (`textField()`).
+
+### 5.19 Смещения находок, раздельные потоки, роль группы (D63–D66)
+
+- `canonicalizeMap(text) (string, runeSpans)`; `remapSpan(sp, start, end, total)`;
+  `Pipeline.detect` отображает находки канонических слоёв назад в исходный текст, а
+  слой с `UsesNaturalText()` получает исходный текст напрямую (D63, D64).
+- `guard.NaturalText` (`UsesNaturalText() bool`); `gliner.Detector` его реализует (D64).
+- `categoryForClass(cm, task, label)` учитывает `task` группы; `informationalTasks`
+  перечисляет неверсионные задачи; `thresholdFor(clsThreshold, threshold, thresholds,
+label)` читает `cls_threshold` (D65).
+- `Pipeline.cacheKey(inspected)` — ключ по инспектируемому тексту и версии (D66).

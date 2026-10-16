@@ -112,6 +112,21 @@ type Detector interface {
 	Name() string
 }
 
+// NaturalText is an optional Detector capability. A detector that reports true is
+// handed the text as written instead of the canonical form. Canonicalisation
+// transliterates (case folding, Cyrillic→Latin homoglyph folding), which is out of
+// distribution for a model trained on natural text, so the ML layer opts out while
+// the deterministic layer keeps the canonical form (I-21).
+type NaturalText interface {
+	Detector
+	UsesNaturalText() bool
+}
+
+func usesNaturalText(d Detector) bool {
+	n, ok := d.(NaturalText)
+	return ok && n.UsesNaturalText()
+}
+
 const (
 	DefaultMaxChars  = 8000
 	DefaultCacheSize = 4096
@@ -182,12 +197,13 @@ func (p *Pipeline) Check(ctx context.Context, rail Rail, text string) (Verdict, 
 		return Verdict{Action: Allow, Rail: rail, Text: text, Version: p.version}, nil
 	}
 	inspected := truncateRunes(text, p.maxChars)
-	key := p.cacheKey(Canonicalize(inspected))
+	canonical, spans := canonicalizeMap(inspected)
+	key := p.cacheKey(inspected)
 
 	findings, ok := p.cache.get(key)
 	var degraded []string
 	if !ok {
-		fs, deg, err := p.detect(ctx, inspected, utf8.RuneCountInString(text))
+		fs, deg, err := p.detect(ctx, inspected, canonical, spans, utf8.RuneCountInString(text))
 		if err != nil {
 			return Verdict{}, err
 		}
@@ -208,11 +224,17 @@ func (p *Pipeline) Check(ctx context.Context, rail Rail, text string) (Verdict, 
 	return v, nil
 }
 
-func (p *Pipeline) cacheKey(canonical string) string {
+// cacheKey keys a verdict on the guard version and the text as inspected. A
+// finding carries offsets into the original text, so a verdict is a function of
+// the inspected text, not of the canonical form alone: two texts that canonicalise
+// alike but differ in layout — a zero-width rune, a combining sequence — must not
+// share findings, or a mask would cover the wrong runes and leak a span's tail
+// (D66).
+func (p *Pipeline) cacheKey(inspected string) string {
 	h := sha256.New()
 	h.Write([]byte(p.version))
 	h.Write([]byte{0})
-	h.Write([]byte(canonical))
+	h.Write([]byte(inspected))
 	return string(h.Sum(nil))
 }
 
@@ -226,29 +248,37 @@ func truncateRunes(text string, max int) string {
 	return text
 }
 
-func (p *Pipeline) detect(ctx context.Context, inspected string, total int) ([]Finding, []string, error) {
-	canonical := Canonicalize(inspected)
-
+func (p *Pipeline) detect(ctx context.Context, inspected, canonical string, spans runeSpans, total int) ([]Finding, []string, error) {
 	var findings []Finding
 	var degraded []string
-	failed := make(map[string]bool)
-	for _, w := range p.windows(canonical) {
-		for _, layer := range p.layers {
-			if failed[layer.Name()] {
-				continue
-			}
+
+	// One stream per layer: the deterministic layer reads the canonical text so
+	// homoglyph and zero-width evasion cannot slip past a pattern, the ML layer
+	// reads the text as written because transliteration is out of distribution for
+	// it. Canonical findings are mapped back to the original rune space, so every
+	// finding is expressed in the offsets of the text that is masked (I-21).
+	for _, layer := range p.layers {
+		raw := usesNaturalText(layer)
+		stream := canonical
+		if raw {
+			stream = inspected
+		}
+		for _, w := range p.windows(stream) {
 			fs, err := layer.Detect(ctx, w.text)
 			if err != nil {
 				if p.optional[layer.Name()] {
-					failed[layer.Name()] = true
 					degraded = append(degraded, layer.Name()+": "+err.Error())
-					continue
+					break
 				}
 				return nil, nil, fmt.Errorf("guard: layer %s: %w", layer.Name(), err)
 			}
 			for _, f := range fs {
-				f.Start += w.offset
-				f.End += w.offset
+				if raw {
+					f.Start += w.offset
+					f.End += w.offset
+				} else {
+					f.Start, f.End = remapSpan(spans, f.Start+w.offset, f.End+w.offset, total)
+				}
 				findings = append(findings, f)
 			}
 			if rejectCapable(fs) {
@@ -280,6 +310,29 @@ func (p *Pipeline) detect(ctx context.Context, inspected string, total int) ([]F
 		}
 	}
 	return dedupe(findings), degraded, nil
+}
+
+// remapSpan maps a canonical span back to the original rune space. It returns the
+// full source range of the matched canonical runes, so a rune that
+// canonicalisation moved or dropped is inside the span rather than just outside it
+// and a mask cannot leak the tail of a match.
+func remapSpan(sp runeSpans, start, end, total int) (int, int) {
+	if start < 0 {
+		start = 0
+	}
+	if end < start {
+		end = start
+	}
+	if start >= sp.len() {
+		return total, total
+	}
+	if end > sp.len() {
+		end = sp.len()
+	}
+	if end <= start {
+		return sp.start[start], sp.start[start]
+	}
+	return sp.start[start], sp.end[end-1]
 }
 
 type window struct {

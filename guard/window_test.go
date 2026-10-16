@@ -117,6 +117,25 @@ func TestPipelineWindowingRejectsFromTheTail(t *testing.T) {
 	}
 }
 
+func TestDefaultWindowSplitsLongText(t *testing.T) {
+	d := &windowDetector{marker: "zz-no-match", budget: 1 << 20}
+	p, err := New(Options{Layers: []Detector{d}, MaxChars: 8000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Check(context.Background(), RailInput, strings.Repeat("обработка ", 400)); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.seen) < 2 {
+		t.Fatalf("the default window must split a long input: %d call(s)", len(d.seen))
+	}
+	for _, w := range d.seen {
+		if n := len([]rune(w)); n > DefaultWindowChars {
+			t.Fatalf("window of %d runes exceeds DefaultWindowChars (%d)", n, DefaultWindowChars)
+		}
+	}
+}
+
 func TestDedupeKeepsDistinctFindings(t *testing.T) {
 	same := Finding{Category: CatPII, Label: "SNILS", Start: 1, End: 5, Layer: "L1"}
 	other := Finding{Category: CatUnsafe, Label: "TOXIC", Start: 1, End: 5, Layer: "L1"}
