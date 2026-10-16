@@ -34,7 +34,8 @@ type Result struct {
 }
 
 func Run(ctx context.Context, rec *trace.Recorder, cases []Case,
-	run func(ctx context.Context, input string) error) []Result {
+	run func(ctx context.Context, input string) error,
+) []Result {
 	results := make([]Result, 0, len(cases))
 	for _, c := range cases {
 		results = append(results, runCase(ctx, rec, c, run))
@@ -43,7 +44,8 @@ func Run(ctx context.Context, rec *trace.Recorder, cases []Case,
 }
 
 func runCase(ctx context.Context, rec *trace.Recorder, c Case,
-	run func(ctx context.Context, input string) error) Result {
+	run func(ctx context.Context, input string) error,
+) Result {
 	start := time.Now()
 	res := Result{Name: c.Name}
 	if rec == nil {

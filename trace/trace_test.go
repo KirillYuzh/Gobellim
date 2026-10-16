@@ -115,7 +115,7 @@ func TestWriterBatchTriggersFlush(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close(context.Background())
+	defer func() { _ = w.Close(context.Background()) }()
 
 	w.Enqueue(Trace{ID: "1"})
 	w.Enqueue(Trace{ID: "2"})

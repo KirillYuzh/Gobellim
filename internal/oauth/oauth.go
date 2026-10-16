@@ -58,7 +58,7 @@ func (ts *TokenSource) Token(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("oauth: request: %w", errors.Join(err, core.ErrProvider))
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("oauth: status %d: %w", resp.StatusCode, core.ErrProvider)
 	}

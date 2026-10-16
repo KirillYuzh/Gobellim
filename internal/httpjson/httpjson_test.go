@@ -30,8 +30,16 @@ func TestStatusErrorRetryable(t *testing.T) {
 		code int
 		want bool
 	}{
-		{400, false}, {401, false}, {404, false}, {409, false}, {422, false},
-		{408, true}, {425, true}, {429, true}, {500, true}, {503, true},
+		{400, false},
+		{401, false},
+		{404, false},
+		{409, false},
+		{422, false},
+		{408, true},
+		{425, true},
+		{429, true},
+		{500, true},
+		{503, true},
 	}
 	for _, c := range cases {
 		if got := (&StatusError{StatusCode: c.code}).IsRetryable(); got != c.want {

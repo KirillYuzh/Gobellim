@@ -84,7 +84,7 @@ func LoadFileConfig(path string) (Preset, error) {
 	if err != nil {
 		return Preset{}, fmt.Errorf("embed: open %s: %w: %w", path, err, core.ErrInvalidConfig)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	dec := json.NewDecoder(f)
 	dec.DisallowUnknownFields()

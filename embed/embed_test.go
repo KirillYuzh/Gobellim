@@ -116,7 +116,7 @@ func TestOpenAIEmbedderAppliesPrefixAndNormalizes(t *testing.T) {
 			if i != len(body.Input)-1 {
 				_, _ = io.WriteString(w, ",")
 			}
-			fmt.Fprintf(w, `{"index":%d,"embedding":[3,4]}`, i)
+			_, _ = fmt.Fprintf(w, `{"index":%d,"embedding":[3,4]}`, i)
 		}
 		_, _ = io.WriteString(w, `]}`)
 	}))
@@ -154,7 +154,7 @@ func TestOpenAIEmbedderAppliesPrefixAndNormalizes(t *testing.T) {
 func TestGigaChatEmbedder(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/oauth", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, `{"access_token":"tok","expires_at":%d}`, time.Now().Add(time.Hour).UnixMilli())
+		_, _ = fmt.Fprintf(w, `{"access_token":"tok","expires_at":%d}`, time.Now().Add(time.Hour).UnixMilli())
 	})
 	mux.HandleFunc("/v1/embeddings", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer tok" {

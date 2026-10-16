@@ -13,7 +13,7 @@ func newGigaServer(t *testing.T, chat http.HandlerFunc) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/oauth", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, `{"access_token":"tok","expires_at":%d}`, time.Now().Add(time.Hour).UnixMilli())
+		_, _ = fmt.Fprintf(w, `{"access_token":"tok","expires_at":%d}`, time.Now().Add(time.Hour).UnixMilli())
 	})
 	mux.HandleFunc("/v1/chat/completions", chat)
 	return httptest.NewServer(mux)

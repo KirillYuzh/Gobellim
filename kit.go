@@ -1111,7 +1111,8 @@ func Generate[T any](ctx context.Context, app *App, req GenerateRequest[T]) (Gen
 }
 
 func (a *App) structure(ctx context.Context, sm model.Client, schema json.RawMessage, mode model.SchemaMode,
-	maxTokens int, temperature *float64, prose, traceID string) (string, error) {
+	maxTokens int, temperature *float64, prose, traceID string,
+) (string, error) {
 	return call.Do(ctx, a.calls, call.Req{
 		Kind: call.KindLLM, Name: sm.Model(), Model: sm.Model(), TraceID: traceID,
 	}, func(ctx context.Context, span *call.Span) (string, error) {

@@ -142,7 +142,7 @@ func (f *fetcher) fetch(ctx context.Context, rawURL string) (Out, error) {
 	if err != nil {
 		return Out{}, fmt.Errorf("webfetch: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, f.cfg.MaxBytes+1))
 	if err != nil {

@@ -52,7 +52,6 @@ func usage() {
 }
 
 func runPolicy(args []string) int {
-
 	rest := args
 	if len(rest) > 0 && rest[0] == "check" {
 		rest = rest[1:]
@@ -126,7 +125,7 @@ func download(ctx context.Context, hc *http.Client, url, path string) error {
 	if err != nil {
 		return fmt.Errorf("download %s: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download %s: status %d", url, resp.StatusCode)
 	}
@@ -139,8 +138,8 @@ func download(ctx context.Context, hc *http.Client, url, path string) error {
 		return err
 	}
 	if _, err := io.Copy(f, resp.Body); err != nil {
-		f.Close()
-		os.Remove(tmp)
+		_ = f.Close()
+		_ = os.Remove(tmp)
 		return fmt.Errorf("write %s: %w", tmp, err)
 	}
 	if err := errors.Join(f.Close(), os.Rename(tmp, path)); err != nil {

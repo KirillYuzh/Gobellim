@@ -37,7 +37,6 @@ type issued struct {
 
 type Tokens struct {
 	mu    sync.Mutex
-	grace time.Duration
 	byKey map[string]issued
 }
 

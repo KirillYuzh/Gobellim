@@ -153,7 +153,7 @@ func doOnce(ctx context.Context, hc *http.Client, method, url string, headers ma
 	if err != nil {
 		return fmt.Errorf("%s %s: %w", method, url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, limit))
 	if err != nil {
 		return fmt.Errorf("read response: %w", err)

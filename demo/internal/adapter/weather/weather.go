@@ -44,7 +44,7 @@ func (c *Client) Current(ctx context.Context, city string) (domain.Weather, erro
 	if err != nil {
 		return domain.Weather{}, fmt.Errorf("weather: %w: %w", err, domain.ErrUnavailable)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 	if err != nil {

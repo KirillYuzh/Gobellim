@@ -235,7 +235,7 @@ func printLatencyReport(dir string, iterations, warmup, maxChars int, l2Note, rs
 
 	fmt.Println("milliseconds; L1 = guard/rules only, L1+L2 = guard/rules + gliner; Δ = L1+L2 − L1 (the model's own cost)")
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "item\trunes\taction\tfindings\tL1 p50\tL1 p95\tL1 p99\tL1 mean\tL1+L2 p50\tL1+L2 p95\tL1+L2 p99\tL1+L2 mean\tΔp50\tΔmean")
+	_, _ = fmt.Fprintln(w, "item\trunes\taction\tfindings\tL1 p50\tL1 p95\tL1 p99\tL1 mean\tL1+L2 p50\tL1+L2 p95\tL1+L2 p99\tL1+L2 mean\tΔp50\tΔmean")
 	for ii, it := range items {
 		cells := []string{it.name, strconv.Itoa(l1.perItem[ii].runes), l1.perItem[ii].action.String(), strconv.Itoa(l1.perItem[ii].findings)}
 		cells = append(cells, statCells(summarize(l1.perItem[ii].ms))...)
@@ -245,7 +245,7 @@ func printLatencyReport(dir string, iterations, warmup, maxChars int, l2Note, rs
 		} else {
 			cells = append(cells, "n/a", "n/a", "n/a", "n/a", "n/a", "n/a")
 		}
-		fmt.Fprintln(w, strings.Join(cells, "\t"))
+		_, _ = fmt.Fprintln(w, strings.Join(cells, "\t"))
 	}
 	overall := []string{"overall (pooled)", "", "", ""}
 	overall = append(overall, statCells(summarize(l1.pooled))...)
@@ -255,8 +255,8 @@ func printLatencyReport(dir string, iterations, warmup, maxChars int, l2Note, rs
 	} else {
 		overall = append(overall, "n/a", "n/a", "n/a", "n/a", "n/a", "n/a")
 	}
-	fmt.Fprintln(w, strings.Join(overall, "\t"))
-	w.Flush()
+	_, _ = fmt.Fprintln(w, strings.Join(overall, "\t"))
+	_ = w.Flush()
 
 	fmt.Printf("\ndocumented target: p50 <= 150 ms, p95 <= 400 ms at <=512 tokens on 4 vCPU (this host reports %d CPU(s))\n", runtime.NumCPU())
 }
