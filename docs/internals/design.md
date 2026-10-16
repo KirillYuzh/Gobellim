@@ -199,6 +199,12 @@ type Sampler func(traceID string) bool
 var SamplerAlways Sampler = func(string) bool { return true }
 var SamplerNever  Sampler = func(string) bool { return false }
 func SamplerRatio(p float64) Sampler   // решение детерминировано по trace_id
+func SamplerFromString(s string) (Sampler, error) // "always" | "never" | "ratio:<p>"
+
+type Fanout []Sink // композиция нескольких sink'ов
+func NewFanout(sinks ...Sink) Fanout
+
+func NewOTLP(opts OTLPOptions) (*OTLP, error) // OTLP/HTTP JSON, stdlib
 ```
 
 `Options` дополняется:
@@ -351,6 +357,12 @@ func SupportsNativeSchema(client Client) bool
 type Streamer interface {
 	Client
 	ChatStream(ctx context.Context, req Request, onDelta func(string) error) (Response, error)
+}
+
+// ContextWindow — необязательное расширение Client (I-06): kit.New сверяет окно
+// guard с ContextTokens() и отказывает, если оно шире.
+type ContextWindow interface {
+	ContextTokens() int
 }
 ```
 
