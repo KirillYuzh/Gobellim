@@ -249,7 +249,7 @@ func writeError(w http.ResponseWriter, err error) {
 | --------------------- | -------------------------------------------------------- |
 | `ErrTool`             | падение внутри инструмента                               |
 | `ErrBudget`           | превышен `MaxTotalTokens` хода                           |
-| `ErrRateLimited`      | провайдер вернул 429 (учитывается `Retry-After`)         |
+| `ErrRateLimited`      | исчерпан лимит на тенанта (`Config.RateLimit`)           |
 | `ErrApprovalRequired` | инструменту нужно подтверждение, а `Approver` его не дал |
 
 ## Дальше

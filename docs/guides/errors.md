@@ -20,16 +20,18 @@
 | `ErrInvalidArgs`      | args не JSON или не прошли схему; пустой `SearchRequest.Query`; нет `user`/`assistant`; пустой `doc_id` | детерминированный |
 | `ErrMaxSteps`         | исчерпан `MaxSteps` цикла                                                                               | цикл              |
 | `ErrBudget`           | превышен `Config.MaxTotalTokens` за ход                                                                 | цикл              |
+| `ErrRateLimited`      | исчерпан лимит на тенанта (`Config.RateLimit`, `BR-86`)                                                 | примитив / ops    |
 | `ErrApprovalRequired` | инструмент с `RequireApproval` без `Approver`, отказ или повтор fingerprint                             | approval          |
 | `ErrToolNotFound`     | **зарезервирован** (сейчас неизвестный инструмент → результат-ошибка)                                   | —                 |
 | `ErrTool`             | **зарезервирован** (сейчас сбой инструмента → результат-ошибка)                                         | —                 |
-| `ErrRateLimited`      | **зарезервирован** (429 провайдера обрабатывает HTTP-слой, `I-09`)                                      | —                 |
 | `ErrNotFound`         | **зарезервирован** для приложения и адаптеров                                                           | —                 |
 
 > [!NOTE]
-> Четыре зарезервированных sentinel’а объявлены и размечаются (`error_kind`), но
-> операции фасада их сейчас не возвращают. Не строите логику на том, что
-> `ErrRateLimited` придёт из `App.Chat`.
+> Три зарезервированных sentinel’а (`ErrToolNotFound`, `ErrTool`, `ErrNotFound`)
+> объявлены и размечаются (`error_kind`), но операции фасада их сейчас не
+> возвращают. `ErrRateLimited` — действующий: его возвращает лимит на тенанта
+> (`Config.RateLimit`); 429 провайдера обрабатывает HTTP-слой (`Retry-After`), а
+> после исчерпания ретраев он приходит как `ErrProvider`.
 
 ## `errors.Is` против `errors.As`
 
@@ -304,16 +306,16 @@ func userFacingToolError(err error) string {
 - **Считать, что непустая ошибка значит «модель ошиблась».** `ErrBudget`,
   `ErrMaxSteps` и `ErrGuardReject` — про ваши лимиты и вход, а `ErrUnauthorized` —
   про права; это не «модель». Сортируйте по `errors.Is`, а не по тексту.
-- **Ждать `ErrRateLimited` из `App.Chat`.** Его там нет: 429 обрабатывает
-  HTTP-слой провайдера (через `Retry-After`).
+- **Путать `ErrRateLimited` с 429 провайдера.** `ErrRateLimited` возвращает
+  лимит на тенанта (`Config.RateLimit`); 429 провайдера ретраит HTTP-слой
+  (`Retry-After`), а после исчерпания ретраев он приходит как `ErrProvider`.
 - **Пробрасывать `err.Error()` в UI.** Тексты содержат внутренние детали (имена
   правил, пути, статусы); наружу — только классы.
 
 ## Ограничения
 
-- Четыре зарезервированных sentinel’а (`ErrToolNotFound`, `ErrTool`,
-  `ErrRateLimited`, `ErrNotFound`) операции фасада не возвращают; на них нельзя
-  опираться в вызывающем коде.
+- Три зарезервированных sentinel’а (`ErrToolNotFound`, `ErrTool`, `ErrNotFound`)
+  операции фасада не возвращают; на них нельзя опираться в вызывающем коде.
 - Повтор (ретрай) есть только на уровне HTTP-транспорта провайдера; идемпотентности
   операций фасада `kit` не гарантирует.
 - Нет отдельных sentinel’ов для «частичного успеха» `_bulk`/`_delete_by_query`:
