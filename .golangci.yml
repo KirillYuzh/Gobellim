@@ -1,0 +1,264 @@
+# golangci-lint configuration for kit (module github.com/gobellim/kit).
+#
+# The dependency rules below mirror docs/internals/architecture.md §«Пакеты»
+# and invariant I-13 (docs/internals/design.md). The very same rules are checked
+# by a stdlib-only test in internal/importrules; the depguard rules here make
+# `golangci-lint run` catch them too, outside `go test`.
+#
+# Format: golangci-lint v2 (requires golangci-lint >= v2.1.0).
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  # Report and match paths relative to go.mod so depguard file globs below are
+  # stable no matter where the linter is invoked from.
+  relative-path-mode: gomod
+
+linters:
+  # Start from nothing and enable an explicit, curated set.
+  default: none
+  enable:
+    - bodyclose # HTTP response bodies are closed
+    - depguard # import rules (I-13)
+    - errcheck # unchecked errors
+    - errorlint # error wrapping / errors.Is-As correctness
+    - gosec # security (I-13)
+    - govet # the vet suite
+    - ineffassign # ineffectual assignments
+    - misspell # common English misspellings
+    - revive # golint successor, minimal ruleset below
+    - staticcheck # staticcheck
+    - unused # unused code
+  settings:
+    gosec:
+      # Drop low-signal findings (e.g. G404 math/rand) but keep real issues.
+      severity: medium
+      confidence: medium
+    revive:
+      # A deliberately small ruleset: high-signal correctness rules only, so
+      # the existing codebase is not drowned in style noise. Defining rules
+      # here replaces revive's defaults.
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: range
+        - name: superfluous-else
+        - name: unreachable-code
+    depguard:
+      rules:
+        # ------------------------------------------------------------------
+        # Core family — architecture.md rule 2: authz, guard (with guard/**),
+        # model, embed, chunk, store and trace must not import each other.
+        # Rule 3 exception: trace -> store only. (guard/embed -> internal/ort
+        # are allowed because internal/ort is a leaf, not a core-family pkg.)
+        # ------------------------------------------------------------------
+        core-authz:
+          files:
+            - "authz/**"
+          deny:
+            - pkg: github.com/gobellim/kit/guard
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/model
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/embed
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/chunk
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/store
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/trace
+              desc: "core-family packages must not import each other (I-13)"
+        core-guard:
+          files:
+            - "guard/**"
+          deny:
+            - pkg: github.com/gobellim/kit/authz
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/model
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/embed
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/chunk
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/store
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/trace
+              desc: "core-family packages must not import each other (I-13)"
+        core-model:
+          files:
+            - "model/**"
+          deny:
+            - pkg: github.com/gobellim/kit/authz
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/guard
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/embed
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/chunk
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/store
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/trace
+              desc: "core-family packages must not import each other (I-13)"
+        core-embed:
+          files:
+            - "embed/**"
+          deny:
+            - pkg: github.com/gobellim/kit/authz
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/guard
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/model
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/chunk
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/store
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/trace
+              desc: "core-family packages must not import each other (I-13)"
+        core-chunk:
+          files:
+            - "chunk/**"
+          deny:
+            - pkg: github.com/gobellim/kit/authz
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/guard
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/model
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/embed
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/store
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/trace
+              desc: "core-family packages must not import each other (I-13)"
+        core-store:
+          files:
+            - "store/**"
+          deny:
+            - pkg: github.com/gobellim/kit/authz
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/guard
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/model
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/embed
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/chunk
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/trace
+              desc: "core-family packages must not import each other (I-13)"
+        core-trace:
+          files:
+            - "trace/**"
+          # trace -> store is the documented exception (rule 3), so store is the
+          # one core package deliberately absent from this deny list.
+          deny:
+            - pkg: github.com/gobellim/kit/authz
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/guard
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/model
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/embed
+              desc: "core-family packages must not import each other (I-13)"
+            - pkg: github.com/gobellim/kit/chunk
+              desc: "core-family packages must not import each other (I-13)"
+
+        # ------------------------------------------------------------------
+        # Leaves — architecture.md rule 5: internal/core, internal/id,
+        # internal/httpjson, internal/oauth, internal/ort and internal/importrules
+        # may import other internal/** packages and nothing else in the module.
+        # ------------------------------------------------------------------
+        internal-leaves:
+          files:
+            - "internal/core/**"
+            - "internal/id/**"
+            - "internal/httpjson/**"
+            - "internal/oauth/**"
+            - "internal/ort/**"
+            - "internal/importrules/**"
+          deny:
+            - pkg: github.com/gobellim/kit$
+              desc: "internal leaves must not import the kit façade (I-13)"
+            - pkg: github.com/gobellim/kit/authz
+              desc: "internal leaves may import only internal/** (I-13)"
+            - pkg: github.com/gobellim/kit/guard
+              desc: "internal leaves may import only internal/** (I-13)"
+            - pkg: github.com/gobellim/kit/model
+              desc: "internal leaves may import only internal/** (I-13)"
+            - pkg: github.com/gobellim/kit/embed
+              desc: "internal leaves may import only internal/** (I-13)"
+            - pkg: github.com/gobellim/kit/chunk
+              desc: "internal leaves may import only internal/** (I-13)"
+            - pkg: github.com/gobellim/kit/store
+              desc: "internal leaves may import only internal/** (I-13)"
+            - pkg: github.com/gobellim/kit/trace
+              desc: "internal leaves may import only internal/** (I-13)"
+            - pkg: github.com/gobellim/kit/eval
+              desc: "internal leaves may import only internal/** (I-13)"
+            - pkg: github.com/gobellim/kit/cmd
+              desc: "internal leaves may import only internal/** (I-13)"
+            - pkg: github.com/gobellim/kit/demo
+              desc: "internal leaves may import only internal/** (I-13)"
+
+        # ------------------------------------------------------------------
+        # eval — architecture.md rule 4: eval imports trace and internal/** only
+        # and must never import the kit façade (so it runs under `go test`).
+        # ------------------------------------------------------------------
+        eval:
+          files:
+            - "eval/**"
+          deny:
+            - pkg: github.com/gobellim/kit$
+              desc: "eval must not import the kit façade (I-13)"
+            - pkg: github.com/gobellim/kit/authz
+              desc: "eval may import only trace and internal/** (I-13)"
+            - pkg: github.com/gobellim/kit/guard
+              desc: "eval may import only trace and internal/** (I-13)"
+            - pkg: github.com/gobellim/kit/model
+              desc: "eval may import only trace and internal/** (I-13)"
+            - pkg: github.com/gobellim/kit/embed
+              desc: "eval may import only trace and internal/** (I-13)"
+            - pkg: github.com/gobellim/kit/chunk
+              desc: "eval may import only trace and internal/** (I-13)"
+            - pkg: github.com/gobellim/kit/store
+              desc: "eval may import only trace and internal/** (I-13)"
+            - pkg: github.com/gobellim/kit/cmd
+              desc: "eval may import only trace and internal/** (I-13)"
+            - pkg: github.com/gobellim/kit/demo
+              desc: "eval may import only trace and internal/** (I-13)"
+
+        # ------------------------------------------------------------------
+        # Any internal/** package must not import the root kit façade: that
+        # would be an import cycle (I-13). Internal packages other than the
+        # leaves (only internal/call today) may still import guard/trace.
+        # ------------------------------------------------------------------
+        internal-no-facade:
+          files:
+            - "internal/**"
+          deny:
+            - pkg: github.com/gobellim/kit$
+              desc: "no file under internal/ may import the kit façade (I-13, cycle risk)"
+
+# gofumpt formatting is enforced by the formatter; see the CI `fumpt` job and
+# the Makefile `check` target, which run `gofumpt -l`.
+formatters:
+  enable:
+    - gofumpt
+  settings:
+    gofumpt:
+      module-path: github.com/gobellim/kit
+
+issues:
+  # Report every issue, not a truncated sample.
+  max-issues-per-linter: 0
+  max-same-issues: 0
