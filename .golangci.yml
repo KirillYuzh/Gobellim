@@ -35,6 +35,22 @@ linters:
       # Drop low-signal findings (e.g. G404 math/rand) but keep real issues.
       severity: medium
       confidence: medium
+      # These rules flag deliberate, non-vulnerable patterns in this module, so
+      # their premise (attacker-controlled input) does not hold:
+      #   G304 — paths are ordinary API/CLI inputs (a policy file, a models dir),
+      #          not tainted data; a library cannot meaningfully sanitise them.
+      #   G204 — the only subprocess is `ps` with constant arguments and our own
+      #          PID, so nothing is interpolated from user input.
+      #   G404 — math/rand is used for retry backoff jitter, never for secrets.
+      #   G115 — os.Getpid() always fits in uint32.
+      #   G301 — the model cache directory is intentionally created 0755 next to
+      #          a caller-specified download path.
+      excludes:
+        - G304
+        - G204
+        - G404
+        - G115
+        - G301
     revive:
       # A deliberately small ruleset: high-signal correctness rules only, so
       # the existing codebase is not drowned in style noise. Defining rules
@@ -248,6 +264,18 @@ linters:
           deny:
             - pkg: github.com/gobellim/kit$
               desc: "no file under internal/ may import the kit façade (I-13, cycle risk)"
+
+  exclusions:
+    rules:
+      # SA4023 — the non-ort stubs of gliner.CheckParity and kitctl's
+      # newL2Detector always return an error, so their `err != nil` guards look
+      # like constant comparisons to staticcheck. The guards are deliberate and
+      # correct under both build tags (with and without ort); these are
+      # build-tag artefacts, not bugs.
+      - path: 'cmd/kitctl/(latency|verify)\.go'
+        linters:
+          - staticcheck
+        text: "SA4023"
 
 # gofumpt formatting is enforced by the formatter; see the CI `fumpt` job and
 # the Makefile `check` target, which run `gofumpt -l`.
