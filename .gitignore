@@ -35,5 +35,3 @@ models/
 # Editor/IDE
 # .idea/
 # .vscode/
-
-docs/internals

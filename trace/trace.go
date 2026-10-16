@@ -1,4 +1,3 @@
-// Package trace writes Langfuse-shaped traces to Elasticsearch.
 package trace
 
 import "time"
@@ -40,10 +39,16 @@ type Observation struct {
 	GuardRail       string
 	GuardAction     string
 	GuardCategories []string
+	Tags            []string
 	StartTime       time.Time
 	EndTime         time.Time
 	Usage           Usage
 	Metadata        map[string]any
+
+	GuardVersion string
+	GuardModel   string
+	PolicyHash   string
+	TextPolicy   TextPolicy
 }
 
 type Trace struct {
@@ -59,6 +64,11 @@ type Trace struct {
 	EndTime   time.Time
 	Usage     Usage
 	Metadata  map[string]any
+
+	GuardVersion string
+	GuardModel   string
+	PolicyHash   string
+	TextPolicy   TextPolicy
 }
 
 type Score struct {
@@ -69,7 +79,28 @@ type Score struct {
 	Timestamp time.Time
 }
 
-func (t Trace) document() map[string]any {
+func usageDoc(u Usage) map[string]any {
+	return map[string]any{
+		"prompt_tokens":     u.PromptTokens,
+		"completion_tokens": u.CompletionTokens,
+		"total_tokens":      u.TotalTokens,
+		"cost":              u.Cost,
+	}
+}
+
+func putAudit(doc map[string]any, version, model, policyHash string) {
+	if version != "" {
+		doc["guard_version"] = version
+	}
+	if model != "" {
+		doc["guard_model"] = model
+	}
+	if policyHash != "" {
+		doc["policy_hash"] = policyHash
+	}
+}
+
+func (t Trace) document(cfg exportConfig) map[string]any {
 	start := t.StartTime
 	if start.IsZero() {
 		start = time.Now().UTC()
@@ -78,27 +109,37 @@ func (t Trace) document() map[string]any {
 	if end.IsZero() {
 		end = start
 	}
-	return map[string]any{
-		"@timestamp": end.UTC().Format(time.RFC3339Nano),
-		"trace_id":   t.ID,
-		"name":       t.Name,
-		"user_id":    t.UserID,
-		"session_id": t.SessionID,
-		"tenant":     t.Tenant,
-		"input":      t.Input,
-		"output":     t.Output,
-		"tags":       t.Tags,
-		"metadata":   t.Metadata,
-		"usage": map[string]any{
-			"prompt_tokens":     t.Usage.PromptTokens,
-			"completion_tokens": t.Usage.CompletionTokens,
-			"total_tokens":      t.Usage.TotalTokens,
-			"cost":              t.Usage.Cost,
-		},
+
+	input := cfg.clip(t.Input)
+	output := cfg.clip(t.Output)
+	if cfg.hideInput {
+		input = ""
 	}
+	if cfg.hideOutput {
+		output = ""
+	}
+
+	doc := map[string]any{
+		"@timestamp":  end.UTC().Format(time.RFC3339Nano),
+		"trace_id":    t.ID,
+		"name":        t.Name,
+		"user_id":     t.UserID,
+		"session_id":  t.SessionID,
+		"tenant":      t.Tenant,
+		"input":       input,
+		"output":      output,
+		"metadata":    cfg.truncate(t.Metadata),
+		"usage":       usageDoc(t.Usage),
+		"text_policy": t.TextPolicy.String(),
+	}
+	if len(t.Tags) > 0 {
+		doc["tags"] = t.Tags
+	}
+	putAudit(doc, t.GuardVersion, t.GuardModel, t.PolicyHash)
+	return doc
 }
 
-func (o Observation) document() map[string]any {
+func (o Observation) document(cfg exportConfig) map[string]any {
 	start := o.StartTime
 	if start.IsZero() {
 		start = time.Now().UTC()
@@ -111,6 +152,16 @@ func (o Observation) document() map[string]any {
 	if level == "" {
 		level = LevelDefault
 	}
+
+	input := cfg.clip(o.Input)
+	output := cfg.clip(o.Output)
+	if cfg.hideInput {
+		input = ""
+	}
+	if cfg.hideOutput {
+		output = ""
+	}
+
 	doc := map[string]any{
 		"@timestamp":        end.UTC().Format(time.RFC3339Nano),
 		"trace_id":          o.TraceID,
@@ -120,9 +171,9 @@ func (o Observation) document() map[string]any {
 		"kind":              string(o.Kind),
 		"level":             string(level),
 		"model":             o.Model,
-		"input":             o.Input,
-		"output":            o.Output,
-		"status_message":    o.StatusMessage,
+		"input":             input,
+		"output":            output,
+		"status_message":    cfg.clip(o.StatusMessage),
 		"start_time":        start.UTC().Format(time.RFC3339Nano),
 		"end_time":          end.UTC().Format(time.RFC3339Nano),
 		"latency_ms":        float64(end.Sub(start)) / float64(time.Millisecond),
@@ -130,7 +181,11 @@ func (o Observation) document() map[string]any {
 		"completion_tokens": o.Usage.CompletionTokens,
 		"total_tokens":      o.Usage.TotalTokens,
 		"cost":              o.Usage.Cost,
-		"metadata":          o.Metadata,
+		"metadata":          cfg.truncate(o.Metadata),
+		"text_policy":       o.TextPolicy.String(),
+	}
+	if len(o.Tags) > 0 {
+		doc["tags"] = o.Tags
 	}
 	if o.ErrorKind != "" {
 		doc["error_kind"] = o.ErrorKind
@@ -144,5 +199,6 @@ func (o Observation) document() map[string]any {
 	if len(o.GuardCategories) > 0 {
 		doc["guard_categories"] = o.GuardCategories
 	}
+	putAudit(doc, o.GuardVersion, o.GuardModel, o.PolicyHash)
 	return doc
 }

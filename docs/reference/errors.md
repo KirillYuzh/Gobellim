@@ -4,20 +4,54 @@ Sentinel-ошибки kit объявлены в `internal/core` и переэк�
 
 ## Sentinel-ошибки
 
-| Sentinel              | Когда возвращается                                                                                                                                                                                                                                                                                                                                              | Что видит клиент                         | `error_kind` в трейсе |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | --------------------- |
-| `ErrInvalidConfig`    | `kit.New`: нет `ES`, `LLM` или `Policy`; невалидный `policy.yaml`; ошибка сборки guard, чанкера или trace-писателя; инструмент без имени, обработчика или с невалидной схемой. Также неполный конфиг провайдера, `Ingest` без `Embedder` или с пустым `ID`, `Search` без `Embedder`, `NewLocal` без тега `ort` или без пресета, невалидный `kit_embedder.json`. | падение на старте, сервис не поднимается | —                     |
-| `ErrUnauthorized`     | Нет или пустого принципала в контексте; RBAC отказал (`authz.Authorize`).                                                                                                                                                                                                                                                                                       | 401 без деталей политики                 | `unauthorized`        |
-| `ErrToolNotFound`     | Модель запросила незарегистрированный инструмент. Зарегистрированный, но запрещённый по роли инструмент отклоняется на `Authorize` и даёт `ErrUnauthorized`.                                                                                                                                                                                                    | 400 с именем инструмента                 | `tool_not_found`      |
-| `ErrInvalidArgs`      | Аргументы не разобрались как JSON, не прошли JSON Schema или превысили `ArgsMaxBytes`; пустой `SearchRequest.Query`; нет сообщений ролей `user`/`assistant` в `Chat`.                                                                                                                                                                                           | 400 с перечнем нарушенных полей          | `invalid_args`        |
-| `ErrMaxSteps`         | Исчерпаны `MaxSteps` или `MaxCallsPerTool`.                                                                                                                                                                                                                                                                                                                     | 422, признак «слишком длинный tool-цикл» | `max_steps`           |
-| `ErrGuardReject`      | Rail `input` или `tool_result` вернул reject (fast-fail). При `Ingest` reject не возвращается: чанк уходит в карантин.                                                                                                                                                                                                                                          | 400 без текста сработавшего правила      | `guard_reject`        |
-| `ErrGuardUnavailable` | Guard недоступен (fail-closed) или ожидание сессии ORT заняло больше 2 секунд.                                                                                                                                                                                                                                                                                  | 503                                      | `guard_unavailable`   |
-| `ErrProvider`         | Ошибка провайдера LLM, эмбеддера или Elasticsearch (ответ не-2xx); таймаут очереди ORT-эмбеддера; ответ `Generate` не декодировался в `T`.                                                                                                                                                                                                                      | 502                                      | `provider`            |
-| `ErrNotFound`         | Документ или индекс не найдены.                                                                                                                                                                                                                                                                                                                                 | 404                                      | `not_found`           |
+| Sentinel              | Когда возвращается                                                                                                                                                                                                                                                                                                                                                                                                  | Что видит клиент                         | `error_kind` в трейсе |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | --------------------- |
+| `ErrInvalidConfig`    | `kit.New`: нет `ES`, `LLM` или `Policy`; невалидный `policy.yaml`; ошибка сборки guard, чанкера или trace-писателя; инструмент без имени, обработчика или с невалидной схемой. Также неполный конфиг провайдера, `Ingest` без `Embedder` или с пустым `ID`, `Search` без `Embedder`, `Generate` со стратегией `Fallback` без `Fallback`, `NewLocal` без тега `ort` или без пресета, невалидный `kit_embedder.json`. | падение на старте, сервис не поднимается | —                     |
+| `ErrUnauthorized`     | Нет или пустого принципала в контексте; `Ingest`/`Search`/`Delete` без `Tenant`; RBAC отказал (`authz.Authorize`); эгресс заблокирован «Rule of Two» или host-allowlist.                                                                                                                                                                                                                                            | 401 без деталей политики                 | `unauthorized`        |
+| `ErrInvalidArgs`      | Аргументы не разобрались как JSON или не прошли JSON Schema; пустой `SearchRequest.Query`; нет сообщений ролей `user`/`assistant` в `Chat`; пустой `doc_id` в `Delete`. Для инструмента невалидные или слишком большие аргументы возвращаются модели результатом-ошибкой, а не этим sentinel’ом.                                                                                                                    | 400 с перечнем нарушенных полей          | `invalid_args`        |
+| `ErrMaxSteps`         | Исчерпан `MaxSteps` цикла (модель не дала финального ответа).                                                                                                                                                                                                                                                                                                                                                       | 422, признак «слишком длинный tool-цикл» | `max_steps`           |
+| `ErrBudget`           | Превышен `Config.MaxTotalTokens` за ход.                                                                                                                                                                                                                                                                                                                                                                            | 402/429, признак «бюджет исчерпан»       | `budget`              |
+| `ErrApprovalRequired` | Инструмент с `RequireApproval` вызван без настроенного `Approver`, `Approver` отказал или одобрение этого fingerprint уже израсходовано в текущем ходе.                                                                                                                                                                                                                                                             | 403/409, запрос на подтверждение         | `approval_required`   |
+| `ErrGuardReject`      | Rail `input` вернул reject (fast-fail) в `Chat`/`Generate`.                                                                                                                                                                                                                                                                                                                                                         | 400 без текста сработавшего правила      | `guard_reject`        |
+| `ErrGuardUnavailable` | Guard недоступен (fail-closed) или ожидание сессии ORT заняло больше 2 секунд.                                                                                                                                                                                                                                                                                                                                      | 503                                      | `guard_unavailable`   |
+| `ErrProvider`         | Ошибка провайдера LLM, эмбеддера или Elasticsearch (ответ не-2xx); таймаут очереди ORT-эмбеддера; ответ `Generate` не декодировался в `T`; ошибка итема `_bulk`.                                                                                                                                                                                                                                                    | 502                                      | `provider`            |
+
+Зарезервированные sentinels (объявлены и размечаются в `internal/call`, но операции
+фасада их сейчас не возвращают — они нужны приложению и адаптерам):
+
+| Sentinel          | Назначение                                                                                                 | `error_kind` в трейсе |
+| ----------------- | ---------------------------------------------------------------------------------------------------------- | --------------------- |
+| `ErrToolNotFound` | Задуман под неизвестный инструмент. Сейчас неизвестный инструмент возвращается модели результатом-ошибкой. | `tool_not_found`      |
+| `ErrTool`         | Задуман под падение внутри инструмента. Сейчас такие сбои возвращаются модели как результат.               | `tool`                |
+| `ErrRateLimited`  | Задуман под `429` провайдера (часть контракта лимитов, I-09).                                              | `rate_limited`        |
+| `ErrNotFound`     | Документ или индекс не найдены; нужен приложению и адаптерам.                                              | `not_found`           |
 
 > [!NOTE]
-> Операции `kit` сами не возвращают `ErrNotFound`: ответы Elasticsearch не-2xx оборачиваются в `ErrProvider`. Sentinel нужен приложению и адаптерам; `internal/call` размечает observation как `not_found`, если ошибка его несёт.
+> Ошибка инструмента — не падение хода (I-11): `App.Chat` возвращает её модели
+> как `{"error": "..."}` и продолжает цикл. Фатальны отказ авторизации (RBAC и
+> эгресс-политика), ошибки провайдера, отмена/дедлайн контекста, отсутствие
+> требуемого подтверждения (`ErrApprovalRequired`) и исчерпание одного ретрая на
+> невалидные аргументы (BR-23). По той же причине reject на
+> `tool_result` превращается в результат-ошибку, а reject при `Ingest` — в
+> карантинный чанк: `ErrGuardReject` наружу отдаёт только rail `input`.
+
+## GuardRejectError и tripwire
+
+Отказ guard несут значения `*kit.GuardRejectError` — это алиас типа из
+`internal/call`, так что `errors.As` доступен и внешним сервисам:
+
+```go
+var reject *kit.GuardRejectError
+// reject.Rail     guard.Rail
+// reject.Tripwire *guard.Tripwire  // Reason, RuleID, Metadata
+// reject.Version  string           // версия guard (I-08)
+// reject.Kind, reject.Name — внутренние типы, нужны только для диагностики.
+```
+
+`Unwrap` возвращает `core.ErrGuardReject`, поэтому `errors.Is(err, kit.ErrGuardReject)`
+остаётся верным. `Tripwire` объясняет решение (`Reason`, `RuleID`, `Metadata`), а
+`Version` — версия guard; значение `RuleID`/`Reason` кладётся ещё и в метаданные
+observation (`tripwire_rule`, `tripwire_reason`).
 
 ## Матчинг
 
@@ -25,9 +59,16 @@ Sentinel-ошибки kit объявлены в `internal/core` и переэк�
 if errors.Is(err, kit.ErrGuardReject) {
     // отклонил guard
 }
+
+var reject *kit.GuardRejectError
+if errors.As(err, &reject) {
+    // reject.Rail, reject.Tripwire, reject.Version
+}
 ```
 
-Каждая операция оборачивает причину, не теряя её. `errors.Is` проходит по всей цепочке, поэтому проверка работает и для ошибок, обёрнутых адаптером приложения.
+Каждая операция оборачивает причину, не теряя её. `errors.Is`/`errors.As` проходят
+по всей цепочке, поэтому проверка работает и для ошибок, обёрнутых адаптером
+приложения.
 
 ## Маппинг в HTTP
 
@@ -37,8 +78,11 @@ if errors.Is(err, kit.ErrGuardReject) {
 | ---------------------------------- | ----------------- |
 | `ErrInvalidArgs`, `ErrGuardReject` | 400               |
 | `ErrUnauthorized`                  | 401               |
+| `ErrApprovalRequired`              | 403               |
 | `ErrNotFound`                      | 404               |
+| `ErrBudget`                        | 402               |
 | `ErrMaxSteps`                      | 422               |
+| `ErrRateLimited`                   | 429               |
 | `ErrProvider`                      | 502               |
 | `ErrGuardUnavailable`              | 503               |
 | `ErrInvalidConfig`                 | падение на старте |

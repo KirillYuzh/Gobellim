@@ -163,7 +163,7 @@ func TestGigaChatOAuthAndFunctionCall(t *testing.T) {
 		if err := r.ParseForm(); err != nil || r.Form.Get("scope") != "GIGACHAT_API_PERS" {
 			t.Errorf("scope form = %v", r.Form)
 		}
-		fmt.Fprintf(w, `{"access_token":"tok","expires_at":%d}`, time.Now().Add(time.Hour).UnixMilli())
+		_, _ = fmt.Fprintf(w, `{"access_token":"tok","expires_at":%d}`, time.Now().Add(time.Hour).UnixMilli())
 	})
 	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer tok" {
@@ -200,7 +200,7 @@ func TestGigaChatOAuthAndFunctionCall(t *testing.T) {
 func TestGigaChatStructuredEmulation(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/oauth", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, `{"access_token":"tok","expires_at":%d}`, time.Now().Add(time.Hour).UnixMilli())
+		_, _ = fmt.Fprintf(w, `{"access_token":"tok","expires_at":%d}`, time.Now().Add(time.Hour).UnixMilli())
 	})
 	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
 		body := decodeBody(t, r)

@@ -15,6 +15,10 @@ var (
 	ErrInvalidArgs      = errors.New("kit: invalid tool arguments")
 	ErrMaxSteps         = errors.New("kit: max steps exceeded")
 	ErrNotFound         = errors.New("kit: not found")
+	ErrTool             = errors.New("kit: tool error")
+	ErrBudget           = errors.New("kit: budget exceeded")
+	ErrRateLimited      = errors.New("kit: rate limited")
+	ErrApprovalRequired = errors.New("kit: approval required")
 )
 
 type Principal struct {
@@ -36,6 +40,16 @@ func (p Principal) IsZero() bool {
 	return p.UserID == "" && p.Tenant == "" && len(p.Roles) == 0
 }
 
+func (p Principal) Validate() error {
+	if p.IsZero() {
+		return ErrUnauthorized
+	}
+	if p.Tenant == "" {
+		return errors.New("kit: principal tenant is required")
+	}
+	return nil
+}
+
 type principalKey struct{}
 
 func WithPrincipal(ctx context.Context, p Principal) context.Context {
@@ -45,4 +59,18 @@ func WithPrincipal(ctx context.Context, p Principal) context.Context {
 func PrincipalFrom(ctx context.Context) (Principal, bool) {
 	p, ok := ctx.Value(principalKey{}).(Principal)
 	return p, ok
+}
+
+type spanMetadataKey struct{}
+
+func WithSpanMetadata(ctx context.Context, md map[string]any) context.Context {
+	if len(md) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, spanMetadataKey{}, md)
+}
+
+func SpanMetadataFrom(ctx context.Context) map[string]any {
+	md, _ := ctx.Value(spanMetadataKey{}).(map[string]any)
+	return md
 }

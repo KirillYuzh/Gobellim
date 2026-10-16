@@ -5,7 +5,7 @@ verified against the real model, not inferred. Where a claim is a measurement, t
 number is the measured one.
 
 **Verdict: an ONNX-only (no Python) reimplementation of this pinned guard is viable.**
-All 12 golden fixtures plus a mixed-length batch decode *byte-identically* to
+All 12 golden fixtures plus a mixed-length batch decode _byte-identically_ to
 `model.batch_extract` when decoding is driven purely by the ONNX tensors
 (`parity.json → all_decodes_match_python_api: true`). The Go side must implement
 four things itself: word splitting, tokenization, index plumbing, and decoding.
@@ -54,7 +54,7 @@ def normalize_text(text: str) -> str:
 The dot is appended **with no separator** and later becomes its own splitter word.
 So `""` → `"."` (1 word); `"Привет"` → `"Привет."` → words `["привет", "."]`;
 `"…gmail.com"` → `"…gmail.com."`. Char offsets recorded below always index
-*this normalized string*. Because only a suffix is added, offsets are also valid
+_this normalized string_. Because only a suffix is added, offsets are also valid
 indices into the original text.
 
 ## 4. Word splitting
@@ -76,36 +76,36 @@ for m in PATTERN.finditer(normalized_text):
 
 Details that matter:
 
-* **Alternation order is significant** (Python `re` = leftmost, first-alternative
+- **Alternation order is significant** (Python `re` = leftmost, first-alternative
   wins — not longest match). A URL/email therefore wins over the generic word rule.
   Note the email alternative excludes a trailing `.`: `"j@x.com."` → `"j@x.com"`
   then `"."`.
-* `end` is **exclusive** and offsets are indices into the normalized text.
-* Only the yielded **token value** is lowercased; offsets stay in the original
+- `end` is **exclusive** and offsets are indices into the normalized text.
+- Only the yielded **token value** is lowercased; offsets stay in the original
   string. This is deliberate: Unicode case folding can change length
   (`"İ".lower()` → `"i\u0307"`). Do **not** lowercase the text first and then index.
   **Go: these are Unicode code-point indices, not bytes.** Work in `[]rune`, or
-  convert. Go's `strings.ToLower` is *not* Python's `str.lower`; use it only on the
+  convert. Go's `strings.ToLower` is _not_ Python's `str.lower`; use it only on the
   token value, and never on offsets.
-* `\w` in Python with `str` patterns is Unicode-aware; Go's `\w` in
+- `\w` in Python with `str` patterns is Unicode-aware; Go's `\w` in
   `regexp` is ASCII-only unless you use an explicit class. Replicate Python's
   behaviour, or Cyrillic words (`СНИЛС`, `Привет`) will split per character.
-* Ties: if two alternatives could match, Python picks the first listed.
+- Ties: if two alternatives could match, Python picks the first listed.
 
 ## 5. Tokenization
 
 `tokenizer.json` is a self-contained HF-`tokenizers` graph. Read it, don't
 reimplement SentencePiece:
 
-| stage | value |
-| --- | --- |
-| `normalizer` | `Sequence[ Replace(regex \s{2,}\|[\n\r\t] → " "), NFC, Strip(strip_left=false, strip_right=true) ]` |
-| `pre_tokenizer` | `Metaspace(replacement="▁", prepend_scheme="always", split=true)` |
-| `model` | `Unigram`, `vocab` 250101 pieces with scores, `unk_id=3`, `byte_fallback=false` |
-| `added_tokens` | 115 entries, including all specials (see below) |
-| `post_processor` | `TemplateProcessing` with `[CLS]`/`[SEP]` — **never used here** |
-| `decoder` | `Metaspace` (only for `decode`) |
-| `padding`/`truncation` | absent |
+| stage                  | value                                                                                               |
+| ---------------------- | --------------------------------------------------------------------------------------------------- |
+| `normalizer`           | `Sequence[ Replace(regex \s{2,}\|[\n\r\t] → " "), NFC, Strip(strip_left=false, strip_right=true) ]` |
+| `pre_tokenizer`        | `Metaspace(replacement="▁", prepend_scheme="always", split=true)`                                   |
+| `model`                | `Unigram`, `vocab` 250101 pieces with scores, `unk_id=3`, `byte_fallback=false`                     |
+| `added_tokens`         | 115 entries, including all specials (see below)                                                     |
+| `post_processor`       | `TemplateProcessing` with `[CLS]`/`[SEP]` — **never used here**                                     |
+| `decoder`              | `Metaspace` (only for `decode`)                                                                     |
+| `padding`/`truncation` | absent                                                                                              |
 
 **The call is `tokenize(word)` per word — never on the whole prompt.** There is no
 `[CLS]`/`[SEP]` insertion anymore (`add_special_tokens` is not used; the collator
@@ -128,16 +128,16 @@ tokenize(")")        -> ["▁", ")"]
 
 Special-token ids (from `added_tokens`, `special: true`):
 
-| token | id | | token | id |
-| --- | --- | --- | --- | --- |
-| `[PAD]` | 0 | | `[P]` | 250104 |
-| `[CLS]` | 1 | | `[C]` | 250105 |
-| `[SEP]` | 2 | | `[E]` | 250106 |
-| `[UNK]` | 3 | | `[R]` | 250107 |
-| `[MASK]` | 250101 | | `[L]` | 250108 |
-| `[SEP_STRUCT]` | 250102 | | `[EXAMPLE]` | 250109 |
-| `[SEP_TEXT]` | 250103 | | `[OUTPUT]` | 250110 |
-| | | | `[DESCRIPTION]` | 250111 |
+| token          | id     |     | token           | id     |
+| -------------- | ------ | --- | --------------- | ------ |
+| `[PAD]`        | 0      |     | `[P]`           | 250104 |
+| `[CLS]`        | 1      |     | `[C]`           | 250105 |
+| `[SEP]`        | 2      |     | `[E]`           | 250106 |
+| `[UNK]`        | 3      |     | `[R]`           | 250107 |
+| `[MASK]`       | 250101 |     | `[L]`           | 250108 |
+| `[SEP_STRUCT]` | 250102 |     | `[EXAMPLE]`     | 250109 |
+| `[SEP_TEXT]`   | 250103 |     | `[OUTPUT]`      | 250110 |
+|                |        |     | `[DESCRIPTION]` | 250111 |
 
 `vocab_size = 250112`, `base_vocab_size = 250101`.
 
@@ -199,7 +199,7 @@ provided ready-made in `config.json`:
 search: `[SEP_TEXT]` is always at index `prefix_len - 1 = 31`, and the text region
 is `input_ids[32:]`. If you want to assert it: find id `250102` (the only
 `[SEP_STRUCT]`) and id `250103` (the only `[SEP_TEXT]`); the text words begin at
-`index_of(250103) + 1`. Because the prefix length is constant, text word *i*'s first
+`index_of(250103) + 1`. Because the prefix length is constant, text word _i_'s first
 subword is simply `32 + Σ_{j<i} len(tokenize(words[j]))`.
 
 Word token positions for the fixture
@@ -223,12 +223,12 @@ pooled word embedding is the embedding of that first subword, whatever it is.
 
 ### 6.1 Index tensors
 
-| tensor | shape | value |
-| --- | --- | --- |
-| `text_word_indices[i][k]` | `[B,W]` int64 | seq index of word `k`'s **first** subword |
-| `text_word_mask[i][k]` | `[B,W]` bool | `True` for a real word |
+| tensor                     | shape         | value                                              |
+| -------------------------- | ------------- | -------------------------------------------------- |
+| `text_word_indices[i][k]`  | `[B,W]` int64 | seq index of word `k`'s **first** subword          |
+| `text_word_mask[i][k]`     | `[B,W]` bool  | `True` for a real word                             |
 | `entity_schema_indices[i]` | `[B,4]` int64 | `[1,6,8,10]` — the `[P]` and the 3 `[E]` positions |
-| `class_schema_indices[i]` | `[B,3]` int64 | `[18,22,24]` — the `[P]` and the 2 `[L]` positions |
+| `class_schema_indices[i]`  | `[B,3]` int64 | `[18,22,24]` — the `[P]` and the 2 `[L]` positions |
 
 Marker position list per group is `schema_special_positions[g]` = `[P]` first, then
 each field/choice marker, in the same order as the label list. Element 0 is the
@@ -240,7 +240,7 @@ to `count_embed`.
 for real tokens and `0` for padding — but note **the graph takes word counts from
 `text_word_mask`, not from `attention_mask`.**
 
-If a word tokenizes to *zero* subwords, still record a `word_first_subword_pos`
+If a word tokenizes to _zero_ subwords, still record a `word_first_subword_pos`
 entry (equal to the current boundary) — the library inserts exactly such a
 placeholder to keep word↔embedding alignment 1:1.
 
@@ -250,25 +250,25 @@ Op set 17, float32, dynamic batch/sequence/word axes.
 
 ### Inputs
 
-| name | dtype | shape | notes |
-| --- | --- | --- | --- |
-| `input_ids` | int64 | `[B, S]` | §6 |
-| `attention_mask` | int64 | `[B, S]` | 1/0 |
-| `text_word_indices` | int64 | `[B, W]` | §6.1 |
-| `text_word_mask` | **bool** | `[B, W]` | §6.1 |
-| `entity_schema_indices` | int64 | `[B, 4]` | dim1 **fixed** (1 + #entity labels) |
-| `class_schema_indices` | int64 | `[B, 3]` | dim1 **fixed** (1 + #class labels) |
+| name                    | dtype    | shape    | notes                               |
+| ----------------------- | -------- | -------- | ----------------------------------- |
+| `input_ids`             | int64    | `[B, S]` | §6                                  |
+| `attention_mask`        | int64    | `[B, S]` | 1/0                                 |
+| `text_word_indices`     | int64    | `[B, W]` | §6.1                                |
+| `text_word_mask`        | **bool** | `[B, W]` | §6.1                                |
+| `entity_schema_indices` | int64    | `[B, 4]` | dim1 **fixed** (1 + #entity labels) |
+| `class_schema_indices`  | int64    | `[B, 3]` | dim1 **fixed** (1 + #class labels)  |
 
 ### Outputs
 
-| name | dtype | shape | meaning |
-| --- | --- | --- | --- |
-| `span_logits` | f32 | `[B, 3, W, 8]` | raw span logits, **unmasked** (finite everywhere) |
-| `span_probs` | f32 | `[B, 3, W, 8]` | `sigmoid(span_logits)`, invalid pairs forced to exactly `0.0` |
-| `count_logits` | f32 | `[B, 20]` | predicted-entity-count logits |
-| `cls_logits` | f32 | `[B, 2]` | safety logits over `["safe","unsafe"]` |
-| `text_states` | f32 | `[B, W, 768]` | *diagnostic* |
-| `encoder_hidden` | f32 | `[B, S, 768]` | *diagnostic* |
+| name             | dtype | shape          | meaning                                                       |
+| ---------------- | ----- | -------------- | ------------------------------------------------------------- |
+| `span_logits`    | f32   | `[B, 3, W, 8]` | raw span logits, **unmasked** (finite everywhere)             |
+| `span_probs`     | f32   | `[B, 3, W, 8]` | `sigmoid(span_logits)`, invalid pairs forced to exactly `0.0` |
+| `count_logits`   | f32   | `[B, 20]`      | predicted-entity-count logits                                 |
+| `cls_logits`     | f32   | `[B, 2]`       | safety logits over `["safe","unsafe"]`                        |
+| `text_states`    | f32   | `[B, W, 768]`  | _diagnostic_                                                  |
+| `encoder_hidden` | f32   | `[B, S, 768]`  | _diagnostic_                                                  |
 
 Axis semantics for `span_logits` / `span_probs`:
 
@@ -285,7 +285,7 @@ more than 8 words.**
 
 The graph computes `text_lengths = text_word_mask.sum(-1)` and zeroes
 `span_probs` wherever `start + width >= text_lengths`. `span_logits` is the
-*unmasked* twin (`mask_invalid=False`) so it is JSON-safe and diffable; the
+_unmasked_ twin (`mask_invalid=False`) so it is JSON-safe and diffable; the
 library's runtime path uses `mask_invalid=True` (`-inf`) — `where(valid, sigmoid,
 0)` is bit-identical to `sigmoid(-inf)=0`, which was verified.
 
@@ -297,7 +297,7 @@ Diagnostic outputs are free to ignore; they exist so a port can bisect a mismatc
 
 ## 8. Decode
 
-### 8.1 Count gate (decides the *shape* of the entity result)
+### 8.1 Count gate (decides the _shape_ of the entity result)
 
 ```
 pred_count = argmax(count_logits[0])          # 0..19
@@ -305,12 +305,12 @@ entities   = {}                               # when pred_count < 1
 ```
 
 **Gotcha.** When the gate is closed the library stores `results["entities"] = []`
-(an empty *list*), and `format_results` maps an empty list under the key
+(an empty _list_), and `format_results` maps an empty list under the key
 `"entities"` to `{}`. So:
 
-* `pred_count >= 1` → `entities` is a dict with **every** pinned label as a key
+- `pred_count >= 1` → `entities` is a dict with **every** pinned label as a key
   (values may be empty lists);
-* `pred_count == 0` → `entities` is the **empty dict** `{}`, not
+- `pred_count == 0` → `entities` is the **empty dict** `{}`, not
   `{"person": [], "email": [], "phone": []}`.
 
 `count_logits[0]` for the injection fixture is
@@ -341,21 +341,21 @@ if pred_count >= 1:
 
 Precise notes:
 
-* `rowmajor_argwhere` = `torch.where(scores >= th)`: iterate in **increasing
-  `start`, then increasing `width`**. Combined with Python's *stable* `sort(...,
-  reverse=True)`, ties between equal confidences keep that order. Reproduce both.
-* `>=` is inclusive; `span_probs` already contains `0.0` for out-of-range spans,
+- `rowmajor_argwhere` = `torch.where(scores >= th)`: iterate in **increasing
+  `start`, then increasing `width`**. Combined with Python's _stable_ `sort(...,
+reverse=True)`, ties between equal confidences keep that order. Reproduce both.
+- `>=` is inclusive; `span_probs` already contains `0.0` for out-of-range spans,
   but keep the explicit bound check.
-* The overlap test uses the **unstripped word-boundary offsets**, while the
+- The overlap test uses the **unstripped word-boundary offsets**, while the
   surface is `.strip()`ed. Two spans whose surfaces look disjoint can therefore
   still suppress each other.
-* Overlap is on **character** intervals, and the policy is the library's
-  confidence-first greedy — *not* `resolve_overlaps` (the span architecture
+- Overlap is on **character** intervals, and the policy is the library's
+  confidence-first greedy — _not_ `resolve_overlaps` (the span architecture
   passes `overlap_policy=None`).
-* Span suppression happens **per label** (`kept` is reset for each label), so a
+- Span suppression happens **per label** (`kept` is reset for each label), so a
   `person` span and an `email` span may overlap freely.
-* `.strip()` uses Python's Unicode whitespace set.
-* Confidence is a **float32** `sigmoid` value; the library reads it with
+- `.strip()` uses Python's Unicode whitespace set.
+- Confidence is a **float32** `sigmoid` value; the library reads it with
   `.item()`, i.e. it is the fp32 probability promoted to double.
 
 ### 8.3 Classification
@@ -381,11 +381,11 @@ Had `multi_label=True` been set, it would be `sigmoid` per label with
 
 with the library's two presentation modes:
 
-| mode | entity entries | safety |
-| --- | --- | --- |
-| `include_spans=False, include_confidence=False` (default) | `["john.smith@gmail.com"]` | `"unsafe"` |
-| `include_spans=True` | `[{"text": …, "confidence": …, "start": 49, "end": 69}]` | `{"label": …, "confidence": …}` |
-| `include_confidence=True` only | `[{"text": …, "confidence": …}]` | `{"label": …, "confidence": …}` |
+| mode                                                      | entity entries                                           | safety                          |
+| --------------------------------------------------------- | -------------------------------------------------------- | ------------------------------- |
+| `include_spans=False, include_confidence=False` (default) | `["john.smith@gmail.com"]`                               | `"unsafe"`                      |
+| `include_spans=True`                                      | `[{"text": …, "confidence": …, "start": 49, "end": 69}]` | `{"label": …, "confidence": …}` |
+| `include_confidence=True` only                            | `[{"text": …, "confidence": …}]`                         | `{"label": …, "confidence": …}` |
 
 **These two modes do not dedupe identically** (measured):
 
@@ -405,16 +405,16 @@ also valid prefix indices into the original text).
 
 Measured by `export.py`; full detail in `parity.json`.
 
-| comparison | measured max abs diff |
-| --- | --- |
-| `span_probs` (ONNX vs torch) | **4.59e-06** |
-| `count_logits` | **1.91e-04** |
-| `cls_logits` | **4.72e-05** |
-| `span_logits` (raw, large-magnitude) | 1.50e-02 |
-| `encoder_hidden` seam (ORT vs torch) | 1.57e-04 |
-| `text_states` seam | 8.53e-05 |
-| decode: ONNX-only vs `model.batch_extract` | **exact, 12/12 fixtures + a B=5 batch** |
-| count-gate shortcut (`count_embed` step 0) vs runtime `pred_count` | **0.0** |
+| comparison                                                         | measured max abs diff                   |
+| ------------------------------------------------------------------ | --------------------------------------- |
+| `span_probs` (ONNX vs torch)                                       | **4.59e-06**                            |
+| `count_logits`                                                     | **1.91e-04**                            |
+| `cls_logits`                                                       | **4.72e-05**                            |
+| `span_logits` (raw, large-magnitude)                               | 1.50e-02                                |
+| `encoder_hidden` seam (ORT vs torch)                               | 1.57e-04                                |
+| `text_states` seam                                                 | 8.53e-05                                |
+| decode: ONNX-only vs `model.batch_extract`                         | **exact, 12/12 fixtures + a B=5 batch** |
+| count-gate shortcut (`count_embed` step 0) vs runtime `pred_count` | **0.0**                                 |
 
 **Tolerance to use in Go: `1e-3` on `span_probs`, `count_logits`, `cls_logits`.**
 The deploy-relevant quantity (`span_probs`, the sigmoid of the span logits) is
@@ -424,20 +424,20 @@ The deploy-relevant quantity (`span_probs`, the sigmoid of the span logits) is
 The logits reach |logit| ≈ 1700 and are 3072-term dot products with heavy
 cancellation (`long_ops_review`: |max| = 1698). Measured attribution:
 
-| quantity | empty | long_ops_review |
-| --- | --- | --- |
-| `encoder_hidden` ORT-vs-torch | 1.10e-04 | 1.57e-04 |
-| span logits, full graph ONNX-vs-torch-fp32 | 1.50e-02 | 1.32e-02 |
-| span logits, torch-fp32-vs-fp64 (same inputs) | 8.1e-05 | 6.8e-04 |
-| span logits, **same inputs**, ORT scorer vs torch-fp32 | 1.65e-03 | 4.27e-03 |
-| span logits, same inputs, ORT scorer vs fp64 | 1.80e-03 | 4.59e-03 |
+| quantity                                               | empty    | long_ops_review |
+| ------------------------------------------------------ | -------- | --------------- |
+| `encoder_hidden` ORT-vs-torch                          | 1.10e-04 | 1.57e-04        |
+| span logits, full graph ONNX-vs-torch-fp32             | 1.50e-02 | 1.32e-02        |
+| span logits, torch-fp32-vs-fp64 (same inputs)          | 8.1e-05  | 6.8e-04         |
+| span logits, **same inputs**, ORT scorer vs torch-fp32 | 1.65e-03 | 4.27e-03        |
+| span logits, same inputs, ORT scorer vs fp64           | 1.80e-03 | 4.59e-03        |
 
 So the ~0.015 decomposes into ~0.013 from the **encoder** (ORT's fp32 kernels and
 torch's agree only to ~1.5e-4 on hidden states, and the 3072-wide span reduction
 amplifies that ~100×) plus ~0.002 from **different fp32 summation orders in the
 scorer GEMM**. Both runtimes are legitimate fp32; the divergence is pure rounding
 order, not a graph error. The `sigma` then compresses it: 0.015 in logit space at
-saturated logits is nothing, and the worst-case *probability* gap anywhere is
+saturated logits is nothing, and the worst-case _probability_ gap anywhere is
 4.59e-06.
 
 **Decision-boundary stability.** `min_threshold_margin` (smallest
@@ -456,13 +456,13 @@ are fp32-only).
 3. **`[SEP_STRUCT]` is dropped after the last group** (`combined.pop()`), so the
    prefix ends `… ) ) [SEP_TEXT]`.
 4. **Tokenize per word, not per prompt.** `tokenize("john.smith@gmail.com")` is
-   `["▁john", ".", "smith", "@", "gmail", ".", "com"]`, which is *not* what
+   `["▁john", ".", "smith", "@", "gmail", ".", "com"]`, which is _not_ what
    tokenizing the whole prompt would give.
 5. **`[SEP_TEXT]` is classified as a "sep" segment**, so it is part of the sequence
    but contributes no `text_word_first_positions` entry.
 6. **"first" pooling** = take the embedding at `text_word_first_positions[k]`
    (the first subword). Not free, not max — and it can be a bare `"▁"`.
-7. **Word→char offsets come from the *normalized* text**, and the appended `"."`
+7. **Word→char offsets come from the _normalized_ text**, and the appended `"."`
    is a separate word that participates in spans (e.g. it can end a span).
 8. **`span_probs` axis 3 is a width offset, not an end index.** `end = start+width+1`.
 9. **`max_width = 8`** caps span length at 8 words.
@@ -500,13 +500,13 @@ are fp32-only).
 
 ## 11. What Go must implement
 
-| piece | difficulty | notes |
-| --- | --- | --- |
-| normalize + regex word split | medium | Python-`re` semantics: Unicode `\w`, ordered alternation, rune indices |
-| tokenizer | **hard** | normalizer (regex + NFC + right-strip) → Metaspace(`▁`, always) → Unigram Viterbi with scores; added-token match first; `byte_fallback=false` |
-| index plumbing | easy | §6.1; prefix is a constant, so `text_word_first_positions = 32 + cumulative subword counts` |
-| decode | easy–medium | §8; watch §8.1/§8.4/§10.10/§10.11 |
-| numerics | **none** | all in `model.onnx` |
+| piece                        | difficulty  | notes                                                                                                                                         |
+| ---------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| normalize + regex word split | medium      | Python-`re` semantics: Unicode `\w`, ordered alternation, rune indices                                                                        |
+| tokenizer                    | **hard**    | normalizer (regex + NFC + right-strip) → Metaspace(`▁`, always) → Unigram Viterbi with scores; added-token match first; `byte_fallback=false` |
+| index plumbing               | easy        | §6.1; prefix is a constant, so `text_word_first_positions = 32 + cumulative subword counts`                                                   |
+| decode                       | easy–medium | §8; watch §8.1/§8.4/§10.10/§10.11                                                                                                             |
+| numerics                     | **none**    | all in `model.onnx`                                                                                                                           |
 
 Rough effort: decode ≈ 150 LOC; splitter ≈ 80 LOC (plus a Unicode category-M
 table); tokenizer ≈ 400–700 LOC (or delegate to a `tokenizers`-compatible Go
@@ -544,7 +544,15 @@ CLASSIFICATION_TASKS = [("safety", ["safe", "unsafe"])]
 
 Change these and re-run `python3 export.py`. The graph's static dims
 (`n_entity_labels`, `cls_logits` width), the constant `prefix_ids`, the marker
-positions and all fixtures/parity are regenerated. Adding entity labels is cheap;
-adding a second classification task changes `class_schema_indices`' second dim and
-the `cls_logits` axis. Relations, JSON structures, chunking/long-text, and
-attribute groups are deliberately **not** supported.
+positions and all fixtures/parity are regenerated. Adding entity labels is cheap.
+
+`--schema full` selects the model's richer guard taxonomy instead (32 PII span
+labels plus five classification groups; see `README.md` and
+`config.full.json.example`). With **N** classification groups the graph emits
+**N** classification outputs — one per group, named by `classifications[].output`
+— instead of a single `cls_logits`, while `class_schema_indices` still carries
+`1 + sum(all class labels)` markers (the first group's `[P]` then every group's
+label markers, in group order). The full-schema `model.onnx` is not committed.
+
+Relations, JSON structures, chunking/long-text, and attribute groups are
+deliberately **not** supported.

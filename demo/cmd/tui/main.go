@@ -73,7 +73,7 @@ func newTUI(base string, timeout time.Duration) *tui {
 
 func (t *tui) loop() {
 	for {
-		fmt.Fprint(t.out, t.paint(cyan, "› "))
+		_, _ = fmt.Fprint(t.out, t.paint(cyan, "› "))
 		t.flush()
 		line, err := t.in.ReadString('\n')
 		line = strings.TrimSpace(line)
@@ -81,7 +81,7 @@ func (t *tui) loop() {
 			if line != "" {
 				t.handle(line)
 			}
-			fmt.Fprintln(t.out)
+			_, _ = fmt.Fprintln(t.out)
 			return
 		}
 		if line != "" && !t.handle(line) {
@@ -130,7 +130,7 @@ func (t *tui) ask(prompt string) {
 		t.fail(err)
 		return
 	}
-	fmt.Fprintln(t.out, resp.Answer)
+	_, _ = fmt.Fprintln(t.out, resp.Answer)
 	t.elapsed(elapsed)
 }
 
@@ -162,8 +162,8 @@ func (t *tui) kb(query string) {
 		if title == "" {
 			title = hit.DocID
 		}
-		fmt.Fprintf(t.out, "%s %s\n", t.paint(bold, title), t.paint(dim, hit.DocID))
-		fmt.Fprintf(t.out, "  %s\n", snippet(hit.Text, 200))
+		_, _ = fmt.Fprintf(t.out, "%s %s\n", t.paint(bold, title), t.paint(dim, hit.DocID))
+		_, _ = fmt.Fprintf(t.out, "  %s\n", snippet(hit.Text, 200))
 	}
 	t.elapsed(elapsed)
 }
@@ -179,7 +179,7 @@ func (t *tui) me() {
 		t.fail(err)
 		return
 	}
-	fmt.Fprintf(t.out, "%s %s %s %s %s\n",
+	_, _ = fmt.Fprintf(t.out, "%s %s %s %s %s\n",
 		resp.Login,
 		t.paint(roleColor(resp.Role), resp.Role),
 		t.paint(dim, "·"),
@@ -204,7 +204,7 @@ func (t *tui) loginAs(user string) {
 
 func (t *tui) clear() {
 	if t.tty {
-		fmt.Fprint(t.out, "\033[2J\033[H")
+		_, _ = fmt.Fprint(t.out, "\033[2J\033[H")
 	}
 	t.banner()
 	if t.token != "" {
@@ -213,13 +213,13 @@ func (t *tui) clear() {
 }
 
 func (t *tui) banner() {
-	fmt.Fprintln(t.out, t.paint(bold, "kit · demo bot"))
-	fmt.Fprintln(t.out, t.paint(dim, t.base))
-	fmt.Fprintln(t.out, t.paint(dim, "/help — команды"))
+	_, _ = fmt.Fprintln(t.out, t.paint(bold, "kit · demo bot"))
+	_, _ = fmt.Fprintln(t.out, t.paint(dim, t.base))
+	_, _ = fmt.Fprintln(t.out, t.paint(dim, "/help — команды"))
 }
 
 func (t *tui) status() {
-	fmt.Fprintf(t.out, "%s %s %s %s\n",
+	_, _ = fmt.Fprintf(t.out, "%s %s %s %s\n",
 		t.paint(green, "✓"),
 		t.login,
 		t.paint(dim, "·"),
@@ -237,7 +237,7 @@ func (t *tui) help() {
 		{"/quit, /exit", "выйти"},
 		{"<текст>", "вопрос боту"},
 	} {
-		fmt.Fprintf(t.out, "  %s %s\n", t.paint(cyan, fmt.Sprintf("%-14s", row[0])), t.paint(dim, row[1]))
+		_, _ = fmt.Fprintf(t.out, "  %s %s\n", t.paint(cyan, fmt.Sprintf("%-14s", row[0])), t.paint(dim, row[1]))
 	}
 }
 
@@ -271,15 +271,15 @@ func (t *tui) fail(err error) {
 }
 
 func (t *tui) errorf(format string, a ...any) {
-	fmt.Fprintf(t.out, "%s %s\n", t.paint(red, "✗"), t.paint(red, fmt.Sprintf(format, a...)))
+	_, _ = fmt.Fprintf(t.out, "%s %s\n", t.paint(red, "✗"), t.paint(red, fmt.Sprintf(format, a...)))
 }
 
 func (t *tui) hint(format string, a ...any) {
-	fmt.Fprintf(t.out, "%s %s\n", t.paint(dim, "·"), t.paint(dim, fmt.Sprintf(format, a...)))
+	_, _ = fmt.Fprintf(t.out, "%s %s\n", t.paint(dim, "·"), t.paint(dim, fmt.Sprintf(format, a...)))
 }
 
 func (t *tui) elapsed(d time.Duration) {
-	fmt.Fprintln(t.out, t.paint(dim, fmt.Sprintf("· %.1fs", d.Seconds())))
+	_, _ = fmt.Fprintln(t.out, t.paint(dim, fmt.Sprintf("· %.1fs", d.Seconds())))
 }
 
 func (t *tui) flush() {
@@ -324,7 +324,7 @@ func (t *tui) do(method, path string, body, out any) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {

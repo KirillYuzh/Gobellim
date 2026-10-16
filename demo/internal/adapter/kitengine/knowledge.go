@@ -1,7 +1,6 @@
 package kitengine
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -182,15 +181,13 @@ func (e *Engine) chunkFilter(p domain.Principal, docID string) map[string]any {
 	return map[string]any{"bool": map[string]any{"filter": filter}}
 }
 
-// esSearch reads the chunks index directly.
-// Reading a document back is an administrative view of the store, not a guarded operation:
-// writes and deletes still go through the engine so ACL, guard and traces stay in the path.
 func (e *Engine) esSearch(ctx context.Context, body any, out any) error {
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("encode elasticsearch query: %w", err)
 	}
-	status, resp, err := e.es.Do(ctx, http.MethodPost, "/"+store.IndexChunks+"/_search", bytes.NewReader(raw))
+	req := store.RawRequest(http.MethodPost, "/"+store.IndexChunks+"/_search", raw, "application/json")
+	status, resp, err := e.es.Do(ctx, req)
 	if err != nil {
 		return fmt.Errorf("%w: %w", err, domain.ErrUnavailable)
 	}

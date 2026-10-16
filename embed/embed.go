@@ -1,4 +1,3 @@
-// Package embed defines the embeddings API and its providers.
 package embed
 
 import (
@@ -6,13 +5,15 @@ import (
 	"math"
 )
 
-// Embedder turns texts into vectors. Query and Passages are separate because
-// models such as e5 need distinct prefixes.
 type Embedder interface {
 	Query(ctx context.Context, texts []string) ([][]float32, error)
 	Passages(ctx context.Context, texts []string) ([][]float32, error)
 	Dim() int
 	Model() string
+}
+
+type Closer interface {
+	Close() error
 }
 
 func normalizeL2(v []float32) {

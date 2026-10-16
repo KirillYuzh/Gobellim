@@ -72,8 +72,11 @@ type oaiRequest struct {
 	Model          string         `json:"model"`
 	Messages       []oaiMessage   `json:"messages"`
 	Tools          []oaiToolSpec  `json:"tools,omitempty"`
+	ToolChoice     any            `json:"tool_choice,omitempty"`
 	Temperature    *float64       `json:"temperature,omitempty"`
 	MaxTokens      int            `json:"max_tokens,omitempty"`
+	Seed           *int           `json:"seed,omitempty"`
+	Stop           []string       `json:"stop,omitempty"`
 	ResponseFormat *oaiRespFormat `json:"response_format,omitempty"`
 	Stream         bool           `json:"stream"`
 }
@@ -94,6 +97,7 @@ type oaiResponse struct {
 			Content   string       `json:"content"`
 			ToolCalls []oaiToolReq `json:"tool_calls"`
 		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage struct {
 		PromptTokens     int `json:"prompt_tokens"`
@@ -102,14 +106,30 @@ type oaiResponse struct {
 	} `json:"usage"`
 }
 
+func oaiToolChoice(choice string) any {
+	switch choice {
+	case "":
+		return nil
+	case "auto", "none", "required":
+		return choice
+	default:
+		return map[string]any{"type": "function", "function": map[string]string{"name": choice}}
+	}
+}
+
 func (c *OpenAIClient) Chat(ctx context.Context, req Request) (Response, error) {
+	msgs, native := schemaPlan(req)
+
 	body := oaiRequest{
 		Model:       c.cfg.Model,
-		Messages:    make([]oaiMessage, 0, len(req.Messages)),
+		Messages:    make([]oaiMessage, 0, len(msgs)),
 		Temperature: req.Temperature,
 		MaxTokens:   req.MaxTokens,
+		Seed:        req.Seed,
+		Stop:        req.Stop,
+		ToolChoice:  oaiToolChoice(req.ToolChoice),
 	}
-	for _, m := range req.Messages {
+	for _, m := range msgs {
 		om := oaiMessage{Role: string(m.Role), Content: m.Content, ToolCallID: m.ToolCallID, Name: m.Name}
 		for _, tc := range m.ToolCalls {
 			var ot oaiToolReq
@@ -129,7 +149,7 @@ func (c *OpenAIClient) Chat(ctx context.Context, req Request) (Response, error) 
 		spec.Function.Parameters = t.Schema
 		body.Tools = append(body.Tools, spec)
 	}
-	if len(req.JSONSchema) > 0 {
+	if native {
 		rf := &oaiRespFormat{Type: "json_schema"}
 		rf.JSONSchema.Name = "output"
 		rf.JSONSchema.Schema = req.JSONSchema
@@ -144,8 +164,13 @@ func (c *OpenAIClient) Chat(ctx context.Context, req Request) (Response, error) 
 		headers[k] = v
 	}
 
+	outBody, err := applyProviderOptions(req, body)
+	if err != nil {
+		return Response{}, err
+	}
+
 	var out oaiResponse
-	if err := doJSON(ctx, c.hc, http.MethodPost, joinURL(c.cfg.BaseURL, "/chat/completions"), headers, body, &out); err != nil {
+	if err := doJSON(ctx, c.hc, http.MethodPost, joinURL(c.cfg.BaseURL, "/chat/completions"), headers, outBody, &out); err != nil {
 		return Response{}, err
 	}
 	if len(out.Choices) == 0 {
@@ -156,8 +181,9 @@ func (c *OpenAIClient) Chat(ctx context.Context, req Request) (Response, error) 
 		msg.ToolCalls = append(msg.ToolCalls, ToolCall{ID: tc.ID, Name: tc.Function.Name, Args: tc.Function.Arguments})
 	}
 	return Response{
-		Message: msg,
-		Model:   out.Model,
-		Usage:   Usage{PromptTokens: out.Usage.PromptTokens, CompletionTokens: out.Usage.CompletionTokens, TotalTokens: out.Usage.TotalTokens},
+		Message:      msg,
+		Model:        out.Model,
+		Usage:        Usage{PromptTokens: out.Usage.PromptTokens, CompletionTokens: out.Usage.CompletionTokens, TotalTokens: out.Usage.TotalTokens},
+		FinishReason: ParseFinishReason(out.Choices[0].FinishReason),
 	}, nil
 }

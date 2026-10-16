@@ -8,7 +8,7 @@
 _Secure LLM primitives for Go._ Retrieval, tool calling and guardrails behind one
 authorization-checked call path.
 
-![Gobellim architecture](docs/architecture.svg)
+![Gobellim architecture](docs/architecture.en.svg)
 
 ## Why Gobellim?
 
@@ -37,7 +37,59 @@ messages. A guard error rejects the request instead of passing it through.
 argument size are enforced by the runtime, not asked for in a prompt. No
 streaming: reviewing the output needs the whole answer.
 
+### Operations at a glance
+
+| Operation     | Permission | Scope                                                 |
+| ------------- | ---------- | ----------------------------------------------------- |
+| `Chat`        | —          | permissions are checked again on every tool call      |
+| `Generate[T]` | `generate` | input and output guard, `ErrorStrategy`               |
+| `Ingest`      | `ingest`   | needs `Tenant` and an `Embedder`                      |
+| `Search`      | `search`   | needs `Tenant`, an `Embedder`; `SearchRequest.Filter` |
+| `Delete`      | `delete`   | needs `Tenant`                                        |
+| `Prune`       | `prune`    | deletes traces/observations older than a duration     |
+| `Score`       | `trace`    | records a score on a trace                            |
+
+`Ingest`, `Search` and `Delete` require a non-empty `Tenant` in the principal, so an
+operation can never widen across tenants. `Prune` is a global, time-based retention
+action: it needs the principal and the `prune` permission, not a tenant.
+
 ## In code
+
+Your Elasticsearch client is the only place that knows about transport, headers
+and `refresh`: kit calls `store.ES` with an explicit `store.Request` and never
+infers the content type from the path.
+
+```go
+type httpES struct {
+	base string
+	hc   *http.Client
+}
+
+func (c *httpES) Do(ctx context.Context, req store.Request) (int, []byte, error) {
+	var body io.Reader
+	if len(req.Body) > 0 {
+		body = bytes.NewReader(req.Body)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, req.Method, c.base+req.EffectivePath(), body)
+	if err != nil {
+		return 0, nil, err
+	}
+	if len(req.Body) > 0 {
+		ct := req.ContentType
+		if ct == "" {
+			ct = "application/json" // the default; kit never infers it from the path
+		}
+		httpReq.Header.Set("Content-Type", ct)
+	}
+	resp, err := c.hc.Do(httpReq)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	return resp.StatusCode, data, err
+}
+```
 
 ```go
 app, err := kit.New(ctx, kit.Config{
@@ -84,18 +136,33 @@ type Ticket struct {
 	Summary  string `json:"summary"`
 }
 
-ticket, err := kit.Generate[Ticket](ctx, app, kit.GenerateRequest{
-	Prompt: "Classify: the export job failed for three tenants.",
+// Generate is a full call-path operation: it needs a principal, the generate
+// permission and the input/output guard.
+fallback := Ticket{Severity: 3, Summary: "needs triage"}
+ticket, err := kit.Generate[Ticket](ctx, app, kit.GenerateRequest[Ticket]{
+	Prompt:        "Classify: the export job failed for three tenants.",
+	ErrorStrategy: kit.Fallback, // Strict (default) | Warn | Fallback
+	Fallback:      &fallback,
 })
+if ticket.UsedFallback {
+	// the model's answer did not decode into Ticket; the fallback was returned
+}
+_ = ticket.FinishReason // model.FinishStop, FinishLength, FinishToolCalls, ...
 ```
 
 ```go
 // RAG: chunk, embed and index, then search BM25 + kNN under the caller's ACL.
 err = app.Ingest(ctx, kit.Doc{ID: "policy-1", Text: text, ACL: []string{"user"}})
-hits, err := app.Search(ctx, kit.SearchRequest{Query: "refund policy", TopK: 5})
+hits, err := app.Search(ctx, kit.SearchRequest{
+	Query: "refund policy",
+	TopK:  5,
+	// Filter narrows the metadata; it is ANDed with the principal ACL filter.
+	Filter: store.Filter{"doc_id": "policy-1", "position": map[string]any{"$gte": 2}},
+})
 
-// Delete and score go through the same gate.
+// Delete, prune and score go through the same gate.
 err = app.Delete(ctx, "policy-1")
+deleted, err := app.Prune(ctx, 30*24*time.Hour) // retention: traces and observations
 err = app.Score(ctx, trace.Score{TraceID: traceID, Name: "helpful", Value: 1})
 ```
 
@@ -104,18 +171,18 @@ err = app.Score(ctx, trace.Score{TraceID: traceID, Name: "helpful", Value: 1})
 The [demo](./demo) is an authorized support bot with a seeded knowledge base. It
 answers these right after `docker compose up -d`:
 
-| Ask                                      | Answer                         |
-| ---------------------------------------- | ------------------------------ |
-| «Сколько дней даётся на возврат товара?» | 14 календарных дней            |
-| «Сколько идёт доставка в другой город?»  | 2–5 рабочих дней, 400 ₽        |
-| «Какова гарантия на электронику?»        | 12 месяцев                     |
-| «Можно ли купить в рассрочку?»           | да, «0-0-6» от 3000 ₽          |
-| «Как связаться с поддержкой?»            | 8 800 555-35-35, круглосуточно |
-| «Как получить 5% кэшбэка?»               | от 50 000 ₽                    |
-| «Какая погода в Москве?»                 | real weather — `admin` only    |
+| Ask                                            | Answer                   |
+| ---------------------------------------------- | ------------------------ |
+| "How many days do I have to return an item?"   | 14 calendar days         |
+| "How long does delivery to another city take?" | 2–5 business days, ₽400  |
+| "What is the warranty on electronics?"         | 12 months                |
+| "Can I buy in installments?"                   | yes, "0-0-6" from ₽3,000 |
+| "How can I contact support?"                   | 8 999 888-77-66, 24/7    |
+| "How do I get 5% cashback?"                    | from ₽50,000             |
 
-`user` never sees the weather tool: it is removed from the schema before the
-model runs. Ask from the [TUI or curl](./demo), or run the
+The seeded sources are Russian, so the bot may answer in Russian. `admin` can
+additionally ask for the weather; `user` never sees that tool: it is removed from
+the schema before the model runs. Ask from the [TUI or curl](./demo), or run the
 [Postman collection](./demo/postman).
 
 ## Learn more

@@ -1,4 +1,3 @@
-// Command kitctl manages local models and validates policy files.
 package main
 
 import (
@@ -26,6 +25,8 @@ func main() {
 		os.Exit(runPolicy(os.Args[2:]))
 	case "model":
 		os.Exit(runModel(os.Args[2:]))
+	case "verify":
+		os.Exit(runVerify(os.Args[2:]))
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -39,11 +40,18 @@ func usage() {
 	fmt.Fprint(os.Stderr, `kitctl commands:
   policy check <file>                 validate policy.yaml in strict mode
   model pull <org/name> [--dir DIR]   download model files into ./models
+  verify window [--model-context N] [--guard-max-chars M] [--policy FILE]
+                                      check the I-06 guard/model window rule
+  verify models [--dir DIR] [--guard-model NAME] [--embed-model NAME]
+                                      validate the local guard and embedder models
+  verify parity --dir DIR [--fixtures DIR] [--min-agreement 1.0]
+                                      run the guard parity gate over fixtures
+  verify latency --dir DIR [--iterations 200] [--warmup 20] [--max-chars 8000]
+                                      measure guard pipeline latency (L1 and L1+L2)
 `)
 }
 
 func runPolicy(args []string) int {
-
 	rest := args
 	if len(rest) > 0 && rest[0] == "check" {
 		rest = rest[1:]
@@ -117,7 +125,7 @@ func download(ctx context.Context, hc *http.Client, url, path string) error {
 	if err != nil {
 		return fmt.Errorf("download %s: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download %s: status %d", url, resp.StatusCode)
 	}
@@ -130,8 +138,8 @@ func download(ctx context.Context, hc *http.Client, url, path string) error {
 		return err
 	}
 	if _, err := io.Copy(f, resp.Body); err != nil {
-		f.Close()
-		os.Remove(tmp)
+		_ = f.Close()
+		_ = os.Remove(tmp)
 		return fmt.Errorf("write %s: %w", tmp, err)
 	}
 	if err := errors.Join(f.Close(), os.Rename(tmp, path)); err != nil {

@@ -26,6 +26,7 @@ import (
 	"github.com/gobellim/kit/demo/internal/usecase"
 	"github.com/gobellim/kit/embed"
 	"github.com/gobellim/kit/model"
+	"github.com/gobellim/kit/trace"
 )
 
 func main() {
@@ -60,12 +61,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	embedder, err := embed.NewOpenAI(embed.OpenAIConfig{
-		BaseURL:    cfg.EmbedBaseURL,
-		Model:      cfg.EmbedModel,
-		Dim:        cfg.EmbedDim,
-		HTTPClient: client,
-	})
+	embedder, err := newEmbedder(cfg, client)
+	if err != nil {
+		return err
+	}
+
+	sampler, err := trace.SamplerFromString(cfg.TraceSample)
 	if err != nil {
 		return err
 	}
@@ -74,13 +75,15 @@ func run() error {
 	defer stop()
 
 	engine, err := kitengine.New(ctx, kitengine.Config{
-		ES:       elastic.New(cfg.ESURL, client),
-		LLM:      llm,
-		Embedder: embedder,
-		Policy:   policy,
-		GuardL2:  guardrail.New(cfg.ModelsDir, cfg.GLiNERModel, log),
-		Weather:  weather.New(client, cfg.WeatherBaseURL),
-		Logger:   log,
+		ES:        elastic.New(cfg.ESURL, client),
+		LLM:       llm,
+		Embedder:  embedder,
+		Policy:    policy,
+		GuardL2:   guardrail.New(cfg.ModelsDir, cfg.GLiNERModel, log),
+		Weather:   weather.New(client, cfg.WeatherBaseURL),
+		TraceText: cfg.TraceText,
+		Sampler:   sampler,
+		Logger:    log,
 	})
 	if err != nil {
 		return err
@@ -131,6 +134,18 @@ func run() error {
 		return err
 	}
 	return nil
+}
+
+func newEmbedder(cfg config.Config, client *http.Client) (embed.Embedder, error) {
+	if cfg.EmbedLocal {
+		return embed.NewLocal(embed.LocalConfig{Dir: cfg.ModelsDir, Model: cfg.EmbedModel})
+	}
+	return embed.NewOpenAI(embed.OpenAIConfig{
+		BaseURL:    cfg.EmbedBaseURL,
+		Model:      cfg.EmbedModel,
+		Dim:        cfg.EmbedDim,
+		HTTPClient: client,
+	})
 }
 
 func newHTTPClient(cfg config.Config) (*http.Client, error) {

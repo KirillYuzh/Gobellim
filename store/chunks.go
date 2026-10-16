@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/gobellim/kit/internal/core"
 )
 
 type Doc struct {
@@ -43,8 +45,6 @@ func bulkBody(op, index string, docs []Doc) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Chunk is one indexed passage;
-// the ACL is computed at write time and stored in the document.
 type Chunk struct {
 	ID         string
 	DocID      string
@@ -63,12 +63,14 @@ func (c Chunk) Document() map[string]any {
 		"doc_id":      c.DocID,
 		TenantField:   c.Tenant,
 		ACLField:      c.ACL,
-		TextField:     c.Text,
 		"position":    c.Position,
 		"quarantined": c.Quarantine,
 	}
-	if len(c.Vector) > 0 {
-		doc[VectorField] = c.Vector
+	if !c.Quarantine {
+		doc[TextField] = c.Text
+		if len(c.Vector) > 0 {
+			doc[VectorField] = c.Vector
+		}
 	}
 	if c.Source != "" {
 		doc["source"] = c.Source
@@ -81,9 +83,31 @@ func (c Chunk) Document() map[string]any {
 	return doc
 }
 
-func ChunksBulkBody(chunks []Chunk) ([]byte, error) {
+func ValidateChunk(c Chunk, dims int) error {
+	if c.Quarantine {
+		if c.Text != "" {
+			return fmt.Errorf("store: quarantined chunk %q must not carry text: %w", c.ID, core.ErrInvalidArgs)
+		}
+		if len(c.Vector) > 0 {
+			return fmt.Errorf("store: quarantined chunk %q must not carry a vector: %w", c.ID, core.ErrInvalidArgs)
+		}
+		return nil
+	}
+	if len(c.Vector) == 0 {
+		return fmt.Errorf("store: chunk %q has no vector: %w", c.ID, core.ErrInvalidArgs)
+	}
+	if dims > 0 && len(c.Vector) != dims {
+		return fmt.Errorf("store: chunk %q vector has %d dims, want %d: %w", c.ID, len(c.Vector), dims, core.ErrInvalidArgs)
+	}
+	return nil
+}
+
+func ChunksBulkBody(chunks []Chunk, dims int) ([]byte, error) {
 	docs := make([]Doc, 0, len(chunks))
 	for _, c := range chunks {
+		if err := ValidateChunk(c, dims); err != nil {
+			return nil, err
+		}
 		docs = append(docs, Doc{ID: c.ID, Source: c.Document()})
 	}
 	return BulkBody(IndexChunks, docs)

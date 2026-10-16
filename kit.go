@@ -1,16 +1,18 @@
-// Package kit wires the Elasticsearch client, the LLM, the embedder and the
-// RBAC policy into one App and exposes Chat, Ingest, Search, Delete, Score and
-// Generate.
 package kit
 
 import (
-	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,10 +37,32 @@ const (
 	DefaultTopK            = 10
 )
 
+type EgressPolicy struct {
+	RuleOfTwo bool
+}
+
+type ApprovalRequest struct {
+	UserID      string
+	Tenant      string
+	Tool        string
+	Args        string
+	Fingerprint string
+	Effect      Effect
+}
+
+type Approver interface {
+	Approve(ctx context.Context, req ApprovalRequest) (bool, error)
+}
+
+type ApproverFunc func(ctx context.Context, req ApprovalRequest) (bool, error)
+
+func (f ApproverFunc) Approve(ctx context.Context, req ApprovalRequest) (bool, error) {
+	return f(ctx, req)
+}
+
 type Config struct {
-	ES  store.ES
-	LLM model.Client
-	// Embedder is required by Ingest and Search only; a chat-only App may leave it nil.
+	ES              store.ES
+	LLM             model.Client
 	Embedder        embed.Embedder
 	Policy          *authz.Policy
 	GuardL2         guard.Detector
@@ -52,24 +76,33 @@ type Config struct {
 	ToolTimeout     time.Duration
 	ArgsMaxBytes    int
 	TopK            int
-	TraceStoreRaw   bool
 	Logger          *slog.Logger
+
+	TraceText      trace.TextPolicy
+	Sampler        trace.Sampler
+	HideInput      bool
+	HideOutput     bool
+	Sinks          []trace.Sink
+	MaxTotalTokens int
+	Egress         EgressPolicy
+	Approver       Approver
+	BeforeToolCall BeforeToolHook
+	AfterToolCall  AfterToolHook
 }
 
 type App struct {
-	cfg     Config
-	policy  *authz.Policy
-	guard   *guard.Pipeline
-	writer  *trace.Writer
-	calls   call.Deps
-	chunker *chunk.Chunker
-	mu      sync.RWMutex
-	tools   map[string]*ToolDef
-	order   []string
+	cfg        Config
+	policy     *authz.Policy
+	guard      *guard.Pipeline
+	writer     *trace.Writer
+	calls      call.Deps
+	chunker    *chunk.Chunker
+	policyHash string
+	mu         sync.RWMutex
+	tools      map[string]*ToolDef
+	order      []string
 }
 
-// New validates the configuration and builds the App. It performs no network
-// I/O; call Setup to create the Elasticsearch schema.
 func New(_ context.Context, cfg Config) (*App, error) {
 	if cfg.ES == nil {
 		return nil, fmt.Errorf("kit: Config.ES is required: %w", core.ErrInvalidConfig)
@@ -107,12 +140,35 @@ func New(_ context.Context, cfg Config) (*App, error) {
 	if cfg.Tokenizer == nil {
 		cfg.Tokenizer = chunk.WhitespaceTokenizer{}
 	}
+	if cfg.TraceText.IsRaw() {
+		cfg.Logger.Warn("kit: trace text policy is FULL: unmasked input and output are written to Elasticsearch")
+	}
+	if cw, ok := cfg.LLM.(model.ContextWindow); ok {
+		effective := cfg.GuardMaxChars
+		if effective <= 0 {
+			effective = guard.DefaultMaxChars
+		}
+		if window := cw.ContextTokens(); window > 0 && effective > window {
+			return nil, fmt.Errorf("kit: guard window %d chars exceeds the model context window %d tokens: %w",
+				effective, window, core.ErrInvalidConfig)
+		}
+	}
+
+	hash := policyHash(cfg.Policy)
 
 	layers := []guard.Detector{rules.New()}
+	guardModel := ""
 	if cfg.GuardL2 != nil {
 		layers = append(layers, cfg.GuardL2)
+		guardModel = cfg.GuardL2.Name()
 	}
-	pipeline, err := guard.New(guard.Options{Layers: layers, MaxChars: cfg.GuardMaxChars, CacheSize: cfg.GuardCacheSize})
+	guardVersion := hash + "/" + layerID(layers)
+	pipeline, err := guard.New(guard.Options{
+		Layers:    layers,
+		MaxChars:  cfg.GuardMaxChars,
+		CacheSize: cfg.GuardCacheSize,
+		Version:   guardVersion,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -120,25 +176,40 @@ func New(_ context.Context, cfg Config) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	writer, err := trace.NewWriter(trace.Options{ES: cfg.ES, Logger: cfg.Logger})
+	writer, err := trace.NewWriter(trace.Options{
+		ES:         cfg.ES,
+		Sinks:      cfg.Sinks,
+		Text:       cfg.TraceText,
+		Sampler:    cfg.Sampler,
+		HideInput:  cfg.HideInput,
+		HideOutput: cfg.HideOutput,
+		Logger:     cfg.Logger,
+	})
 	if err != nil {
 		return nil, err
 	}
 
 	app := &App{
-		cfg:     cfg,
-		policy:  cfg.Policy,
-		guard:   pipeline,
-		writer:  writer,
-		chunker: chunker,
-		tools:   make(map[string]*ToolDef),
+		cfg:        cfg,
+		policy:     cfg.Policy,
+		guard:      pipeline,
+		writer:     writer,
+		chunker:    chunker,
+		policyHash: hash,
+		tools:      make(map[string]*ToolDef),
 	}
-	app.calls = call.Deps{Authz: cfg.Policy, Guard: pipeline, Tracer: tracerAdapter{writer}}
+	app.calls = call.Deps{
+		Authz:        cfg.Policy,
+		Guard:        pipeline,
+		Tracer:       tracerAdapter{writer},
+		GuardVersion: pipeline.Version(),
+		GuardModel:   guardModel,
+		PolicyHash:   hash,
+		TextPolicy:   cfg.TraceText,
+	}
 	return app, nil
 }
 
-// Setup creates the ILM policy and the data stream templates, plus the chunks
-// index when an embedder with a known dimension is configured.
 func (a *App) Setup(ctx context.Context) error {
 	return store.EnsureSchema(ctx, a.cfg.ES, a.embeddingDims())
 }
@@ -156,6 +227,17 @@ func (a *App) Close(ctx context.Context) error {
 
 func (a *App) Guard() *guard.Pipeline { return a.guard }
 
+func (a *App) GuardVersion() string { return a.guard.Version() }
+
+func (a *App) PolicyHash() string { return a.policyHash }
+
+func (a *App) logger() *slog.Logger {
+	if a.cfg.Logger != nil {
+		return a.cfg.Logger
+	}
+	return slog.Default()
+}
+
 type tracerAdapter struct{ w *trace.Writer }
 
 func (t tracerAdapter) Observe(_ context.Context, o trace.Observation) { t.w.EnqueueObservation(o) }
@@ -168,18 +250,94 @@ func principal(ctx context.Context) (core.Principal, error) {
 	return pr, nil
 }
 
+func principalScoped(ctx context.Context) (core.Principal, error) {
+	pr, err := principal(ctx)
+	if err != nil {
+		return core.Principal{}, err
+	}
+	if err := pr.Validate(); err != nil {
+		return core.Principal{}, fmt.Errorf("kit: %w: %w", err, core.ErrUnauthorized)
+	}
+	return pr, nil
+}
+
+func layerID(layers []guard.Detector) string {
+	names := make([]string, 0, len(layers))
+	for _, l := range layers {
+		names = append(names, l.Name())
+	}
+	return strings.Join(names, "+")
+}
+
+func policyHash(p *authz.Policy) string {
+	roles := make([]string, 0, len(p.Roles))
+	for r := range p.Roles {
+		roles = append(roles, r)
+	}
+	sort.Strings(roles)
+
+	h := sha256.New()
+	h.Write([]byte("v1|" + p.Default + "\n"))
+	for _, r := range roles {
+		perms := append([]string(nil), p.Roles[r].Permissions...)
+		sort.Strings(perms)
+		h.Write([]byte(r + "=" + strings.Join(perms, ",") + "\n"))
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+func (a *App) guardTrace(pr core.Principal, traceID, name string, tags []string, started time.Time) trace.Trace {
+	return trace.Trace{
+		ID:           traceID,
+		Name:         name,
+		UserID:       pr.UserID,
+		Tenant:       pr.Tenant,
+		StartTime:    started,
+		Tags:         tags,
+		TextPolicy:   a.cfg.TraceText,
+		GuardVersion: a.calls.GuardVersion,
+		GuardModel:   a.calls.GuardModel,
+		PolicyHash:   a.policyHash,
+	}
+}
+
+func (a *App) guardText(ctx context.Context, rail guard.Rail, name, text, traceID string) (string, bool, error) {
+	v, err := call.Guard(ctx, a.calls, call.Req{
+		Kind: call.KindGuard, Name: name, Rail: rail, Text: text, TraceID: traceID,
+	})
+	if err != nil {
+		return "", false, err
+	}
+	return v.Text, v.Action != guard.Allow, nil
+}
+
+func errorResult(msg string) string {
+	b, err := json.Marshal(map[string]string{"error": msg})
+	if err != nil {
+		return `{"error":"tool error"}`
+	}
+	return string(b)
+}
+
 type ChatRequest struct {
-	// System is the server-side system prompt. A client message with the system
-	// role is still discarded, so the application owns the instructions.
 	System      string
 	Messages    []model.Message
 	SessionID   string
 	Temperature *float64
 	MaxTokens   int
+	ToolChoice  string
+	Tags        []string
 }
 
-// Chat runs the guard, model and tools loop and returns the final message.
-// There is no streaming.
+type turn struct {
+	traceID      string
+	principal    core.Principal
+	callsPerTool map[string]int
+	invalidTries map[string]int
+	approved     map[string]bool
+	untrusted    bool
+}
+
 func (a *App) Chat(ctx context.Context, req ChatRequest) (out model.Message, err error) {
 	pr, err := principal(ctx)
 	if err != nil {
@@ -189,14 +347,16 @@ func (a *App) Chat(ctx context.Context, req ChatRequest) (out model.Message, err
 	started := time.Now()
 	var total model.Usage
 
-	tr := trace.Trace{
-		ID: traceID, Name: "chat", UserID: pr.UserID, Tenant: pr.Tenant,
-		SessionID: req.SessionID, StartTime: started,
-	}
+	tr := a.guardTrace(pr, traceID, "chat", req.Tags, started)
+	tr.SessionID = req.SessionID
 	defer func() {
 		tr.EndTime = time.Now()
 		tr.Output = out.Content
-		tr.Usage = toTraceUsage(total)
+		tr.Usage = trace.Usage{
+			PromptTokens:     total.PromptTokens,
+			CompletionTokens: total.CompletionTokens,
+			TotalTokens:      total.TotalTokens,
+		}
 		a.writer.Enqueue(tr)
 	}()
 
@@ -204,15 +364,22 @@ func (a *App) Chat(ctx context.Context, req ChatRequest) (out model.Message, err
 	if len(client) == 0 {
 		return model.Message{}, fmt.Errorf("kit: chat: no user or assistant messages: %w", core.ErrInvalidArgs)
 	}
+	t := &turn{
+		traceID:      traceID,
+		principal:    pr,
+		callsPerTool: make(map[string]int),
+		invalidTries: make(map[string]int),
+		approved:     make(map[string]bool),
+	}
 	for i := range client {
-		v, gerr := call.Guard(ctx, a.calls, call.Req{
-			Kind: call.KindGuard, Name: "guard:input", Rail: guard.RailInput,
-			Text: client[i].Content, TraceID: traceID,
-		})
+		text, untrusted, gerr := a.guardText(ctx, guard.RailInput, "guard:input", client[i].Content, traceID)
 		if gerr != nil {
 			return model.Message{}, gerr
 		}
-		client[i].Content = v.Text
+		if untrusted {
+			t.untrusted = true
+		}
+		client[i].Content = text
 	}
 
 	msgs := make([]model.Message, 0, len(client)+1)
@@ -222,10 +389,14 @@ func (a *App) Chat(ctx context.Context, req ChatRequest) (out model.Message, err
 	msgs = append(msgs, client...)
 
 	specs := a.allowedToolSpecs(pr)
-	callsPerTool := make(map[string]int)
-	invalidTries := make(map[string]int)
+	tr.Input = client[len(client)-1].Content
 
 	for step := 0; step < a.cfg.MaxSteps; step++ {
+		toolChoice := req.ToolChoice
+		if step == a.cfg.MaxSteps-1 && len(specs) > 0 {
+			toolChoice = "none"
+		}
+
 		resp, cerr := call.Do(ctx, a.calls, call.Req{
 			Kind: call.KindLLM, Name: a.cfg.LLM.Model(), Model: a.cfg.LLM.Model(), TraceID: traceID,
 		}, func(ctx context.Context, span *call.Span) (model.Response, error) {
@@ -235,6 +406,7 @@ func (a *App) Chat(ctx context.Context, req ChatRequest) (out model.Message, err
 				Tools:       specs,
 				Temperature: req.Temperature,
 				MaxTokens:   req.MaxTokens,
+				ToolChoice:  toolChoice,
 			})
 			span.Output = r.Message.Content
 			span.Usage = trace.Usage{
@@ -242,6 +414,7 @@ func (a *App) Chat(ctx context.Context, req ChatRequest) (out model.Message, err
 				CompletionTokens: r.Usage.CompletionTokens,
 				TotalTokens:      r.Usage.TotalTokens,
 			}
+			span.Metadata = map[string]any{"finish_reason": string(r.FinishReason)}
 			return r, rerr
 		})
 		if cerr != nil {
@@ -250,23 +423,24 @@ func (a *App) Chat(ctx context.Context, req ChatRequest) (out model.Message, err
 		total.PromptTokens += resp.Usage.PromptTokens
 		total.CompletionTokens += resp.Usage.CompletionTokens
 		total.TotalTokens += resp.Usage.TotalTokens
+		if a.cfg.MaxTotalTokens > 0 && total.TotalTokens > a.cfg.MaxTotalTokens {
+			return model.Message{}, fmt.Errorf("kit: chat: token budget %d exceeded (%d): %w",
+				a.cfg.MaxTotalTokens, total.TotalTokens, core.ErrBudget)
+		}
 
 		if len(resp.Message.ToolCalls) == 0 {
-			v, gerr := call.Guard(ctx, a.calls, call.Req{
-				Kind: call.KindGuard, Name: "guard:output", Rail: guard.RailOutput,
-				Text: resp.Message.Content, TraceID: traceID,
-			})
+			text, _, gerr := a.guardText(ctx, guard.RailOutput, "guard:output", resp.Message.Content, traceID)
 			if gerr != nil {
 				return model.Message{}, gerr
 			}
 			final := resp.Message
-			final.Content = v.Text
+			final.Content = text
 			return final, nil
 		}
 
 		msgs = append(msgs, resp.Message)
 		for _, tc := range resp.Message.ToolCalls {
-			result, terr := a.execTool(ctx, tc, pr, traceID, callsPerTool, invalidTries)
+			result, terr := a.execTool(ctx, tc, t)
 			if terr != nil {
 				return model.Message{}, terr
 			}
@@ -281,60 +455,230 @@ func (a *App) Chat(ctx context.Context, req ChatRequest) (out model.Message, err
 	return model.Message{}, fmt.Errorf("kit: chat: reached max_steps=%d: %w", a.cfg.MaxSteps, core.ErrMaxSteps)
 }
 
-func (a *App) execTool(ctx context.Context, tc model.ToolCall, pr core.Principal, traceID string, callsPerTool, invalidTries map[string]int) (string, error) {
+var urlHostRe = regexp.MustCompile(`(?i)\b(?:https?|ftp)://[^\s/?#"'\\]*`)
+
+func (a *App) execTool(ctx context.Context, tc model.ToolCall, t *turn) (string, error) {
 	a.mu.RLock()
 	def := a.tools[tc.Name]
 	a.mu.RUnlock()
 	if def == nil {
-		return "", fmt.Errorf("kit: tool %q: %w", tc.Name, core.ErrToolNotFound)
+		return errorResult(fmt.Sprintf("tool %q is not available", tc.Name)), nil
 	}
 
-	if err := a.policy.Authorize(pr, def.permission); err != nil {
+	if err := a.policy.Authorize(t.principal, def.permission); err != nil {
 		return "", err
 	}
-	callsPerTool[tc.Name]++
-	if callsPerTool[tc.Name] > a.cfg.MaxCallsPerTool {
-		return "", fmt.Errorf("kit: tool %q exceeded max_calls=%d: %w", tc.Name, a.cfg.MaxCallsPerTool, core.ErrMaxSteps)
+	t.callsPerTool[tc.Name]++
+	if t.callsPerTool[tc.Name] > a.cfg.MaxCallsPerTool {
+		return errorResult(fmt.Sprintf("tool %s exceeded its call limit", tc.Name)), nil
 	}
 	if len(tc.Args) > a.cfg.ArgsMaxBytes {
-		return "", fmt.Errorf("kit: tool %q arguments exceed %d bytes: %w", tc.Name, a.cfg.ArgsMaxBytes, core.ErrInvalidArgs)
+		return errorResult("arguments too large"), nil
 	}
 	if err := def.validate(tc.Args); err != nil {
-		invalidTries[tc.Name]++
-		if invalidTries[tc.Name] > 1 {
+		t.invalidTries[tc.Name]++
+		if t.invalidTries[tc.Name] > 1 {
 			return "", err
 		}
-
-		return fmt.Sprintf("invalid arguments: %v", err), nil
+		return errorResult(err.Error()), nil
 	}
-
-	out, err := call.Do(ctx, a.calls, call.Req{
-		Kind:       call.KindTool,
-		Name:       tc.Name,
-		Permission: def.permission,
-		TraceID:    traceID,
-	}, func(ctx context.Context, span *call.Span) (string, error) {
-		tctx, cancel := context.WithTimeout(ctx, a.cfg.ToolTimeout)
-		defer cancel()
-		res, ierr := def.invoke(tctx, tc.Args)
-		span.Output = res
-		return res, ierr
-	})
-	if err != nil {
+	if def.requireApproval {
+		if err := a.approve(ctx, def, tc.Args, t); err != nil {
+			return "", err
+		}
+	}
+	if err := a.checkEgress(def, tc.Args, t); err != nil {
 		return "", err
 	}
 
-	v, err := call.Guard(ctx, a.calls, call.Req{
+	info := ToolCallInfo{
+		UserID:      t.principal.UserID,
+		Tenant:      t.principal.Tenant,
+		Tool:        tc.Name,
+		Args:        tc.Args,
+		Fingerprint: def.Fingerprint(tc.Args),
+		Effect:      def.effect,
+		CallIndex:   t.callsPerTool[tc.Name],
+	}
+
+	execute := func() (string, error) {
+		return call.Do(ctx, a.calls, call.Req{
+			Kind:       call.KindTool,
+			Name:       tc.Name,
+			Permission: def.permission,
+			TraceID:    t.traceID,
+			Tags:       []string{"effect:" + def.effect.String()},
+		}, func(ctx context.Context, span *call.Span) (string, error) {
+			tctx, cancel := context.WithTimeout(ctx, a.cfg.ToolTimeout)
+			defer cancel()
+			res, ierr := def.invoke(tctx, tc.Args)
+			span.Output = res
+			return res, ierr
+		})
+	}
+
+	var (
+		result  string
+		execErr error
+	)
+	if h := a.beforeHook(def); h != nil {
+		proceed, output, herr := h(ctx, info)
+		switch {
+		case herr != nil:
+			execErr = herr
+		case !proceed:
+			result = output
+		default:
+			result, execErr = execute()
+		}
+	} else {
+		result, execErr = execute()
+	}
+
+	if h := a.afterHook(def); h != nil {
+		result, execErr = h(ctx, info, result, execErr)
+	}
+
+	if execErr != nil {
+		if isFatalExecErr(execErr) {
+			return "", execErr
+		}
+		return errorResult(execErr.Error()), nil
+	}
+
+	v, gerr := call.Guard(ctx, a.calls, call.Req{
 		Kind: call.KindGuard, Name: "guard:tool_result", Rail: guard.RailToolResult,
-		Text: out, TraceID: traceID,
+		Text: result, TraceID: t.traceID,
 	})
-	if err == nil {
-		return v.Text, nil
+	if gerr != nil {
+		if errors.Is(gerr, core.ErrGuardReject) {
+			t.untrusted = true
+			return errorResult("result blocked by guard"), nil
+		}
+		return "", gerr
 	}
-	if errors.Is(err, core.ErrGuardReject) {
-		return "[blocked by guard]", nil
+	if v.Action != guard.Allow {
+		t.untrusted = true
 	}
-	return "", err
+
+	final := v.Text
+	if def.validateOutput {
+		if verr := def.validateResult(final); verr != nil {
+			a.logger().Warn("kit: tool output does not match its schema", "tool", def.name, "err", verr)
+		}
+	}
+	return def.ModelView(final), nil
+}
+
+func (a *App) beforeHook(def *ToolDef) BeforeToolHook {
+	if def.beforeTool != nil {
+		return def.beforeTool
+	}
+	return a.cfg.BeforeToolCall
+}
+
+func (a *App) afterHook(def *ToolDef) AfterToolHook {
+	if def.afterTool != nil {
+		return def.afterTool
+	}
+	return a.cfg.AfterToolCall
+}
+
+func isFatalExecErr(err error) bool {
+	return errors.Is(err, core.ErrProvider) ||
+		errors.Is(err, core.ErrUnauthorized) ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded)
+}
+
+func (a *App) approve(ctx context.Context, def *ToolDef, args string, t *turn) error {
+	if a.cfg.Approver == nil {
+		return fmt.Errorf("kit: tool %s requires approval but no Approver is configured: %w",
+			def.name, core.ErrApprovalRequired)
+	}
+	fingerprint := def.Fingerprint(args)
+	if t.approved == nil {
+		t.approved = make(map[string]bool)
+	}
+	if t.approved[fingerprint] {
+		return fmt.Errorf("kit: tool %s: approval %s was already consumed in this turn: %w",
+			def.name, fingerprint, core.ErrApprovalRequired)
+	}
+	ok, err := a.cfg.Approver.Approve(ctx, ApprovalRequest{
+		UserID:      t.principal.UserID,
+		Tenant:      t.principal.Tenant,
+		Tool:        def.name,
+		Args:        args,
+		Fingerprint: fingerprint,
+		Effect:      def.effect,
+	})
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("kit: tool %s: approval denied: %w", def.name, core.ErrApprovalRequired)
+	}
+	t.approved[fingerprint] = true
+	return nil
+}
+
+func (a *App) checkEgress(def *ToolDef, args string, t *turn) error {
+	if !def.effect.IsEgress() {
+		return nil
+	}
+	if a.cfg.Egress.RuleOfTwo && t.untrusted {
+		return fmt.Errorf("kit: tool %s: egress blocked after untrusted input in this turn: %w",
+			def.name, core.ErrUnauthorized)
+	}
+	if len(def.egressHosts) == 0 {
+		return nil
+	}
+	for _, host := range urlHosts(args) {
+		if !hostAllowed(host, def.egressHosts) {
+			return fmt.Errorf("kit: tool %s: host %q is not allowed: %w", def.name, host, core.ErrUnauthorized)
+		}
+	}
+	return nil
+}
+
+func urlHosts(args string) []string {
+	matches := urlHostRe.FindAllString(args, -1)
+	out := make([]string, 0, len(matches))
+	for _, raw := range matches {
+		host := raw
+		if _, rest, ok := strings.Cut(raw, "://"); ok {
+			host = rest
+		}
+		if i := strings.IndexAny(host, "/?#"); i >= 0 {
+			host = host[:i]
+		}
+		if i := strings.LastIndex(host, "@"); i >= 0 {
+			host = host[i+1:]
+		}
+		if i := strings.LastIndex(host, ":"); i >= 0 && strings.Count(host, ":") == 1 {
+			if _, err := strconv.Atoi(host[i+1:]); err == nil {
+				host = host[:i]
+			}
+		}
+		if host != "" {
+			out = append(out, strings.ToLower(host))
+		}
+	}
+	return out
+}
+
+func hostAllowed(host string, allowed []string) bool {
+	host = strings.ToLower(host)
+	for _, a := range allowed {
+		a = strings.ToLower(strings.TrimSpace(a))
+		if a == "" {
+			continue
+		}
+		if host == a || strings.HasSuffix(host, "."+a) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *App) allowedToolSpecs(pr core.Principal) []model.ToolSpec {
@@ -371,7 +715,7 @@ type Doc struct {
 }
 
 func (a *App) Ingest(ctx context.Context, doc Doc) (err error) {
-	pr, err := principal(ctx)
+	pr, err := principalScoped(ctx)
 	if err != nil {
 		return err
 	}
@@ -387,11 +731,12 @@ func (a *App) Ingest(ctx context.Context, doc Doc) (err error) {
 
 	traceID := id.New()
 	started := time.Now()
-	tr := trace.Trace{ID: traceID, Name: "ingest", UserID: pr.UserID, Tenant: pr.Tenant, StartTime: started, Input: doc.Text}
-	var indexed, quarantined int
+	tr := a.guardTrace(pr, traceID, "ingest", nil, started)
+	tr.Input = doc.Text
+	var indexed, quarantined, deleted int
 	defer func() {
 		tr.EndTime = time.Now()
-		tr.Metadata = map[string]any{"indexed": indexed, "quarantined": quarantined}
+		tr.Metadata = map[string]any{"indexed": indexed, "quarantined": quarantined, "deleted": deleted}
 		a.writer.Enqueue(tr)
 	}()
 
@@ -436,9 +781,32 @@ func (a *App) Ingest(ctx context.Context, doc Doc) (err error) {
 		indexed++
 	}
 
+	body, err := store.DeleteByDocBody(doc.ID, pr.Tenant)
+	if err != nil {
+		return err
+	}
+	delReq := store.RawRequest(http.MethodPost, "/"+store.IndexChunks+"/_delete_by_query", body, "application/json")
+	delReq.Refresh = "true"
+	delReq.Idempotent = true
 	resp, err := a.esDo(ctx, call.Req{
 		Kind: call.KindIngest, Name: store.IndexChunks, Permission: authz.PermIngest, TraceID: traceID,
-	}, http.MethodPost, "/_bulk?refresh=wait_for", func() ([]byte, error) { return store.ChunksBulkBody(chunks) })
+	}, delReq)
+	if err != nil {
+		return err
+	}
+	if deleted, err = store.ParseDeleteByQuery(resp); err != nil {
+		return fmt.Errorf("kit: ingest: %w", err)
+	}
+
+	bulk, err := store.ChunksBulkBody(chunks, a.cfg.Embedder.Dim())
+	if err != nil {
+		return err
+	}
+	bulkReq := store.NDJSONRequest(http.MethodPost, "/_bulk", bulk)
+	bulkReq.Refresh = "wait_for"
+	resp, err = a.esDo(ctx, call.Req{
+		Kind: call.KindIngest, Name: store.IndexChunks, Permission: authz.PermIngest, TraceID: traceID,
+	}, bulkReq)
 	if err != nil {
 		return err
 	}
@@ -449,8 +817,9 @@ func (a *App) Ingest(ctx context.Context, doc Doc) (err error) {
 }
 
 type SearchRequest struct {
-	Query string
-	TopK  int
+	Query  string
+	TopK   int
+	Filter store.Filter
 }
 
 type SearchHit struct {
@@ -462,7 +831,7 @@ type SearchHit struct {
 }
 
 func (a *App) Search(ctx context.Context, req SearchRequest) ([]SearchHit, error) {
-	pr, err := principal(ctx)
+	pr, err := principalScoped(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -483,7 +852,8 @@ func (a *App) Search(ctx context.Context, req SearchRequest) ([]SearchHit, error
 	traceID := id.New()
 	started := time.Now()
 	var hits []SearchHit
-	tr := trace.Trace{ID: traceID, Name: "search", UserID: pr.UserID, Tenant: pr.Tenant, StartTime: started, Input: req.Query}
+	tr := a.guardTrace(pr, traceID, "search", nil, started)
+	tr.Input = req.Query
 	defer func() {
 		tr.EndTime = time.Now()
 		tr.Metadata = map[string]any{"hits": len(hits)}
@@ -502,11 +872,20 @@ func (a *App) Search(ctx context.Context, req SearchRequest) ([]SearchHit, error
 		return nil, nil
 	}
 
+	nd, err := store.MSearchNDJSON(store.SearchQuery{
+		Text:      req.Query,
+		Vector:    vectors[0],
+		Principal: pr,
+		TopK:      topK,
+		Filter:    req.Filter,
+	})
+	if err != nil {
+		return nil, err
+	}
+	msearchReq := store.NDJSONRequest(http.MethodPost, "/"+store.IndexChunks+"/_msearch", nd)
 	body, err := a.esDo(ctx, call.Req{
 		Kind: call.KindSearch, Name: store.IndexChunks, Permission: authz.PermSearch, TraceID: traceID,
-	}, http.MethodPost, "/"+store.IndexChunks+"/_msearch", func() ([]byte, error) {
-		return store.MSearchNDJSON(store.SearchQuery{Text: req.Query, Vector: vectors[0], Principal: pr, TopK: topK})
-	})
+	}, msearchReq)
 	if err != nil {
 		return nil, err
 	}
@@ -530,23 +909,61 @@ func (a *App) Search(ctx context.Context, req SearchRequest) ([]SearchHit, error
 }
 
 func (a *App) Delete(ctx context.Context, docID string) error {
-	pr, err := principal(ctx)
+	pr, err := principalScoped(ctx)
 	if err != nil {
 		return err
 	}
 	if err := a.policy.Authorize(pr, authz.PermDelete); err != nil {
 		return err
 	}
-	query := map[string]any{"query": map[string]any{"bool": map[string]any{"filter": []any{
-		map[string]any{"term": map[string]any{"doc_id": docID}},
-		map[string]any{"term": map[string]any{store.TenantField: pr.Tenant}},
-	}}}}
-	_, err = a.esDo(ctx, call.Req{
-		Kind: call.KindIngest, Name: store.IndexChunks, Permission: authz.PermDelete,
-	}, http.MethodPost, "/"+store.IndexChunks+"/_delete_by_query?refresh=true", func() ([]byte, error) {
-		return json.Marshal(query)
-	})
-	return err
+	body, err := store.DeleteByDocBody(docID, pr.Tenant)
+	if err != nil {
+		return err
+	}
+	req := store.RawRequest(http.MethodPost, "/"+store.IndexChunks+"/_delete_by_query", body, "application/json")
+	req.Refresh = "true"
+	req.Idempotent = true
+
+	traceID := id.New()
+	resp, err := a.esDo(ctx, call.Req{
+		Kind: call.KindDelete, Name: store.IndexChunks, Permission: authz.PermDelete, TraceID: traceID,
+	}, req)
+	if err != nil {
+		return err
+	}
+	if _, err := store.ParseDeleteByQuery(resp); err != nil {
+		return fmt.Errorf("kit: delete: %w", err)
+	}
+	return nil
+}
+
+func (a *App) Prune(ctx context.Context, olderThan time.Duration) (int, error) {
+	pr, err := principal(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if err := a.policy.Authorize(pr, authz.PermPrune); err != nil {
+		return 0, err
+	}
+	traceID := id.New()
+	deleted := 0
+	for _, stream := range []string{store.DataStreamTraces, store.DataStreamObservations} {
+		req := store.RawRequest(http.MethodPost, "/"+stream+"/_delete_by_query", store.PruneBody(olderThan), "application/json")
+		req.Refresh = "false"
+		req.Idempotent = true
+		resp, err := a.esDo(ctx, call.Req{
+			Kind: call.KindDelete, Name: stream, Permission: authz.PermPrune, TraceID: traceID,
+		}, req)
+		if err != nil {
+			return deleted, err
+		}
+		n, err := store.ParseDeleteByQuery(resp)
+		if err != nil {
+			return deleted, fmt.Errorf("kit: prune %s: %w", stream, err)
+		}
+		deleted += n
+	}
+	return deleted, nil
 }
 
 func (a *App) Score(ctx context.Context, s trace.Score) error {
@@ -561,33 +978,77 @@ func (a *App) Score(ctx context.Context, s trace.Score) error {
 	return nil
 }
 
-type GenerateRequest struct {
-	Prompt      string
-	System      string
-	MaxTokens   int
-	Temperature *float64
-	SessionID   string
+type ErrorStrategy int
+
+const (
+	Strict ErrorStrategy = iota
+	Warn
+	Fallback
+)
+
+type GenerateRequest[T any] struct {
+	Prompt           string
+	System           string
+	MaxTokens        int
+	Temperature      *float64
+	SessionID        string
+	SchemaMode       model.SchemaMode
+	ErrorStrategy    ErrorStrategy
+	Fallback         *T
+	Tags             []string
+	StructuringModel model.Client
 }
 
-// Generate asks the model for a value of type T using a JSON Schema derived
-// from T, then decodes the answer into T.
-func Generate[T any](ctx context.Context, app *App, req GenerateRequest) (T, error) {
-	var zero T
+type Generated[T any] struct {
+	Value        T
+	Raw          string
+	UsedFallback bool
+	FinishReason model.FinishReason
+}
+
+func Generate[T any](ctx context.Context, app *App, req GenerateRequest[T]) (Generated[T], error) {
+	var zero Generated[T]
+
+	pr, err := principal(ctx)
+	if err != nil {
+		return zero, err
+	}
+	if err := app.policy.Authorize(pr, authz.PermGenerate); err != nil {
+		return zero, err
+	}
+	if req.ErrorStrategy == Fallback && req.Fallback == nil {
+		return zero, fmt.Errorf("kit: generate: Fallback strategy requires Fallback: %w", core.ErrInvalidConfig)
+	}
 
 	schema, err := schemaFor[T]()
 	if err != nil {
 		return zero, err
 	}
 
-	msgs := make([]model.Message, 0, 2)
-	if req.System != "" {
-		msgs = append(msgs, model.Message{Role: model.RoleUser, Content: req.System})
-	}
-	msgs = append(msgs, model.Message{Role: model.RoleUser, Content: req.Prompt})
-
 	traceID := id.New()
 	started := time.Now()
-	tr := trace.Trace{ID: traceID, Name: "generate", StartTime: started, Input: req.Prompt, SessionID: req.SessionID}
+	tr := app.guardTrace(pr, traceID, "generate", req.Tags, started)
+	defer func() {
+		tr.EndTime = time.Now()
+		app.writer.Enqueue(tr)
+	}()
+
+	prompt, _, err := app.guardText(ctx, guard.RailInput, "guard:input", req.Prompt, traceID)
+	if err != nil {
+		return zero, err
+	}
+	tr.Input = prompt
+
+	msgs := make([]model.Message, 0, 2)
+	if req.System != "" {
+		msgs = append(msgs, model.Message{Role: model.RoleSystem, Content: req.System})
+	}
+	msgs = append(msgs, model.Message{Role: model.RoleUser, Content: prompt})
+
+	mode := req.SchemaMode
+	if mode == model.SchemaNative && !model.SupportsNativeSchema(app.cfg.LLM) {
+		mode = model.SchemaInline
+	}
 
 	resp, err := call.Do(ctx, app.calls, call.Req{
 		Kind: call.KindLLM, Name: app.cfg.LLM.Model(), Model: app.cfg.LLM.Model(), TraceID: traceID,
@@ -596,52 +1057,96 @@ func Generate[T any](ctx context.Context, app *App, req GenerateRequest) (T, err
 		r, rerr := app.cfg.LLM.Chat(ctx, model.Request{
 			Messages:    msgs,
 			JSONSchema:  schema,
+			SchemaMode:  mode,
 			Temperature: req.Temperature,
 			MaxTokens:   req.MaxTokens,
 		})
 		span.Output = r.Message.Content
-		span.Usage = trace.Usage{PromptTokens: r.Usage.PromptTokens, CompletionTokens: r.Usage.CompletionTokens, TotalTokens: r.Usage.TotalTokens}
+		span.Usage = trace.Usage{
+			PromptTokens:     r.Usage.PromptTokens,
+			CompletionTokens: r.Usage.CompletionTokens,
+			TotalTokens:      r.Usage.TotalTokens,
+		}
+		span.Metadata = map[string]any{"finish_reason": string(r.FinishReason)}
 		return r, rerr
 	})
 	if err != nil {
-		tr.EndTime = time.Now()
-		app.writer.Enqueue(tr)
 		return zero, err
 	}
-
-	v, err := call.Guard(ctx, app.calls, call.Req{
-		Kind: call.KindGuard, Name: "guard:output", Rail: guard.RailOutput,
-		Text: resp.Message.Content, TraceID: traceID,
-	})
-	tr.EndTime = time.Now()
-	if err != nil {
-		app.writer.Enqueue(tr)
-		return zero, err
-	}
-	tr.Output = v.Text
 	tr.Usage = toTraceUsage(resp.Usage)
-	app.writer.Enqueue(tr)
 
-	var out T
-	if err := json.Unmarshal([]byte(v.Text), &out); err != nil {
-		return zero, fmt.Errorf("kit: generate: decode %T: %w: %w", out, err, core.ErrProvider)
+	text, _, err := app.guardText(ctx, guard.RailOutput, "guard:output", resp.Message.Content, traceID)
+	if err != nil {
+		return zero, err
+	}
+	tr.Output = text
+
+	out := Generated[T]{Raw: text, FinishReason: resp.FinishReason}
+	decodeErr := json.Unmarshal([]byte(strings.TrimSpace(text)), &out.Value)
+
+	if decodeErr != nil && req.StructuringModel != nil {
+		structured, serr := app.structure(ctx, req.StructuringModel, schema, mode,
+			req.MaxTokens, req.Temperature, text, traceID)
+		if serr == nil {
+			if derr := json.Unmarshal([]byte(strings.TrimSpace(structured)), &out.Value); derr == nil {
+				decodeErr = nil
+			}
+		}
+	}
+
+	if decodeErr != nil {
+		switch req.ErrorStrategy {
+		case Warn:
+			app.logger().Warn("kit: generate: answer did not decode", "type", fmt.Sprintf("%T", out.Value), "err", decodeErr)
+			return out, nil
+		case Fallback:
+			out.Value = *req.Fallback
+			out.UsedFallback = true
+			return out, nil
+		default:
+			return zero, fmt.Errorf("kit: generate: decode answer: %w: %w", decodeErr, core.ErrProvider)
+		}
 	}
 	return out, nil
 }
 
-func (a *App) esDo(ctx context.Context, req call.Req, method, path string, build func() ([]byte, error)) ([]byte, error) {
-	return call.Do(ctx, a.calls, req, func(ctx context.Context, span *call.Span) ([]byte, error) {
-		body, err := build()
-		if err != nil {
-			return nil, err
+func (a *App) structure(ctx context.Context, sm model.Client, schema json.RawMessage, mode model.SchemaMode,
+	maxTokens int, temperature *float64, prose, traceID string,
+) (string, error) {
+	return call.Do(ctx, a.calls, call.Req{
+		Kind: call.KindLLM, Name: sm.Model(), Model: sm.Model(), TraceID: traceID,
+	}, func(ctx context.Context, span *call.Span) (string, error) {
+		span.Kind = trace.KindGeneration
+		if span.Metadata == nil {
+			span.Metadata = map[string]any{}
 		}
-		status, resp, err := a.cfg.ES.Do(ctx, method, path, bytes.NewReader(body))
+		span.Metadata["structuring"] = true
+		structured, serr := model.Structurer{
+			Client:      sm,
+			Schema:      schema,
+			SchemaMode:  mode,
+			MaxTokens:   maxTokens,
+			Temperature: temperature,
+		}.Structure(ctx, prose)
+		span.Output = structured
+		return structured, serr
+	})
+}
+
+func (a *App) esDo(ctx context.Context, req call.Req, esReq store.Request) ([]byte, error) {
+	return call.Do(ctx, a.calls, req, func(ctx context.Context, span *call.Span) ([]byte, error) {
+		status, resp, err := a.cfg.ES.Do(ctx, esReq)
 		if err != nil {
-			return nil, fmt.Errorf("kit: es %s %s: %w: %w", method, path, err, core.ErrProvider)
+			return nil, fmt.Errorf("kit: es %s %s: %w: %w", esReq.Method, esReq.EffectivePath(), err, core.ErrProvider)
 		}
 		if status < 200 || status >= 300 {
-			return nil, fmt.Errorf("kit: es %s %s: status %d: %s: %w", method, path, status, store.Snippet(resp), core.ErrProvider)
+			return nil, fmt.Errorf("kit: es %s %s: status %d: %s: %w",
+				esReq.Method, esReq.EffectivePath(), status, store.Snippet(resp), core.ErrProvider)
 		}
+		if span.Metadata == nil {
+			span.Metadata = map[string]any{}
+		}
+		span.Metadata["status"] = status
 		return resp, nil
 	})
 }

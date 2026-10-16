@@ -1,7 +1,5 @@
 //go:build ort
 
-// Package gliner is the ML guard layer: an ONNX-only GLiNER2 detector that runs
-// behind the ort build tag.
 package gliner
 
 import (
@@ -13,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -24,30 +23,55 @@ import (
 	"github.com/gobellim/kit/internal/ort"
 )
 
-// DefaultModel is the pinned ONNX export of the GLiNER2 guard, relative to
-// Config.Dir.
 const DefaultModel = "hivetrace__gliner-guard-omni"
 
-// DefaultSessions is the number of ORT sessions in the detector pool.
 const DefaultSessions = 2
 
-const unsafeLabel = "unsafe"
+const DefaultMaxTokens = 512
 
-// Config selects the guard model. Dir is the models root (KIT_MODELS_DIR or
-// ./models), Model the subdirectory holding model.onnx, tokenizer.json and
-// config.json. Sessions and Wait tune the inference pool; both have defaults.
+var (
+	unsafeLabelRe    = regexp.MustCompile(`(?i)(unsafe|harmful|toxic|violence|danger)`)
+	injectionLabelRe = regexp.MustCompile(`(?i)(inject|jailbreak|attack|override|exfiltrat|abuse)`)
+)
+
+var safeLabels = map[string]bool{
+	"safe": true, "benign": true, "harmless": true,
+	"clean": true, "neutral": true, "none": true, "ok": true,
+	"informational": true, "informal": true, "formal": true,
+	"conversational": true, "creative": true, "factual": true,
+	"positive": true, "polite": true,
+}
+
+const defaultClassificationThreshold = 0.5
+
+const safeCategory = "SAFE"
+
+func parseCategory(s string) (guard.Category, bool) {
+	switch c := guard.Category(strings.ToUpper(strings.TrimSpace(s))); c {
+	case guard.CatPII, guard.CatSecret, guard.CatInjection, guard.CatUnsafe:
+		return c, true
+	}
+	return "", false
+}
+
+func categoryIsSafe(s string) bool {
+	return strings.EqualFold(strings.TrimSpace(s), safeCategory)
+}
+
 type Config struct {
-	Dir      string
-	Model    string
-	Sessions int
-	Wait     time.Duration
+	Dir       string
+	Model     string
+	Sessions  int
+	Wait      time.Duration
+	MaxTokens int
 }
 
 type Detector struct {
-	cfg    modelConfig
-	wordRe *regexp.Regexp
-	tk     *tokenizers.Tokenizer
-	pool   *ort.Pool
+	cfg       modelConfig
+	maxTokens int
+	wordRe    *regexp.Regexp
+	tk        *tokenizers.Tokenizer
+	pool      *ort.Pool
 }
 
 func (c Config) withDefaults() Config {
@@ -66,6 +90,9 @@ func (c Config) withDefaults() Config {
 	if c.Wait <= 0 {
 		c.Wait = ort.DefaultWait
 	}
+	if c.MaxTokens == 0 {
+		c.MaxTokens = DefaultMaxTokens
+	}
 	return c
 }
 
@@ -76,9 +103,6 @@ func defaultLibPath() string {
 	return ".ort/lib/libonnxruntime.so"
 }
 
-// New loads the model, tokenizer and config from <Dir>/<Model> and builds the
-// session pool. Any failure is fail-closed: it is wrapped in
-// core.ErrGuardUnavailable.
 func New(cfg Config) (*Detector, error) {
 	cfg = cfg.withDefaults()
 	dir := filepath.Join(cfg.Dir, cfg.Model)
@@ -86,6 +110,13 @@ func New(cfg Config) (*Detector, error) {
 	mc, err := loadModelConfig(filepath.Join(dir, "config.json"))
 	if err != nil {
 		return nil, unavailable(err)
+	}
+	if cfg.MaxTokens < 1 {
+		return nil, invalidConfig(fmt.Errorf("config: max_tokens %d must be > 0", cfg.MaxTokens))
+	}
+	maxTokens := cfg.MaxTokens
+	if mc.MaxSequenceLength > 0 && maxTokens > mc.MaxSequenceLength {
+		maxTokens = mc.MaxSequenceLength
 	}
 	wordRe, err := regexp.Compile(wordExpr)
 	if err != nil {
@@ -117,7 +148,7 @@ func New(cfg Config) (*Detector, error) {
 	}
 
 	inputs := []string{"input_ids", "attention_mask", "text_word_indices", "text_word_mask", "entity_schema_indices", "class_schema_indices"}
-	outputs := []string{"span_probs", "count_logits", "cls_logits"}
+	outputs := append([]string{"span_probs", "count_logits"}, mc.classOutputs()...)
 	modelPath := filepath.Join(dir, "model.onnx")
 
 	sessions := make([]ort.Session, 0, cfg.Sessions)
@@ -140,12 +171,28 @@ func New(cfg Config) (*Detector, error) {
 		abort()
 		return nil, unavailable(err)
 	}
-	return &Detector{cfg: mc, wordRe: wordRe, tk: tk, pool: pool}, nil
+	return &Detector{cfg: mc, maxTokens: maxTokens, wordRe: wordRe, tk: tk, pool: pool}, nil
+}
+
+func VerifyDir(dir, model string) error {
+	dir = resolveModelsDir(dir)
+	if err := verifyFiles(dir, model); err != nil {
+		return err
+	}
+	cfgPath := filepath.Join(dir, model, "config.json")
+	if _, err := loadModelConfig(cfgPath); err != nil {
+		return invalidConfig(fmt.Errorf("config %s: %w", cfgPath, err))
+	}
+	d, err := New(Config{Dir: dir, Model: model})
+	if err != nil {
+		return err
+	}
+	return d.pool.Close()
 }
 
 func (*Detector) Name() string { return "L2" }
 
-func (d *Detector) Detect(ctx context.Context, _ guard.Rail, text string) ([]guard.Finding, error) {
+func (d *Detector) Detect(ctx context.Context, text string) ([]guard.Finding, error) {
 	if text == "" {
 		return nil, nil
 	}
@@ -199,16 +246,27 @@ func (d *Detector) prepare(text string) *prepared {
 	runes := []rune(norm)
 	words := d.splitWords(norm)
 
-	seq := make([]int64, 0, len(d.cfg.PrefixIDs)+len(words)*4)
+	limit := d.maxTokens
+	if limit < 1 {
+		limit = DefaultMaxTokens
+	}
+
+	seq := make([]int64, 0, len(d.cfg.PrefixIDs)+limit)
 	seq = append(seq, d.cfg.PrefixIDs...)
 	first := make([]int64, 0, len(words))
+	kept := 0
 	for _, w := range words {
-		first = append(first, int64(len(seq)))
 		ids, _ := d.tk.Encode(w.token, false)
+		if !keepWord(len(seq), len(ids), limit, kept > 0) {
+			break
+		}
+		first = append(first, int64(len(seq)))
 		for _, id := range ids {
 			seq = append(seq, int64(id))
 		}
+		kept++
 	}
+	words = words[:kept]
 	attn := make([]int64, len(seq))
 	for i := range attn {
 		attn[i] = 1
@@ -226,7 +284,7 @@ func (d *Detector) prepare(text string) *prepared {
 type outputs struct {
 	spanProbs   []float32
 	countLogits []float32
-	clsLogits   []float32
+	clsLogits   [][]float32
 }
 
 type tensorSet struct {
@@ -252,7 +310,7 @@ func (s *tensorSet) destroy() {
 func (d *Detector) apply(s *session, p *prepared) (*outputs, error) {
 	n, nw := len(p.inputIDs), len(p.words)
 	labels := d.cfg.Schema.Entities.Labels
-	cls := d.cfg.Schema.Classifications[0]
+	groups := d.cfg.Schema.Classifications
 	mw, cm := d.cfg.MaxWidth, d.cfg.CountMax
 
 	mask := make([]bool, nw)
@@ -261,7 +319,7 @@ func (d *Detector) apply(s *session, p *prepared) (*outputs, error) {
 	}
 	spanProbs := make([]float32, len(labels)*nw*mw)
 	countLogits := make([]float32, cm)
-	clsLogits := make([]float32, len(cls.Labels))
+	clsIdx := d.cfg.classSchemaIndices()
 
 	var set tensorSet
 	defer set.destroy()
@@ -286,7 +344,7 @@ func (d *Detector) apply(s *session, p *prepared) (*outputs, error) {
 	if err != nil {
 		return nil, err
 	}
-	tClsIdx, err := newTensor(&set, orts.NewShape(1, int64(len(cls.Labels)+1)), cls.SchemaMarkerPositions)
+	tClsIdx, err := newTensor(&set, orts.NewShape(1, int64(len(clsIdx))), clsIdx)
 	if err != nil {
 		return nil, err
 	}
@@ -298,28 +356,44 @@ func (d *Detector) apply(s *session, p *prepared) (*outputs, error) {
 	if err != nil {
 		return nil, err
 	}
-	tCls, err := newTensor(&set, orts.NewShape(1, int64(len(cls.Labels))), clsLogits)
-	if err != nil {
-		return nil, err
+
+	clsTensors := make([]*orts.Tensor[float32], len(groups))
+	outs := make([]orts.Value, 0, 2+len(groups))
+	outs = append(outs, tProbs, tCount)
+	for gi := range groups {
+		t, terr := newTensor(&set, orts.NewShape(1, int64(len(groups[gi].Labels))), make([]float32, len(groups[gi].Labels)))
+		if terr != nil {
+			return nil, terr
+		}
+		clsTensors[gi] = t
+		outs = append(outs, t)
 	}
 
 	if err := s.inner.Run(
 		[]orts.Value{tIn, tAttn, tWord, tMask, tEnt, tClsIdx},
-		[]orts.Value{tProbs, tCount, tCls},
+		outs,
 	); err != nil {
 		return nil, err
 	}
-	return &outputs{
+	out := &outputs{
 		spanProbs:   append([]float32(nil), tProbs.GetData()...),
 		countLogits: append([]float32(nil), tCount.GetData()...),
-		clsLogits:   append([]float32(nil), tCls.GetData()...),
-	}, nil
+		clsLogits:   make([][]float32, len(groups)),
+	}
+	for gi, t := range clsTensors {
+		out.clsLogits[gi] = append([]float32(nil), t.GetData()...)
+	}
+	return out, nil
 }
 
 func (d *Detector) findings(p *prepared, out *outputs) []guard.Finding {
 	res := decode(&d.cfg, p, out.spanProbs, out.countLogits, out.clsLogits)
 	var fs []guard.Finding
 	for _, label := range d.cfg.Schema.Entities.Labels {
+		cat, ok := d.categoryFor(label, guard.CatPII)
+		if !ok {
+			continue
+		}
 		for _, e := range res.entities[label] {
 			end := e.end
 			if end > p.nRunes {
@@ -329,7 +403,7 @@ func (d *Detector) findings(p *prepared, out *outputs) []guard.Finding {
 				continue
 			}
 			fs = append(fs, guard.Finding{
-				Category: guard.CatPII,
+				Category: cat,
 				Label:    label,
 				Start:    e.start,
 				End:      end,
@@ -338,35 +412,93 @@ func (d *Detector) findings(p *prepared, out *outputs) []guard.Finding {
 			})
 		}
 	}
-	if res.safety == unsafeLabel {
+	for _, c := range res.classifications {
+		cat, ok := d.categoryFor(c.label, "")
+		if !ok {
+			continue
+		}
 		fs = append(fs, guard.Finding{
-			Category: guard.CatUnsafe,
-			Label:    res.safety,
+			Category: cat,
+			Label:    c.label,
 			Start:    0,
 			End:      p.nRunes,
-			Score:    res.score,
+			Score:    c.score,
 			Layer:    "L2",
 		})
 	}
 	return fs
 }
 
+func (d *Detector) categoryFor(label string, def guard.Category) (guard.Category, bool) {
+	if s, ok := d.cfg.CategoryMap[label]; ok {
+		if categoryIsSafe(s) {
+			return "", false
+		}
+		if c, ok := parseCategory(s); ok {
+			return c, true
+		}
+	}
+	if def != "" {
+		return def, true
+	}
+	low := strings.ToLower(strings.TrimSpace(label))
+	if safeLabels[low] {
+		return "", false
+	}
+	if unsafeLabelRe.MatchString(low) {
+		return guard.CatUnsafe, true
+	}
+	if injectionLabelRe.MatchString(low) {
+		return guard.CatInjection, true
+	}
+	return guard.CatUnsafe, true
+}
+
 type classification struct {
-	Task                  string   `json:"task"`
-	Labels                []string `json:"labels"`
-	MultiLabel            bool     `json:"multi_label"`
-	Activation            string   `json:"activation"`
-	SchemaMarkerPositions []int64  `json:"schema_marker_positions"`
+	Task                  string             `json:"task"`
+	Labels                []string           `json:"labels"`
+	MultiLabel            bool               `json:"multi_label"`
+	Activation            string             `json:"activation"`
+	Output                string             `json:"output"`
+	Threshold             float64            `json:"threshold"`
+	Thresholds            map[string]float64 `json:"thresholds"`
+	SchemaMarkerPositions []int64            `json:"schema_marker_positions"`
+}
+
+func (c *classification) activation() string {
+	if c.Activation == "" {
+		return "softmax"
+	}
+	return c.Activation
+}
+
+func (c *classification) outputName() string {
+	if c.Output == "" {
+		return "cls_logits"
+	}
+	return c.Output
+}
+
+func (c *classification) thresholdFor(label string) float64 {
+	if v, ok := c.Thresholds[label]; ok {
+		return v
+	}
+	if c.Threshold > 0 {
+		return c.Threshold
+	}
+	return defaultClassificationThreshold
 }
 
 type modelConfig struct {
-	PrefixIDs []int64 `json:"prefix_ids"`
-	Prompt    struct {
+	PrefixIDs   []int64           `json:"prefix_ids"`
+	CategoryMap map[string]string `json:"category_map"`
+	Prompt      struct {
 		PrefixIDs []int64 `json:"prefix_ids"`
 	} `json:"prompt"`
-	MaxWidth int `json:"max_width"`
-	CountMax int `json:"count_max"`
-	Schema   struct {
+	MaxSequenceLength int `json:"max_sequence_length"`
+	MaxWidth          int `json:"max_width"`
+	CountMax          int `json:"count_max"`
+	Schema            struct {
 		Entities struct {
 			Labels                []string           `json:"labels"`
 			Thresholds            map[string]float64 `json:"thresholds"`
@@ -379,18 +511,35 @@ type modelConfig struct {
 	} `json:"decode"`
 }
 
-func (c *modelConfig) classification() *classification {
-	if len(c.Schema.Classifications) != 1 {
+func (c *modelConfig) classOutputs() []string {
+	out := make([]string, 0, len(c.Schema.Classifications))
+	for i := range c.Schema.Classifications {
+		out = append(out, c.Schema.Classifications[i].outputName())
+	}
+	return out
+}
+
+func (c *modelConfig) classSchemaIndices() []int64 {
+	groups := c.Schema.Classifications
+	if len(groups) == 0 || len(groups[0].SchemaMarkerPositions) == 0 {
 		return nil
 	}
-	return &c.Schema.Classifications[0]
+	out := []int64{groups[0].SchemaMarkerPositions[0]}
+	for i := range groups {
+		if len(groups[i].SchemaMarkerPositions) == 0 {
+			continue
+		}
+		out = append(out, groups[i].SchemaMarkerPositions[1:]...)
+	}
+	return out
 }
 
 func (c *modelConfig) validate() error {
-	cls := c.classification()
 	switch {
 	case len(c.PrefixIDs) == 0:
 		return errors.New("config: prompt prefix_ids is empty")
+	case c.MaxSequenceLength < 0:
+		return errors.New("config: max_sequence_length is negative")
 	case c.MaxWidth < 1:
 		return errors.New("config: max_width is not set")
 	case c.CountMax < 1:
@@ -401,16 +550,35 @@ func (c *modelConfig) validate() error {
 		return errors.New("config: entity labels are empty")
 	case len(c.Schema.Entities.SchemaMarkerPositions) != len(c.Schema.Entities.Labels)+1:
 		return errors.New("config: entity schema_marker_positions do not match labels")
-	case cls == nil:
-		return errors.New("config: exactly one classification group is required")
-	case len(cls.Labels) < 2:
-		return errors.New("config: classification labels are empty")
-	case len(cls.SchemaMarkerPositions) != len(cls.Labels)+1:
-		return errors.New("config: class schema_marker_positions do not match labels")
-	case cls.MultiLabel:
-		return errors.New("config: multi_label classification is not supported")
-	case cls.Activation != "" && cls.Activation != "softmax":
-		return errors.New("config: only softmax classification is supported")
+	case len(c.Schema.Classifications) == 0:
+		return errors.New("config: at least one classification group is required")
+	}
+	seen := make(map[string]int, len(c.Schema.Classifications))
+	for i := range c.Schema.Classifications {
+		cls := &c.Schema.Classifications[i]
+		switch {
+		case len(cls.Labels) == 0:
+			return fmt.Errorf("config: classification %d labels are empty", i)
+		case len(cls.SchemaMarkerPositions) != len(cls.Labels)+1:
+			return fmt.Errorf("config: classification %d schema_marker_positions do not match labels", i)
+		case cls.Activation != "" && cls.Activation != "softmax" && cls.Activation != "sigmoid":
+			return fmt.Errorf("config: classification %d activation %q is not softmax or sigmoid", i, cls.Activation)
+		case cls.MultiLabel && cls.activation() != "sigmoid":
+			return fmt.Errorf("config: classification %d sets multi_label without sigmoid activation", i)
+		}
+		out := cls.outputName()
+		if prev, ok := seen[out]; ok {
+			return fmt.Errorf("config: classification %d output %q duplicates classification %d", i, out, prev)
+		}
+		seen[out] = i
+	}
+	for label, cat := range c.CategoryMap {
+		if categoryIsSafe(cat) {
+			continue
+		}
+		if _, ok := parseCategory(cat); !ok {
+			return fmt.Errorf("config: category_map[%q] has unknown category %q", label, cat)
+		}
 	}
 	return nil
 }

@@ -113,7 +113,9 @@ if _, err := kit.Tool(app, "get_weather", getWeather, kit.Desc("Текущая �
 ### Клиент Elasticsearch
 
 В примере выше `es` — ваш клиент. kit не поставляет клиент Elasticsearch (D10):
-контракт — интерфейс `store.ES` с единственным методом `Do`. Минимальная реализация:
+контракт — интерфейс `store.ES` с единственным методом `Do(ctx, store.Request)`.
+Тип контента, `refresh` и идемпотентность — поля `store.Request`; kit **не** выводит
+их из строки пути (инвариант I-12). Минимальная реализация:
 
 ```go
 type httpES struct {
@@ -121,19 +123,23 @@ type httpES struct {
 	hc   *http.Client
 }
 
-func (c *httpES) Do(ctx context.Context, method, path string, body io.Reader) (int, []byte, error) {
-	req, err := http.NewRequestWithContext(ctx, method, c.base+path, body)
+func (c *httpES) Do(ctx context.Context, req store.Request) (int, []byte, error) {
+	var body io.Reader
+	if len(req.Body) > 0 {
+		body = bytes.NewReader(req.Body)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, req.Method, c.base+req.EffectivePath(), body)
 	if err != nil {
 		return 0, nil, err
 	}
-	if body != nil {
-		ct := "application/json"
-		if strings.Contains(path, "_bulk") || strings.Contains(path, "_msearch") {
-			ct = "application/x-ndjson"
+	if len(req.Body) > 0 {
+		ct := req.ContentType
+		if ct == "" {
+			ct = "application/json" // значение по умолчанию
 		}
-		req.Header.Set("Content-Type", ct)
+		httpReq.Header.Set("Content-Type", ct)
 	}
-	resp, err := c.hc.Do(req)
+	resp, err := c.hc.Do(httpReq)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -142,6 +148,10 @@ func (c *httpES) Do(ctx context.Context, method, path string, body io.Reader) (i
 	return resp.StatusCode, data, err
 }
 ```
+
+`Request.EffectivePath()` применяет `Refresh` (добавляет `?refresh=<v>`), а
+`RawRequest`/`NDJSONRequest`/`JSONRequest` уже проставляют нужный `ContentType`.
+Полная реализация — `demo/internal/adapter/elastic/es.go`.
 
 ### Поиск по документам
 
@@ -181,8 +191,8 @@ roles:
 
 `authz.Load(path)` читает файл строгим декодером: неизвестные поля — ошибка,
 `version` должен быть `1`, `default` — `deny`. Права на операции — `search`,
-`ingest`, `delete`, `trace`; право на инструмент — `tool:<name>`. `*` разрешает всё.
-За основу можно взять `demo/policy.yaml`.
+`ingest`, `delete`, `generate`, `prune`, `trace`; право на инструмент —
+`tool:<name>`. `*` разрешает всё. За основу можно взять `demo/policy.yaml`.
 
 ### Живой пример
 

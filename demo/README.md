@@ -6,23 +6,24 @@ An authorized bot built on the GigaChat API.
 
 The bot has two tools:
 
-- `kb_search`: search over the knowledge base (user, admin)
-- `get_weather`: current weather in a city (admin)
+- `kb_search`: search over the knowledge base (alice, root)
+- `get_weather`: current weather in a city (root)
 
 ## What it answers out of the box
 
 The knowledge base is seeded on start, so these work right after
 `docker compose up -d`:
 
-| Ask                                                     | Answer                         |
-| ------------------------------------------------------- | ------------------------------ |
-| «Сколько дней даётся на возврат товара?»                | 14 календарных дней            |
-| «Сколько идёт доставка в другой город и сколько стоит?» | 2–5 рабочих дней, 400 ₽        |
-| «Какова гарантия на электронику?»                       | 12 месяцев                     |
-| «Можно ли купить в рассрочку?»                          | да, «0-0-6» от 3000 ₽          |
-| «Как связаться с поддержкой?»                           | 8 800 555-35-35, круглосуточно |
-| «Как получить 5% кэшбэка?»                              | от 50 000 ₽                    |
-| «Какая погода в Москве?»                                | real weather — `admin` only    |
+| Ask                                            | Answer                   |
+| ---------------------------------------------- | ------------------------ |
+| "How many days do I have to return an item?"   | 14 calendar days         |
+| "How long does delivery to another city take?" | 2–5 business days, ₽400  |
+| "What is the warranty on electronics?"         | 12 months                |
+| "Can I buy in installments?"                   | yes, "0-0-6" from ₽3,000 |
+| "How can I contact support?"                   | 8 999 888-77-66, 24/7    |
+| "How do I get 5% cashback?"                    | from ₽50,000             |
+
+The seeded sources are Russian, so the bot may answer in Russian.
 
 ## Layers
 
@@ -68,6 +69,17 @@ go run ./demo/cmd/bot
 The service listens on `:8080` (`KIT_ADDR`) and logs `bot listening` once it is
 ready.
 
+By default the bot calls the `embeddings` server. With the `ort` tag and
+`EMBED_LOCAL=true` it runs the in-process ONNX embedder instead, reading
+`<KIT_MODELS_DIR>/<org>__<name>/` (download the weights first with
+`go run ./cmd/kitctl model pull intfloat/multilingual-e5-small`); `EMBED_MODEL`
+`EMBED_MODEL` then names the local model (its dimension comes from the graph),
+and the `embeddings` service is no longer needed.
+
+```sh
+EMBED_LOCAL=true CGO_LDFLAGS="-L.ort/lib" go run -tags ort ./demo/cmd/bot
+```
+
 ## Endpoints
 
 | Method   | Path          | Auth   | Body                          | Response                                          |
@@ -80,7 +92,7 @@ ready.
 | `POST`   | `/kb`         | admin  | `{"id","title","text","acl"}` | `{"id","title"}`                                  |
 | `GET`    | `/kb/{id}`    | admin  | —                             | `{"id","title","text","acl","chunks"}`            |
 | `PUT`    | `/kb/{id}`    | admin  | `{"title","text","acl"}`      | `{"id","title"}`                                  |
-| `DELETE` | `/kb/{id}`    | admin  | —                             | `{"id","title"}`                                  |
+| `DELETE` | `/kb/{id}`    | admin  | —                             | `204`                                             |
 | `POST`   | `/kb/search`  | bearer | `{"query":"…","top_k":3}`     | `{"hits":[{"doc_id","title","text","position"}]}` |
 
 ```sh
@@ -89,17 +101,14 @@ TOKEN=$(curl -s localhost:8080/auth/login -d '{"login":"root"}' | sed 's/.*"toke
 curl -s localhost:8080/auth/me -H "Authorization: Bearer $TOKEN"
 
 curl -s localhost:8080/bot/ask -H "Authorization: Bearer $TOKEN" \
-  -d '{"prompt":"Сколько дней даётся на возврат товара?"}'
+  -d '{"prompt":"How many days do I have to return an item?"}'
 
 curl -s localhost:8080/bot/ask -H "Authorization: Bearer $TOKEN" \
-  -d '{"prompt":"Какая погода в Москве?"}'
-
-curl -s localhost:8080/bot/ask -H "Authorization: Bearer $TOKEN" \
-  -d '{"prompt":"Расскажи анекдот"}'      # no tool needed
+  -d '{"prompt":"Tell me a joke"}'      # no tool needed
 ```
 
-`alice` gets the same answer about returns, but answers the weather question with
-a refusal — the tool is not in her schema.
+`alice` gets the same answers; asking her for the weather returns a refusal,
+because the tool is not in her schema.
 
 ## Guardrails
 
@@ -152,22 +161,25 @@ npx --yes newman run demo/postman/kit-demo.postman_collection.json \
 
 ## Configuration
 
-| Variable               | Default                          | Meaning                                      |
-| ---------------------- | -------------------------------- | -------------------------------------------- |
-| `KIT_ADDR`             | `:8080`                          | listen address                               |
-| `KIT_ES_URL`           | `http://localhost:9200`          | Elasticsearch                                |
-| `EMBED_BASE_URL`       | `http://localhost:8088/v1`       | OpenAI-compatible embeddings server          |
-| `EMBED_MODEL`          | `intfloat/multilingual-e5-small` | embedding model                              |
-| `EMBED_DIM`            | `384`                            | vector size; must match the model            |
-| `KIT_MODELS_DIR`       | `models`                         | root of the model weights (`-tags ort` only) |
-| `GLINER_MODEL`         | `hivetrace__gliner-guard-omni`   | subdirectory holding the guard model         |
-| `SEED_KB`              | `true`                           | seed the knowledge base on start             |
-| `WEATHER_BASE_URL`     | `https://wttr.in`                | weather provider base URL                    |
-| `KIT_POLICY`           | `demo/policy.yaml`               | RBAC policy                                  |
-| `GIGACHAT_CREDENTIALS` | —                                | base64 `clientID:clientSecret` (required)    |
-| `GIGACHAT_MODEL`       | `GigaChat-2`                     | model name                                   |
-| `GIGACHAT_BASE_URL`    | Sber default                     | GigaChat base URL                            |
-| `GIGACHAT_AUTH_URL`    | Sber default                     | GigaChat OAuth URL                           |
-| `GIGACHAT_CA_FILE`     | —                                | extra root CA                                |
-| `KIT_HTTP_TIMEOUT`     | `60s`                            | provider HTTP timeout                        |
-| `KIT_TOKEN_TTL`        | `12h`                            | mock token lifetime                          |
+| Variable               | Default                          | Meaning                                              |
+| ---------------------- | -------------------------------- | ---------------------------------------------------- |
+| `KIT_ADDR`             | `:8080`                          | listen address                                       |
+| `KIT_ES_URL`           | `http://localhost:9200`          | Elasticsearch                                        |
+| `EMBED_BASE_URL`       | `http://localhost:8088/v1`       | OpenAI-compatible embeddings server                  |
+| `EMBED_MODEL`          | `intfloat/multilingual-e5-small` | embedding model                                      |
+| `EMBED_DIM`            | `384`                            | vector size; must match the model                    |
+| `EMBED_LOCAL`          | `false`                          | use the in-process ONNX embedder (needs `-tags ort`) |
+| `KIT_MODELS_DIR`       | `models`                         | root of the model weights (`-tags ort` only)         |
+| `GLINER_MODEL`         | `hivetrace__gliner-guard-omni`   | subdirectory holding the guard model                 |
+| `SEED_KB`              | `true`                           | seed the knowledge base on start                     |
+| `WEATHER_BASE_URL`     | `https://wttr.in`                | weather provider base URL                            |
+| `KIT_POLICY`           | `demo/policy.yaml`               | RBAC policy                                          |
+| `TRACE_TEXT`           | `masked`                         | trace text policy: `masked` or `full`                |
+| `TRACE_SAMPLE`         | `always`                         | trace sampling: `always`, `never`, `ratio:0.1`       |
+| `GIGACHAT_CREDENTIALS` | —                                | base64 `clientID:clientSecret` (required)            |
+| `GIGACHAT_MODEL`       | `GigaChat-2`                     | model name                                           |
+| `GIGACHAT_BASE_URL`    | Sber default                     | GigaChat base URL                                    |
+| `GIGACHAT_AUTH_URL`    | Sber default                     | GigaChat OAuth URL                                   |
+| `GIGACHAT_CA_FILE`     | —                                | extra root CA                                        |
+| `KIT_HTTP_TIMEOUT`     | `60s`                            | provider HTTP timeout                                |
+| `KIT_TOKEN_TTL`        | `12h`                            | mock token lifetime                                  |

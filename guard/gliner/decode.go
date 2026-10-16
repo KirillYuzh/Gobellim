@@ -10,15 +10,10 @@ import (
 	"unicode/utf8"
 )
 
-// The splitter and decoder below are pinned to the Python reference
-// (hivetrace/gliner-guard-omni). See tools/gliner/SPEC.md before changing them.
-
 const (
 	pySpace = `\t\n\v\f\r \x{001c}-\x{001f}\x{0085}\x{00a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}`
 	pyWord  = `[\p{L}\p{N}_\p{M}\x{200c}\x{200d}]`
 
-	// wordExpr reproduces Python's Unicode \w and \s semantics, including the
-	// significant alternation order (leftmost, first alternative wins).
 	wordExpr = `(?i)(?:https?://[^` + pySpace + `]+|www\.[^` + pySpace + `]+)` +
 		`|[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}` +
 		`|@[a-z0-9_]+` +
@@ -39,10 +34,17 @@ type span struct {
 	score float64
 }
 
+type decodedClass struct {
+	group int
+	label string
+	score float64
+}
+
 type decodeResult struct {
-	entities map[string][]span
-	safety   string
-	score    float64
+	entities        map[string][]span
+	classifications []decodedClass
+	safety          string
+	score           float64
 }
 
 func normalizeText(text string) string {
@@ -72,10 +74,9 @@ func (d *Detector) splitWords(text string) []word {
 	return out
 }
 
-func decode(cfg *modelConfig, p *prepared, probs, countLogits, clsLogits []float32) decodeResult {
+func decode(cfg *modelConfig, p *prepared, probs, countLogits []float32, clsLogits [][]float32) decodeResult {
 	var res decodeResult
 	labels := cfg.Schema.Entities.Labels
-	cls := cfg.Schema.Classifications[0]
 	if argmax(countLogits) >= 1 {
 		n := len(p.words)
 		res.entities = make(map[string][]span, len(labels))
@@ -127,16 +128,62 @@ func decode(cfg *modelConfig, p *prepared, probs, countLogits, clsLogits []float
 			res.entities[label] = list
 		}
 	}
-	probsCls := softmax(clsLogits)
+	res.classifications = decodeClassifications(cfg, clsLogits)
+	if len(cfg.Schema.Classifications) > 0 && cfg.Schema.Classifications[0].activation() == "softmax" && len(clsLogits) > 0 {
+		g := &cfg.Schema.Classifications[0]
+		probsCls := softmax(clsLogits[0])
+		best := argmax64(probsCls)
+		res.safety = g.Labels[best]
+		res.score = probsCls[best]
+	}
+	return res
+}
+
+func decodeClassifications(cfg *modelConfig, logits [][]float32) []decodedClass {
+	groups := cfg.Schema.Classifications
+	var out []decodedClass
+	for gi := range groups {
+		if gi >= len(logits) {
+			break
+		}
+		g := &groups[gi]
+		if g.MultiLabel {
+			probs := sigmoid(logits[gi])
+			for li, label := range g.Labels {
+				if li >= len(probs) {
+					break
+				}
+				if probs[li] >= g.thresholdFor(label) {
+					out = append(out, decodedClass{group: gi, label: label, score: probs[li]})
+				}
+			}
+			continue
+		}
+		probs := softmax(logits[gi])
+		best := argmax64(probs)
+		if best < len(g.Labels) {
+			out = append(out, decodedClass{group: gi, label: g.Labels[best], score: probs[best]})
+		}
+	}
+	return out
+}
+
+func sigmoid(v []float32) []float64 {
+	out := make([]float64, len(v))
+	for i, x := range v {
+		out[i] = 1 / (1 + math.Exp(-float64(x)))
+	}
+	return out
+}
+
+func argmax64(v []float64) int {
 	best := 0
-	for i, v := range probsCls {
-		if v > probsCls[best] {
+	for i, x := range v {
+		if x > v[best] {
 			best = i
 		}
 	}
-	res.safety = cls.Labels[best]
-	res.score = probsCls[best]
-	return res
+	return best
 }
 
 func softmax(v []float32) []float64 {
