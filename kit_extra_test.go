@@ -467,3 +467,41 @@ func TestGenerateDecodedFlag(t *testing.T) {
 		t.Fatalf("a failed decode must not be marked decoded: %+v", warned)
 	}
 }
+
+func TestValidateOutputReplacesOffSchemaResult(t *testing.T) {
+	// The Go type cannot enforce an enum, so the marshalled result can fall
+	// outside the schema; the runtime must not hand it to the model.
+	type out struct {
+		Colour string `json:"colour" jsonschema:"enum=red,green"`
+	}
+	llm := &scripted{t: t, queue: []model.Response{
+		toolCallResponse("paint", `{}`),
+		textResponse("retry"),
+	}}
+	app := newTestAppWithPolicy(t, llm, testPolicyAdmin)
+	defer func() { _ = app.Close(context.Background()) }()
+
+	if _, err := Tool(app, "paint", func(context.Context, struct{}) (out, error) {
+		return out{Colour: "blue"}, nil
+	}, ValidateOutput(true)); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := WithPrincipal(context.Background(), Principal{UserID: "u", Roles: []string{"admin"}, Tenant: "t"})
+	if _, err := app.Chat(ctx, ChatRequest{Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	var toolMsg string
+	for _, m := range llm.got[1].Messages {
+		if m.Role == model.RoleTool {
+			toolMsg = m.Content
+		}
+	}
+	if !strings.Contains(toolMsg, `"error"`) {
+		t.Fatalf("tool result = %q, want an error result", toolMsg)
+	}
+	if strings.Contains(toolMsg, "blue") {
+		t.Fatalf("off-schema data reached the model: %q", toolMsg)
+	}
+}
