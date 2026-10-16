@@ -1,4 +1,3 @@
-// Command tui is a terminal client for the demo bot.
 package main
 
 import (

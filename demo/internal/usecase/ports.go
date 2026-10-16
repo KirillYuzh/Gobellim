@@ -22,6 +22,14 @@ type WeatherProvider interface {
 
 type ChatEngine interface {
 	Ask(ctx context.Context, req ChatRequest) (domain.Answer, error)
+	Triage(ctx context.Context, p domain.Principal, text string) (domain.Ticket, error)
+}
+
+// Auditor is the demo's own analytics port. It is filled by a mock adapter here;
+// a real service would use its own store. kit has no opinion about it.
+type Auditor interface {
+	Record(ctx context.Context, ev domain.AuditEvent) error
+	Stats(ctx context.Context) (domain.AuditStats, error)
 }
 
 type KnowledgeBase interface {

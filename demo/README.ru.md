@@ -2,7 +2,16 @@
 
 **[Русский](README.ru.md) · [English](README.md)**
 
-Чат-бот с авторизацией на основе API GigaChat.
+Чат-бот с авторизацией на основе API GigaChat, на скелете Clean Architecture.
+
+Он показывает, для чего нужна библиотека, сквозным сценарием:
+
+- один проверяющий права путь вызова для чата, поиска и инструментов;
+- инструмент, недоступный вызывающему (вырезается из схемы до модели);
+- база знаний за ACL вызывающего;
+- типизированный структурированный вывод (`POST /bot/triage`), а не свободный текст;
+- guardrails на входе и выходе;
+- второе хранилище, которое принадлежит демо (mock-адаптер аудита), а kit его не трогает.
 
 У бота два инструмента:
 
@@ -38,6 +47,7 @@ internal/
     httpapi        транспорт: маршруты, авторизация bearer, ошибки домена → HTTP
     kitengine      чат, база знаний и два инструмента поверх kit
     weather        провайдер за инструментом get_weather
+    audit          mock-заглушка второго хранилища (аналитика) демо
     memory         заглушка Directory и выдача bearer-токенов
     elastic        клиент Elasticsearch, который получает kit
 postman            коллекция и окружение для всех эндпоинтов
@@ -87,6 +97,8 @@ EMBED_LOCAL=true CGO_LDFLAGS="-L.ort/lib" go run -tags ort ./demo/cmd/bot
 | `POST`   | `/auth/login` | —           | `{"login":"alice"}`           | `{"token","user_id","login","role","expires_at"}` |
 | `GET`    | `/auth/me`    | bearer      | —                             | `{"user_id","login","role","tenant"}`             |
 | `POST`   | `/bot/ask`    | bearer      | `{"prompt":"…"}`              | `{"answer":"…"}`                                  |
+| `POST`   | `/bot/triage` | bearer      | `{"text":"…"}`                | `{"severity":1..5,"summary":"…"}`                 |
+| `GET`    | `/stats`      | admin       | —                             | `{"Events","ByRole","ByAction"}`                  |
 | `GET`    | `/kb`         | admin       | —                             | `{"documents":[{"id","title","chunks"}]}`         |
 | `POST`   | `/kb`         | admin       | `{"id","title","text","acl"}` | `{"id","title"}`                                  |
 | `GET`    | `/kb/{id}`    | admin       | —                             | `{"id","title","text","acl","chunks"}`            |
@@ -107,6 +119,13 @@ curl -s localhost:8080/bot/ask -H "Authorization: Bearer $TOKEN" \
 
 curl -s localhost:8080/bot/ask -H "Authorization: Bearer $TOKEN" \
   -d '{"prompt":"Расскажи анекдот"}'      # без инструмента
+
+# Типизированный вывод: kit выводит схему из domain.Ticket и проверяет ответ.
+curl -s localhost:8080/bot/triage -H "Authorization: Bearer $TOKEN" \
+  -d '{"text":"не проходит оплата"}'
+
+# Второе хранилище демо, а не kit.
+curl -s localhost:8080/stats -H "Authorization: Bearer $TOKEN"
 ```
 
 `alice` получит тот же ответ про возврат, но на вопрос о погоде ответит отказом —

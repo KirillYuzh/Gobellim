@@ -1,4 +1,3 @@
-// Command traces reads kit traces, observations and scores from Elasticsearch.
 package main
 
 import (

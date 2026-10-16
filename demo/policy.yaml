@@ -5,12 +5,14 @@ roles:
   user:
     permissions:
       - chat
+      - generate
       - search
       - tool:kb_search
 
   admin:
     permissions:
       - chat
+      - generate
       - search
       - ingest
       - delete

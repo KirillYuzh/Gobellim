@@ -2,7 +2,16 @@
 
 **[English](README.md) · [Русский](README.ru.md)**
 
-An authorized bot built on the GigaChat API.
+An authorized bot built on the GigaChat API, on a Clean Architecture skeleton.
+
+It shows what the library is for, end to end:
+
+- one permission-checked call path for chat, retrieval and tools;
+- a tool the caller may not use (removed from the schema before the model runs);
+- a knowledge base behind the caller's ACL;
+- typed structured output (`POST /bot/triage`), not free text;
+- guardrails on input and output;
+- a second store the demo owns (the mock audit adapter) that kit never touches.
 
 The bot has two tools:
 
@@ -37,8 +46,9 @@ internal/
   seed             the knowledge base shipped with the demo
   adapter/
     httpapi        transport: routing, bearer auth, domain errors → HTTP
-    kitengine      chat, the knowledge base and the two tools on top of kit
+    kitengine      chat, retrieval and two tools on top of kit
     weather        the provider behind the get_weather tool
+    audit          mock second store (analytics) the demo owns
     memory         mock Directory and bearer-token issuance
     elastic        the Elasticsearch client that kit receives
 postman            collection and environment for every endpoint
@@ -88,6 +98,8 @@ EMBED_LOCAL=true CGO_LDFLAGS="-L.ort/lib" go run -tags ort ./demo/cmd/bot
 | `POST`   | `/auth/login` | —      | `{"login":"alice"}`           | `{"token","user_id","login","role","expires_at"}` |
 | `GET`    | `/auth/me`    | bearer | —                             | `{"user_id","login","role","tenant"}`             |
 | `POST`   | `/bot/ask`    | bearer | `{"prompt":"…"}`              | `{"answer":"…"}`                                  |
+| `POST`   | `/bot/triage` | bearer | `{"text":"…"}`                | `{"severity":1..5,"summary":"…"}`                 |
+| `GET`    | `/stats`      | admin  | —                             | `{"Events","ByRole","ByAction"}`                  |
 | `GET`    | `/kb`         | admin  | —                             | `{"documents":[{"id","title","chunks"}]}`         |
 | `POST`   | `/kb`         | admin  | `{"id","title","text","acl"}` | `{"id","title"}`                                  |
 | `GET`    | `/kb/{id}`    | admin  | —                             | `{"id","title","text","acl","chunks"}`            |
@@ -105,6 +117,13 @@ curl -s localhost:8080/bot/ask -H "Authorization: Bearer $TOKEN" \
 
 curl -s localhost:8080/bot/ask -H "Authorization: Bearer $TOKEN" \
   -d '{"prompt":"Tell me a joke"}'      # no tool needed
+
+# Typed output: kit derives the schema from domain.Ticket and validates the answer.
+curl -s localhost:8080/bot/triage -H "Authorization: Bearer $TOKEN" \
+  -d '{"text":"the payment does not go through"}'
+
+# The demo's own mock store, not kit's.
+curl -s localhost:8080/stats -H "Authorization: Bearer $TOKEN"
 ```
 
 `alice` gets the same answers; asking her for the weather returns a refusal,
