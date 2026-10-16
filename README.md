@@ -12,7 +12,7 @@ authorization-checked call path.
 
 ## Why Gobellim?
 
-**A runtime layer, not an orchestrator.** Mastra, LangChain and CrewAI own your
+**A runtime layer, not an orchestrator.** [Mastra](https://mastra.ai/), [LangChain](https://www.langchain.com/) and [CrewAI](https://www.crewai.com/) own your
 control flow — agents, graphs, workflows. Gobellim does not: you keep your
 handlers and your concurrency, and call it like a library.
 
@@ -28,20 +28,38 @@ again when the tool runs.
 in every chunk, so BM25 and kNN search always filter by the caller — never after
 the fact.
 
+**Untrusted content stays untrusted.** Tool results, including retrieved chunks, are
+wrapped in `<untrusted-data>` markers, and the system prompt tells the model to treat
+them as data, not instructions. A per-tenant rate limit and a tool-free response
+cache run inside the same call path.
+
+**Tools from anywhere.** Write a tool as a Go function, pull one from an MCP server
+(`mcp.Register`), or reorder retrieval with a cross-encoder reranker (`rerank`): all
+of them run through the same authorize → guard → trace path. `App.Health()` reports
+the writer queue, the guard and any component that implements a health check.
+
+**Memory lives in your store.** Thread history, semantic recall and working memory
+sit in the same Elasticsearch, scoped by tenant and user, behind the same
+authorization gate as everything else. A caller-supplied thread ID grants nothing
+on its own.
+
 **Safety fails closed.** Two layers run before the model, over inputs, tool
 results and outputs: deterministic rules (patterns and checksums of Russian
 personal IDs) and an ONNX GLiNER guard that masks PII and rejects unsafe
 messages. A guard error rejects the request instead of passing it through.
 
 **Bounded by construction.** Max steps, per-tool limits, tool timeouts and
-argument size are enforced by the runtime, not asked for in a prompt. No
-streaming: reviewing the output needs the whole answer.
+argument size are enforced by the runtime, not asked for in a prompt. `Chat`
+returns the whole answer because the output guard needs the full text; streaming
+is a separate `ChatStream` operation that also goes through the guard.
 
 ### Operations at a glance
 
 | Operation     | Permission | Scope                                                 |
 | ------------- | ---------- | ----------------------------------------------------- |
-| `Chat`        | —          | permissions are checked again on every tool call      |
+| `Chat`        | `chat`     | permissions are checked again on every tool call      |
+| `ChatStream`  | `chat`     | same turn as `Chat`, guarded sliding-window stream    |
+| `Memory*`     | `memory`   | thread history, semantic recall and working memory    |
 | `Generate[T]` | `generate` | input and output guard, `ErrorStrategy`               |
 | `Ingest`      | `ingest`   | needs `Tenant` and an `Embedder`                      |
 | `Search`      | `search`   | needs `Tenant`, an `Embedder`; `SearchRequest.Filter` |

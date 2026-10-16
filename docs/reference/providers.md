@@ -1,6 +1,6 @@
 # Провайдеры
 
-kit не привязан к вендору. Клиент чата — интерфейс `model.Client` (`Chat`, `Model`, без стриминга), эмбеддер — `embed.Embedder`. Реализации живут в пакетах `model` и `embed`.
+kit не привязан к вендору. Клиент чата — интерфейс `model.Client` (`Chat`, `Model`); стриминг — необязательное расширение `model.Streamer` (его реализует `*model.OpenAIClient`, то есть `openai`/`vllm`). Эмбеддер — `embed.Embedder`. Реализации живут в пакетах `model` и `embed`.
 
 ## Конструкторы LLM
 

@@ -144,7 +144,7 @@ deleted, err := app.Prune(ctx, 30*24*time.Hour)
 
 ### Инструмент поиска
 
-`kit.RetrievalTool(app, name, opts...)` регистрирует поиск как типизированный инструмент: модель достаёт фрагменты вместо догадок. Внутри вызывается тот же `Search`, поэтому право `search` и ACL проверяются повторно. Имя по умолчанию — `search_knowledge`.
+`kit.RetrievalTool(app, name, opts...)` регистрирует поиск как типизированный инструмент: модель достаёт фрагменты вместо догадок. Внутри вызывается тот же `Search`, поэтому право `search` и ACL проверяются повторно. Имя по умолчанию — `search_knowledge`. Найденные фрагменты возвращаются модели уже помеченными как недоверенные данные (spotlighting, I-18): документ может содержать инструкцию, и модель не должна её исполнять.
 
 ```go
 if _, err := kit.RetrievalTool(app, "search_knowledge"); err != nil {
@@ -160,6 +160,21 @@ API эмбеддера — `Query()` и `Passages()`, без общего `Embed
 - bge-m3 (`BAAI/bge-m3`): CLS pooling, без префиксов, L2-норма.
 
 Локальный энкодер (`embed.NewLocal`) требует сборки с тегом `ort` и `libonnxruntime`; веса скачиваются `kitctl model pull`. Неизвестную модель описывают файлом `kit_embedder.json` рядом с весами, иначе `NewLocal` возвращает ошибку. Подробности сборки — [Установка](../getting-started/installation.md).
+
+### Реранкинг
+
+Гибридный поиск (BM25 + kNN + RRF) — это recall: он находит кандидатов. Если нужна
+точность, включите реранкинг: `Config.Reranker` (например, `rerank.NewTEI`) плюс
+`SearchRequest.Rerank`. kit берёт больше кандидатов (`Config.RerankCandidates`, по
+умолчанию `TopK × 4`), прогоняет их через реранкер и усекает `rerank.Reorder` до
+`TopK`. Без `Config.Reranker` флаг `Rerank` даёт `ErrInvalidConfig`. Реранкер —
+внешний HTTP-сервер (TEI или Cohere-совместимый), и вызов идёт через примитив с
+правом `search`.
+
+```go
+app, _ := kit.New(ctx, kit.Config{ /* ... */ Reranker: reranker})
+hits, _ := app.Search(ctx, kit.SearchRequest{Query: "вопрос", TopK: 5, Rerank: true})
+```
 
 ## Дальше
 

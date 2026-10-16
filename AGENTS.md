@@ -7,7 +7,7 @@ override the specification.
 ## Read order
 
 1. `docs/README.md` — index and "where to look".
-2. `docs/internals/design.md` — the frozen contracts: invariants `I-01`…`I-15`, package contracts, decisions `D21`…`D30`, and §5, the API changelist.
+2. `docs/internals/design.md` — the frozen contracts: invariants `I-01`…`I-20`, package contracts, decisions `D21`…`D30`, and §5, the API changelist.
 3. `docs/internals/architecture.md` — package layout and dependency rules; do not violate them.
 4. `docs/internals/business-rules.md` — the BR-xx rules your change must keep true.
 5. `docs/internals/plan.md` — current stage and Definition of Done.
@@ -26,17 +26,19 @@ override the specification.
 
 ## Layout
 
-| Path                                                           | What                                                                                                                 |
-| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `docs/`                                                        | the specification: `getting-started/`, `concepts/` (explanation), `reference/`, `guides/` (how-to), `internals/`     |
-| `*.go` (root)                                                  | the `kit` facade: `New`, `Chat`, `Ingest`, `Search`, `Delete`, `Score`, `Prune`, `Generate`, `Tool`, `RetrievalTool` |
-| `internal/`                                                    | call primitive, core types, ORT pool, shared helpers                                                                 |
-| `internal/importrules/`                                        | stdlib-only test enforcing the package dependency rules (I-13)                                                       |
-| `authz/` `guard/` `model/` `embed/` `chunk/` `store/` `trace/` | the subsystems                                                                                                       |
-| `guard/guardtest/`                                             | `AllowAll` test detector (I-15)                                                                                      |
-| `eval/`                                                        | deterministic checks over recorded traces (stdlib only; imports `trace`)                                             |
-| `flow/`                                                        | typed, sequential step pipelines with schema validation and suspend/resume (no branch/parallel/foreach/loop DSL)     |
-| `webfetch/`                                                    | SSRF-hardened outbound HTTP fetch tool; the built-in `EffectEgress` tool                                             |
-| `cmd/kitctl/`, `demo/`, `deploy/`                              | CLI (`model pull`, `policy check`, `verify …`), integration example, local stack                                     |
-| `tools/gliner/`                                                | L2 model export (`export.py`) + pipeline/graph spec; generates `models/` (gitignored)                                |
-| `.github/workflows/ci.yml`, `.golangci.yml`, `Makefile`        | the CI harness (build, test, race, ort-vet, lint, fumpt) and the local `make check` gate                             |
+| Path                                                           | What                                                                                                                                                    |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `docs/`                                                        | the specification: `getting-started/`, `concepts/` (explanation), `reference/`, `guides/` (how-to), `internals/`                                        |
+| `*.go` (root)                                                  | the `kit` facade: `New`, `Chat`, `ChatStream`, `Health`, `Ingest`, `Search`, `Delete`, `Score`, `Prune`, `Generate`, `Tool`, `RawTool`, `RetrievalTool` |
+| `internal/`                                                    | call primitive, core types, ORT pool, shared helpers                                                                                                    |
+| `internal/importrules/`                                        | stdlib-only test enforcing the package dependency rules (I-13)                                                                                          |
+| `authz/` `guard/` `model/` `embed/` `chunk/` `store/` `trace/` | the subsystems                                                                                                                                          |
+| `guard/guardtest/`                                             | `AllowAll` test detector (I-15)                                                                                                                         |
+| `eval/`                                                        | deterministic checks over recorded traces (stdlib only; imports `trace`)                                                                                |
+| `flow/`                                                        | one typed `Step[In,Out]` with schema validation and suspend/resume (no Pipeline/builder-DSL, D47)                                                       |
+| `rerank/`                                                      | cross-encoder reranking behind `rerank.Reranker` (TEI/Cohere adapter) plus a deterministic `Reorder`                                                    |
+| `mcp/`                                                         | Model Context Protocol client (stdio and streamable HTTP); `Register` exposes tools as `mcp:<server>:<tool>`                                            |
+| `webfetch/`                                                    | SSRF-hardened outbound HTTP fetch tool; the built-in `EffectEgress` tool                                                                                |
+| `cmd/kitctl/`, `demo/`, `deploy/`                              | CLI (`model pull`, `policy check`, `verify …`), integration example, local stack                                                                        |
+| `tools/gliner/`                                                | L2 model export (`export.py`) + pipeline/graph spec; generates `models/` (gitignored)                                                                   |
+| `.github/workflows/ci.yml`, `.golangci.yml`, `Makefile`        | the CI harness (build, test, race, ort-vet, lint, fumpt) and the local `make check` gate                                                                |

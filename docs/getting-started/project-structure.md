@@ -34,7 +34,9 @@ kit/
   store/                                     ES interface, index.go (маппинги), chunks.go, search.go, filter.go, maintenance.go
   trace/                                     модель Langfuse, sink (Recorder), async writer (writer.go)
   eval/                                      детерминированные проверки поверх трейсов (зависит от trace, не от kit)
-  flow/                                      типизированные step-пайплайны: schema-контракт и suspend/resume
+  flow/                                      один типизированный шаг `Step[In,Out]`: schema-контракт и suspend/resume (без Pipeline/builder-DSL)
+  rerank/                                    реранкер `Reranker` + адаптер TEI/Cohere, детерминированный `Reorder`
+  mcp/                                       клиент MCP (stdio и streamable HTTP); `Register` → `mcp:<server>:<tool>`
   webfetch/                                  SSRF-защищённый инструмент исходящего HTTP (эффект egress)
   cmd/kitctl/                                model pull, policy check, verify window/models/parity/latency
   .github/workflows/ci.yml                   CI: build, test, race, ort-vet, lint, fumpt

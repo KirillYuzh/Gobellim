@@ -13,7 +13,7 @@ kit не владеет моделью. Вы приносите клиент ч�
 
 ## Когда использовать
 
-- Нужен вызов LLM без стриминга, с tool calling и structured output — берите любой
+- Нужен вызов LLM с tool calling и structured output — берите любой
   из трёх adapter-семейств ниже.
 - Нужно несколько моделей (основная + фолбэк, или разные модели под разные шаги) —
   соедините их `model.Chain`.
@@ -21,11 +21,11 @@ kit не владеет моделью. Вы приносите клиент ч�
 
 ## Как выбрать
 
-| Провайдер                                       | Wire-формат                                  | Когда подходит                                                             |
-| ----------------------------------------------- | -------------------------------------------- | -------------------------------------------------------------------------- |
-| OpenAI-совместимые ([подробнее](./openai-compatible.md)) | `POST <base>/chat/completions`               | OpenAI, vLLM, LM Studio, TEI-совместимые шлюзы, Azure-стиль заголовков     |
-| [Ollama](./ollama.md)                           | native `POST <base>/api/chat`                | локальный запуск, минимум настроек, `format` = JSON Schema                 |
-| [GigaChat](./gigachat.md)                        | OAuth + `POST <base>/v1/chat/completions`     | Сбер-стек: `functions`/`function_call`, свой корневой CA                   |
+| Провайдер                                                | Wire-формат                               | Когда подходит                                                         |
+| -------------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------- |
+| OpenAI-совместимые ([подробнее](./openai-compatible.md)) | `POST <base>/chat/completions`            | OpenAI, vLLM, LM Studio, TEI-совместимые шлюзы, Azure-стиль заголовков |
+| [Ollama](./ollama.md)                                    | native `POST <base>/api/chat`             | локальный запуск, минимум настроек, `format` = JSON Schema             |
+| [GigaChat](./gigachat.md)                                | OAuth + `POST <base>/v1/chat/completions` | Сбер-стек: `functions`/`function_call`, свой корневой CA               |
 
 ## Матрица возможностей
 
@@ -33,25 +33,26 @@ kit не владеет моделью. Вы приносите клиент ч�
 и тот же клиент `*model.OpenAIClient`. Значения выведены из кода адаптеров;
 поддержку на **стороне сервера/модели** нужно проверять отдельно.
 
-| Возможность                     | OpenAI-совместимые                                                                 | Ollama                                                                     | GigaChat                                                                            |
-| ------------------------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| Инструменты                     | `tools` (массив `{type:function}`)                                                 | `tools` в той же форме                                                     | `functions` (без `type`)                                                            |
-| `tool_choice`                   | `auto`/`none`/`required` строкой; имя инструмента — объектом `{type:function,…}`   | поля нет: `none` = пропустить `tools`, остальные значения игнорируются     | поля нет: `none` = пропустить `functions`, остальное → `function_call: "auto"`      |
-| Нативная JSON Schema            | `response_format: {type:json_schema, json_schema:{name:"output", schema}}`         | `format` = сырая JSON Schema                                               | нет: эмуляция forced-функцией `structured_output`                                    |
-| `SupportsNativeSchema()`        | `true`                                                                             | `true`                                                                     | `false`                                                                             |
-| `Seed`                          | `seed`                                                                             | `options.seed`                                                             | игнорируется                                                                        |
-| `Stop`                          | `stop`                                                                             | `options.stop`                                                             | игнорируется                                                                        |
-| `Temperature`                   | `temperature`                                                                      | `options.temperature`                                                      | `temperature`                                                                       |
-| Лимит ответа (`MaxTokens`)      | `max_tokens`                                                                       | `options.num_predict`                                                      | `max_tokens`                                                                        |
-| Usage                           | `usage.prompt_tokens` / `completion_tokens` / `total_tokens` из ответа             | `prompt_eval_count` / `eval_count`; `total` = их сумма                     | `usage.*` из ответа                                                                 |
-| Несколько tool calls за ход     | все, из `choices[0].message.tool_calls`                                            | все; `id` синтезируется как `«имя»-«индекс»`                               | **только первый** `function_call`                                                   |
-| Стриминг                        | нет                                                                                | нет                                                                        | нет                                                                                 |
-| Авторизация                     | `Authorization: Bearer <APIKey>` (если ключ задан) и/или произвольные `Headers`   | заголовков нет                                                             | OAuth: Basic `Credentials` → Bearer-токен                                          |
+| Возможность                 | OpenAI-совместимые                                                               | Ollama                                                                 | GigaChat                                                                       |
+| --------------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Инструменты                 | `tools` (массив `{type:function}`)                                               | `tools` в той же форме                                                 | `functions` (без `type`)                                                       |
+| `tool_choice`               | `auto`/`none`/`required` строкой; имя инструмента — объектом `{type:function,…}` | поля нет: `none` = пропустить `tools`, остальные значения игнорируются | поля нет: `none` = пропустить `functions`, остальное → `function_call: "auto"` |
+| Нативная JSON Schema        | `response_format: {type:json_schema, json_schema:{name:"output", schema}}`       | `format` = сырая JSON Schema                                           | нет: эмуляция forced-функцией `structured_output`                              |
+| `SupportsNativeSchema()`    | `true`                                                                           | `true`                                                                 | `false`                                                                        |
+| `Seed`                      | `seed`                                                                           | `options.seed`                                                         | игнорируется                                                                   |
+| `Stop`                      | `stop`                                                                           | `options.stop`                                                         | игнорируется                                                                   |
+| `Temperature`               | `temperature`                                                                    | `options.temperature`                                                  | `temperature`                                                                  |
+| Лимит ответа (`MaxTokens`)  | `max_tokens`                                                                     | `options.num_predict`                                                  | `max_tokens`                                                                   |
+| Usage                       | `usage.prompt_tokens` / `completion_tokens` / `total_tokens` из ответа           | `prompt_eval_count` / `eval_count`; `total` = их сумма                 | `usage.*` из ответа                                                            |
+| Несколько tool calls за ход | все, из `choices[0].message.tool_calls`                                          | все; `id` синтезируется как `«имя»-«индекс»`                           | **только первый** `function_call`                                              |
+| Стриминг (`ChatStream`)     | да (SSE)                                                                         | нет                                                                    | нет                                                                            |
+| Авторизация                 | `Authorization: Bearer <APIKey>` (если ключ задан) и/или произвольные `Headers`  | заголовков нет                                                         | OAuth: Basic `Credentials` → Bearer-токен                                      |
 
 > [!NOTE]
-> «Стриминг: нет» — это свойство фреймворка, а не провайдера (D14): guard выхода
-> должен видеть весь ответ целиком. Даже если сервер умеет SSE, kit запрашивает
-> `stream: false`, а ключ `stream` защищён от подмены через `ProviderOptions`.
+> Стриминг — операция `kit.ChatStream` (BR-89), а не поле провайдера: SSE умеет
+> только `*model.OpenAIClient` (`openai`/`vllm`), потому что у `ollama` и
+> `gigachat` другой wire-формат (I-19). `Chat` всегда запрашивает `stream: false`,
+> а ключ `stream` защищён от подмены через `ProviderOptions`.
 
 > [!WARNING]
 > Матрица описывает то, что клиент **отправляет**. Нативная схема и `tool_choice`
@@ -151,7 +152,9 @@ func (chainNative) SupportsNativeSchema() bool { return true }
 
 ## Чего фреймворк не делает
 
-- **Нет стриминга** (D14). `model.Client.Chat` возвращает весь ответ.
+- **Стриминг — только у OpenAI-совместимых** (I-19). `model.Client.Chat` возвращает
+  весь ответ; `ChatStream` есть у `openai`/`vllm`, у `ollama`/`gigachat` — откат на
+  буферизованный ответ.
 - **Нет мультимодальности.** В `model.Message` есть только `Content string`; картинок,
   аудио и вложений в API нет.
 - **Нет реестра провайдеров.** Нет `model.Get("openai")` и автоподбора провайдера по
@@ -171,4 +174,4 @@ func (chainNative) SupportsNativeSchema() bool { return true }
 - [GigaChat](./gigachat.md) — OAuth и свой CA
 - [Эмбеддеры](./embeddings.md) — `embed.Embedder`
 - [Провайдеры (справочник)](../../reference/providers.md) — сигнатуры и таблицы
-- [Решения](../../internals/decisions.md) — D13 (адаптеры), D14 (без стриминга)
+- [Решения](../../internals/decisions.md) — D13 (адаптеры), D46 (стриминг)

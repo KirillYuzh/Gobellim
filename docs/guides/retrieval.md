@@ -244,6 +244,29 @@ if _, err := kit.RetrievalTool(app, "search_knowledge"); err != nil {
 `kit.DefaultRetrievalToolName`. Без `Embedder` регистрация возвращает
 `ErrInvalidConfig`.
 
+## Реранкинг
+
+Гибридный поиск даёт recall; реранкинг — precision. Подключите `Config.Reranker`
+(готовый адаптер — `rerank.NewTEI`) и ставьте `SearchRequest.Rerank`: kit возьмёт
+`Config.RerankCandidates` кандидатов (по умолчанию `TopK × 4`), прогонит их через
+реранкер и оставит `TopK` (`rerank.Reorder`).
+
+```go
+rr, err := rerank.NewTEI(rerank.TEIConfig{BaseURL: "http://localhost:8080", Model: "bge-reranker-v2-m3"})
+if err != nil {
+	return err
+}
+app, err := kit.New(ctx, kit.Config{
+	// ...
+	Reranker: rr,
+})
+
+hits, err := app.Search(ctx, kit.SearchRequest{Query: "какой у меня тариф?", TopK: 5, Rerank: true})
+```
+
+Без `Config.Reranker` флаг `Rerank` даёт `ErrInvalidConfig` (BR-92). Вызов идёт
+через примитив с правом `search`, поэтому реранкер подчиняется policy и трейсингу.
+
 ## Тюнинг
 
 | Что                          | Как влияет                                                                                                                                                   |
