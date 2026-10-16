@@ -119,6 +119,14 @@ func NewLocal(cfg LocalConfig) (Embedder, error) {
 
 func (e *localEmbedder) Close() error { return e.pool.Close() }
 
+func (e *localEmbedder) Health() core.HealthStatus {
+	if e.pool == nil {
+		return core.HealthStatus{Detail: "embed: session pool is not ready"}
+	}
+	st := e.pool.Stats()
+	return core.HealthStatus{OK: true, InUse: st.Size - st.Available, Capacity: st.Size}
+}
+
 func (e *localEmbedder) Model() string { return e.model }
 
 func (e *localEmbedder) Dim() int { return e.dim }
