@@ -85,9 +85,11 @@ default: deny
 roles:
   user:
     permissions:
+      - chat
       - tool:open
   admin:
     permissions:
+      - chat
       - ingest
       - search
 `
@@ -143,6 +145,11 @@ func newTestAppWithPolicy(t *testing.T, llm model.Client, policyYAML string) *Ap
 	return app
 }
 
+func unspotlight(s string) string {
+	s = strings.TrimPrefix(s, "<untrusted-data>\n")
+	return strings.TrimSuffix(s, "\n</untrusted-data>")
+}
+
 func TestChatUsesServerSystemPromptAndDropsClientSystem(t *testing.T) {
 	llm := &fakeLLM{}
 	app := newTestApp(t, llm)
@@ -166,8 +173,11 @@ func TestChatUsesServerSystemPromptAndDropsClientSystem(t *testing.T) {
 	if len(llm.got.Messages) != 2 {
 		t.Fatalf("model saw %+v", llm.got.Messages)
 	}
-	if llm.got.Messages[0].Role != model.RoleSystem || llm.got.Messages[0].Content != "server instructions" {
+	if llm.got.Messages[0].Role != model.RoleSystem || !strings.HasPrefix(llm.got.Messages[0].Content, "server instructions") {
 		t.Fatalf("system = %+v", llm.got.Messages[0])
+	}
+	if !strings.Contains(llm.got.Messages[0].Content, "untrusted-data") {
+		t.Fatalf("the spotlight reminder must be present: %+v", llm.got.Messages[0])
 	}
 	if llm.got.Messages[1].Role != model.RoleUser || llm.got.Messages[1].Content != "hi" {
 		t.Fatalf("user = %+v", llm.got.Messages[1])
@@ -199,7 +209,7 @@ func TestAllowedToolSpecsFilterByRole(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	specs := app.allowedToolSpecs(Principal{Roles: []string{"user"}, Tenant: "t"})
+	specs := app.allowedToolSpecs(Principal{Roles: []string{"user"}, Tenant: "t"}, "")
 	if len(specs) != 1 || specs[0].Name != "open" {
 		t.Fatalf("specs = %+v, want only open", specs)
 	}
@@ -303,7 +313,7 @@ func TestToolErrorBecomesResult(t *testing.T) {
 		t.Fatalf("tool result = %+v, want the error text", last)
 	}
 	var parsed map[string]string
-	if err := json.Unmarshal([]byte(last.Content), &parsed); err != nil {
+	if err := json.Unmarshal([]byte(unspotlight(last.Content)), &parsed); err != nil {
 		t.Fatalf("tool error result is not JSON: %v (%s)", err, last.Content)
 	}
 	if parsed["error"] == "" {
@@ -612,7 +622,7 @@ func TestBeforeToolHookSubstitutesAndSkipsExecution(t *testing.T) {
 		t.Fatal("tool must not execute when the before hook does not proceed")
 	}
 	last := llm.got[1].Messages[len(llm.got[1].Messages)-1]
-	if last.Role != model.RoleTool || last.Content != "cached-result" {
+	if last.Role != model.RoleTool || unspotlight(last.Content) != "cached-result" {
 		t.Fatalf("tool result = %+v, want the substituted output", last)
 	}
 	if got.Tool != "lookup" || got.CallIndex != 1 || got.Effect != EffectRead {
@@ -655,7 +665,7 @@ func TestAfterToolHookRewritesAndRunsOnFailure(t *testing.T) {
 		t.Fatal("the after hook must run on failure")
 	}
 	last := llm.got[1].Messages[len(llm.got[1].Messages)-1]
-	if last.Role != model.RoleTool || last.Content != `{"recovered":true}` {
+	if last.Role != model.RoleTool || unspotlight(last.Content) != `{"recovered":true}` {
 		t.Fatalf("tool result = %+v, want the rewritten result", last)
 	}
 }
@@ -688,7 +698,7 @@ func TestToolHookOverridesAppHook(t *testing.T) {
 		t.Fatal(err)
 	}
 	last := llm.got[1].Messages[len(llm.got[1].Messages)-1]
-	if last.Content != "tool-level" {
+	if unspotlight(last.Content) != "tool-level" {
 		t.Fatalf("result = %q, want the tool-level hook output", last.Content)
 	}
 	if appHookCalled {
@@ -719,7 +729,7 @@ func TestAppToolHookRunsWhenToolHasNone(t *testing.T) {
 		t.Fatal(err)
 	}
 	last := llm.got[1].Messages[len(llm.got[1].Messages)-1]
-	if last.Content != "app-level" {
+	if unspotlight(last.Content) != "app-level" {
 		t.Fatalf("result = %q, want the app-level hook output", last.Content)
 	}
 }
@@ -793,5 +803,61 @@ func TestWithTraceMetadataAppearsOnObservations(t *testing.T) {
 	}
 	if !sawGeneration {
 		t.Fatal("the model call must be recorded as a generation observation")
+	}
+}
+
+func TestChatRequiresChatPermission(t *testing.T) {
+	const noChat = `
+version: 1
+default: deny
+roles:
+  reader:
+    permissions:
+      - tool:open
+`
+	llm := &scripted{t: t, queue: []model.Response{textResponse("ok")}}
+	app := newTestAppWithPolicy(t, llm, noChat)
+	defer func() { _ = app.Close(context.Background()) }()
+
+	ctx := WithPrincipal(context.Background(), Principal{UserID: "u", Roles: []string{"reader"}, Tenant: "t"})
+	if _, err := app.Chat(ctx, ChatRequest{Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}}}); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("err = %v, want ErrUnauthorized", err)
+	}
+	if len(llm.got) != 0 {
+		t.Fatal("the model must not be called without the chat permission")
+	}
+}
+
+func TestChatRecordsCost(t *testing.T) {
+	llm := &scripted{t: t, queue: []model.Response{{
+		Message:      model.Message{Role: model.RoleAssistant, Content: "ok"},
+		Usage:        model.Usage{PromptTokens: 1000, CompletionTokens: 500, TotalTokens: 1500},
+		FinishReason: model.FinishStop,
+	}}}
+	app, rec := newRecorderApp(t, llm, testPolicyAdmin)
+	defer func() { _ = app.Close(context.Background()) }()
+	app.cfg.Pricing = model.Pricing{InputPerMTok: 3, OutputPerMTok: 15}
+
+	ctx := WithPrincipal(context.Background(), Principal{UserID: "u", Roles: []string{"admin"}, Tenant: "t"})
+	if _, err := app.Chat(ctx, ChatRequest{Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	snap := rec.Snapshot()
+	if len(snap.Traces) != 1 {
+		t.Fatalf("traces = %d, want 1", len(snap.Traces))
+	}
+	const want = 0.0105
+	if got := snap.Traces[0].Usage.Cost; got < want-1e-12 || got > want+1e-12 {
+		t.Fatalf("trace cost = %v, want ~%v", got, want)
+	}
+	var sawGenCost bool
+	for _, o := range snap.Observations {
+		if o.Kind == trace.KindGeneration && o.Usage.Cost > want-1e-12 && o.Usage.Cost < want+1e-12 {
+			sawGenCost = true
+		}
+	}
+	if !sawGenCost {
+		t.Fatalf("generation observation must carry the cost: %+v", snap.Observations)
 	}
 }
