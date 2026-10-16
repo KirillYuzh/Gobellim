@@ -41,6 +41,8 @@ var leafPackages = []string{
 	"internal/httpjson",
 	"internal/oauth",
 	"internal/ort",
+	"internal/ratelimit",
+	"internal/cache",
 	"internal/importrules",
 }
 
@@ -67,7 +69,7 @@ var rules = []rule{
 	},
 	{
 		name:    "leaf-internal-only",
-		desc:    "internal/core, internal/id, internal/httpjson, internal/oauth, internal/ort and internal/importrules may import only internal/** packages",
+		desc:    "internal/core, internal/id, internal/httpjson, internal/oauth, internal/ort, internal/ratelimit, internal/cache and internal/importrules may import only internal/** packages",
 		applies: func(pkg string) bool { return isLeaf(pkg) },
 		allows:  func(pkg, imported string) bool { return isUnderInternal(imported) },
 	},

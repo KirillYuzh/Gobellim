@@ -255,6 +255,12 @@ func (w *Writer) countDropped(reason string) {
 
 func (w *Writer) Dropped() int64 { return w.dropped.Load() }
 
+// QueueDepth is the number of documents waiting in the writer queue.
+func (w *Writer) QueueDepth() int { return len(w.ch) }
+
+// QueueCapacity is the writer queue's capacity.
+func (w *Writer) QueueCapacity() int { return cap(w.ch) }
+
 func (w *Writer) Close(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
