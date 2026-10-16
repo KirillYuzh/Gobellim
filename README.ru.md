@@ -5,6 +5,8 @@
 ![Go](https://img.shields.io/badge/Go-1.24-00ADD8?logo=go&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+![Gobellim](./site/public/gobellim-compact-white.svg)
+
 Нативные Go-примитивы для безопасной работы с LLM: поиск, вызов инструментов и
 guardrails за одним проверяющим права путём вызова.
 
