@@ -107,15 +107,19 @@ const (
 )
 
 type Config struct {
-	ES               store.ES
-	LLM              model.Client
-	Pricing          model.Pricing
-	Embedder         embed.Embedder
-	Policy           *authz.Policy
-	GuardL2          guard.Detector
-	GuardMode        GuardMode
-	GuardMaxChars    int
-	GuardCacheSize   int
+	ES             store.ES
+	LLM            model.Client
+	Pricing        model.Pricing
+	Embedder       embed.Embedder
+	Policy         *authz.Policy
+	GuardL2        guard.Detector
+	GuardMode      GuardMode
+	GuardMaxChars  int
+	GuardCacheSize int
+
+	// GuardOnViolation is called for every non-allow guard verdict. It receives
+	// the verdict without the masked values (`AllowPII`), so raw PII never leaves here.
+	GuardOnViolation func(guard.Verdict)
 	Tokenizer        chunk.Tokenizer
 	ChunkSize        int
 	ChunkOverlap     int
@@ -134,16 +138,20 @@ type Config struct {
 	ToolSearch       ToolSearch
 	Logger           *slog.Logger
 
-	TraceText      trace.TextPolicy
-	Sampler        trace.Sampler
-	HideInput      bool
-	HideOutput     bool
-	Sinks          []trace.Sink
-	MaxTotalTokens int
-	Egress         EgressPolicy
-	Approver       Approver
-	BeforeToolCall BeforeToolHook
-	AfterToolCall  AfterToolHook
+	TraceText  trace.TextPolicy
+	Sampler    trace.Sampler
+	HideInput  bool
+	HideOutput bool
+	Sinks      []trace.Sink
+
+	// TraceProcessors run on every observation before it is written and may
+	// redact or drop it (clear Name).
+	TraceProcessors []func(*trace.Observation)
+	MaxTotalTokens  int
+	Egress          EgressPolicy
+	Approver        Approver
+	BeforeToolCall  BeforeToolHook
+	AfterToolCall   AfterToolHook
 }
 
 type App struct {
@@ -229,11 +237,12 @@ func New(_ context.Context, cfg Config) (*App, error) {
 		optional = []string{cfg.GuardL2.Name()}
 	}
 	pipeline, err := guard.New(guard.Options{
-		Layers:    layers,
-		Optional:  optional,
-		MaxChars:  cfg.GuardMaxChars,
-		CacheSize: cfg.GuardCacheSize,
-		Version:   guardVersion,
+		Layers:      layers,
+		Optional:    optional,
+		MaxChars:    cfg.GuardMaxChars,
+		CacheSize:   cfg.GuardCacheSize,
+		Version:     guardVersion,
+		OnViolation: cfg.GuardOnViolation,
 	})
 	if err != nil {
 		return nil, err
@@ -249,6 +258,7 @@ func New(_ context.Context, cfg Config) (*App, error) {
 		Sampler:    cfg.Sampler,
 		HideInput:  cfg.HideInput,
 		HideOutput: cfg.HideOutput,
+		Processors: cfg.TraceProcessors,
 		Logger:     cfg.Logger,
 	})
 	if err != nil {

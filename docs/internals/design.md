@@ -886,3 +886,10 @@ AllowedOrigins, Logger})`, `mcp.ServerTool`, `mcp.FromTool(app, def)`,
 - `Canonicalize` — фиксированная точка: невалидный UTF-8 санируется
   (`strings.ToValidUTF8`) до первого NFKC, затем `fold` (регистр, гомоглифы,
   невидимые, полноширинные цифры), затем ещё один NFKC.
+
+### 5.15 Хуки фасада (D57)
+
+- `Config.GuardOnViolation func(guard.Verdict)` — колбэк на каждый вердикт, кроме
+  allow; передаётся в `guard.Options.OnViolation` без сырых значений (`AllowPII`).
+- `Config.TraceProcessors []func(*trace.Observation)` — правки наблюдения до
+  записи и до sink'ов; очистка `Name` отбрасывает документ.

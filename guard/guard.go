@@ -123,10 +123,12 @@ type Options struct {
 	// optional layer that errors is skipped and the verdict is marked
 	// Degraded; a required layer that errors fails the check. Empty means
 	// every layer is required (fail-closed).
-	Optional    []string
-	MaxChars    int
-	CacheSize   int
-	Version     string
+	Optional  []string
+	MaxChars  int
+	CacheSize int
+	Version   string
+	// OnViolation, if set, is called for every non-allow verdict. The verdict it
+	// receives carries no Substitutions, so masked values never leave here.
 	OnViolation func(Verdict)
 }
 

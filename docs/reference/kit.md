@@ -13,44 +13,46 @@ fn`). Добавлять middleware или обходить политику н�
 Поля конфигурации. Значения по умолчанию применяются в `kit.New`, если поле
 оставлено нулевым.
 
-| Поле               | Тип                 | По умолчанию                           | Назначение                                                                         |
-| ------------------ | ------------------- | -------------------------------------- | ---------------------------------------------------------------------------------- |
-| `ES`               | `store.ES`          | — (обязательно)                        | Клиент Elasticsearch пишет пользователь.                                           |
-| `LLM`              | `model.Client`      | — (обязательно)                        | Клиент чата.                                                                       |
-| `Pricing`          | `model.Pricing`     | нулевое (стоимость `0`)                | Цена модели за 1M токенов; framework считает `usage.cost` и `cost`.                |
-| `Embedder`         | `embed.Embedder`    | `nil`                                  | Нужен только для `Ingest` и `Search`; чат-приложение может не задавать.            |
-| `Policy`           | `*authz.Policy`     | — (обязательно)                        | Разобранный `policy.yaml`.                                                         |
-| `GuardL2`          | `guard.Detector`    | `nil`                                  | ML-слой guard; при `nil` остаётся только детерминированный L1.                     |
-| `GuardMode`        | `kit.GuardMode`     | `kit.GuardStrict`                      | `GuardStrict` — fail-closed; `GuardDegraded` — упавший ML-слой не роняет запрос.   |
-| `GuardMaxChars`    | `int`               | `8000` (`guard.DefaultMaxChars`)       | Лимит текста для guard.                                                            |
-| `GuardCacheSize`   | `int`               | `4096` (`guard.DefaultCacheSize`)      | Размер LRU-кэша вердиктов guard.                                                   |
-| `Tokenizer`        | `chunk.Tokenizer`   | `chunk.WhitespaceTokenizer{}`          | Токенайзер чанкера; ORT-токенайзера в сборке нет.                                  |
-| `ChunkSize`        | `int`               | `400` (`chunk.DefaultSize`)            | Единиц токенайзера в чанке; у дефолтного `WhitespaceTokenizer` — слов.             |
-| `ChunkOverlap`     | `int`               | `80` (`chunk.DefaultOverlap`)          | Перекрытие в тех же единицах, `< ChunkSize`.                                       |
-| `MaxSteps`         | `int`               | `8` (`DefaultMaxSteps`)                | Лимит цикла «модель → инструменты → модель».                                       |
-| `MaxCallsPerTool`  | `int`               | `3` (`DefaultMaxCallsPerTool`)         | Лимит вызовов одного инструмента.                                                  |
-| `ToolTimeout`      | `time.Duration`     | `30s` (`DefaultToolTimeout`)           | Таймаут одного вызова инструмента.                                                 |
-| `ArgsMaxBytes`     | `int`               | `32768` (`DefaultArgsMaxBytes`)        | Лимит размера аргументов инструмента.                                              |
-| `TopK`             | `int`               | `10` (`DefaultTopK`)                   | Хитов поиска по умолчанию.                                                         |
-| `MemoryLimit`      | `int`               | `20` (`DefaultMemoryLimit`)            | Последних сообщений треда в контексте (при `ChatRequest.ThreadID`).                |
-| `MemoryRecall`     | `int`               | `0` (выключено)                        | Сколько сообщений подмешивать семантическим recall'ом; нужен `Embedder`.           |
-| `Spotlight`        | `kit.SpotlightMode` | `kit.SpotlightOn`                      | Помечать недоверенный контент (результаты инструментов) как данные (I-18).         |
-| `RateLimit`        | `kit.RateLimit`     | нулевое (лимит выключен)               | Лимит операций на тенанта (`PerSecond`, `Burst`); исчерпание — `ErrRateLimited`.   |
-| `ResponseCache`    | `kit.ResponseCache` | нулевое (кэш выключен)                 | LRU+TTL кэш ответов модели **без tools** (`Size`, `TTL`).                          |
-| `Reranker`         | `rerank.Reranker`   | `nil`                                  | Реранкер для `SearchRequest.Rerank`; без него `Rerank` — `ErrInvalidConfig` (D49). |
-| `RerankCandidates` | `int`               | `0` → `TopK × DefaultRerankMultiplier` | Сколько кандидатов брать до реранкинга.                                            |
-| `ToolSearch`       | `kit.ToolSearch`    | нулевое (выключено)                    | Лексический отбор инструментов при большом каталоге (D50).                         |
-| `Logger`           | `*slog.Logger`      | `slog.Default()`                       | Логи; тексты сообщений в них не попадают.                                          |
-| `TraceText`        | `trace.TextPolicy`  | `trace.TextMasked`                     | Политика текста трейсов: `masked` (по умолчанию) или `full` (opt-in).              |
-| `Sampler`          | `trace.Sampler`     | `nil` (значит «всегда»)                | Решение о записи трейса по `trace_id`.                                             |
-| `HideInput`        | `bool`              | `false`                                | Обнулять поле `input` во всех документах.                                          |
-| `HideOutput`       | `bool`              | `false`                                | Обнулять поле `output` во всех документах.                                         |
-| `Sinks`            | `[]trace.Sink`      | `nil`                                  | Дополнительные приёмники документов (например, `trace.NewRecorder`).               |
-| `MaxTotalTokens`   | `int`               | `0` (без лимита)                       | Бюджет токенов хода; при превышении — `ErrBudget`.                                 |
-| `Egress`           | `EgressPolicy`      | нулевое (правило выключено)            | Правила эгресса инструментов (`RuleOfTwo`).                                        |
-| `Approver`         | `Approver`          | `nil`                                  | Кто решает по инструментам с `RequireApproval`; без него — `ErrApprovalRequired`.  |
-| `BeforeToolCall`   | `BeforeToolHook`    | `nil`                                  | App-level before-хук; хук инструмента его заменяет.                                |
-| `AfterToolCall`    | `AfterToolHook`     | `nil`                                  | App-level after-хук; хук инструмента его заменяет.                                 |
+| Поле               | Тип                          | По умолчанию                           | Назначение                                                                         |
+| ------------------ | ---------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------- |
+| `ES`               | `store.ES`                   | — (обязательно)                        | Клиент Elasticsearch пишет пользователь.                                           |
+| `LLM`              | `model.Client`               | — (обязательно)                        | Клиент чата.                                                                       |
+| `Pricing`          | `model.Pricing`              | нулевое (стоимость `0`)                | Цена модели за 1M токенов; framework считает `usage.cost` и `cost`.                |
+| `Embedder`         | `embed.Embedder`             | `nil`                                  | Нужен только для `Ingest` и `Search`; чат-приложение может не задавать.            |
+| `Policy`           | `*authz.Policy`              | — (обязательно)                        | Разобранный `policy.yaml`.                                                         |
+| `GuardL2`          | `guard.Detector`             | `nil`                                  | ML-слой guard; при `nil` остаётся только детерминированный L1.                     |
+| `GuardMode`        | `kit.GuardMode`              | `kit.GuardStrict`                      | `GuardStrict` — fail-closed; `GuardDegraded` — упавший ML-слой не роняет запрос.   |
+| `GuardMaxChars`    | `int`                        | `8000` (`guard.DefaultMaxChars`)       | Лимит текста для guard.                                                            |
+| `GuardCacheSize`   | `int`                        | `4096` (`guard.DefaultCacheSize`)      | Размер LRU-кэша вердиктов guard.                                                   |
+| `GuardOnViolation` | `func(guard.Verdict)`        | `nil`                                  | Колбэк на каждый вердикт, кроме allow; без сырых значений (`AllowPII`).            |
+| `Tokenizer`        | `chunk.Tokenizer`            | `chunk.WhitespaceTokenizer{}`          | Токенайзер чанкера; ORT-токенайзера в сборке нет.                                  |
+| `ChunkSize`        | `int`                        | `400` (`chunk.DefaultSize`)            | Единиц токенайзера в чанке; у дефолтного `WhitespaceTokenizer` — слов.             |
+| `ChunkOverlap`     | `int`                        | `80` (`chunk.DefaultOverlap`)          | Перекрытие в тех же единицах, `< ChunkSize`.                                       |
+| `MaxSteps`         | `int`                        | `8` (`DefaultMaxSteps`)                | Лимит цикла «модель → инструменты → модель».                                       |
+| `MaxCallsPerTool`  | `int`                        | `3` (`DefaultMaxCallsPerTool`)         | Лимит вызовов одного инструмента.                                                  |
+| `ToolTimeout`      | `time.Duration`              | `30s` (`DefaultToolTimeout`)           | Таймаут одного вызова инструмента.                                                 |
+| `ArgsMaxBytes`     | `int`                        | `32768` (`DefaultArgsMaxBytes`)        | Лимит размера аргументов инструмента.                                              |
+| `TopK`             | `int`                        | `10` (`DefaultTopK`)                   | Хитов поиска по умолчанию.                                                         |
+| `MemoryLimit`      | `int`                        | `20` (`DefaultMemoryLimit`)            | Последних сообщений треда в контексте (при `ChatRequest.ThreadID`).                |
+| `MemoryRecall`     | `int`                        | `0` (выключено)                        | Сколько сообщений подмешивать семантическим recall'ом; нужен `Embedder`.           |
+| `Spotlight`        | `kit.SpotlightMode`          | `kit.SpotlightOn`                      | Помечать недоверенный контент (результаты инструментов) как данные (I-18).         |
+| `RateLimit`        | `kit.RateLimit`              | нулевое (лимит выключен)               | Лимит операций на тенанта (`PerSecond`, `Burst`); исчерпание — `ErrRateLimited`.   |
+| `ResponseCache`    | `kit.ResponseCache`          | нулевое (кэш выключен)                 | LRU+TTL кэш ответов модели **без tools** (`Size`, `TTL`).                          |
+| `Reranker`         | `rerank.Reranker`            | `nil`                                  | Реранкер для `SearchRequest.Rerank`; без него `Rerank` — `ErrInvalidConfig` (D49). |
+| `RerankCandidates` | `int`                        | `0` → `TopK × DefaultRerankMultiplier` | Сколько кандидатов брать до реранкинга.                                            |
+| `ToolSearch`       | `kit.ToolSearch`             | нулевое (выключено)                    | Лексический отбор инструментов при большом каталоге (D50).                         |
+| `TraceProcessors`  | `[]func(*trace.Observation)` | `nil`                                  | Обработчики наблюдений перед записью: правят или отбрасывают (`Name = ""`).        |
+| `Logger`           | `*slog.Logger`               | `slog.Default()`                       | Логи; тексты сообщений в них не попадают.                                          |
+| `TraceText`        | `trace.TextPolicy`           | `trace.TextMasked`                     | Политика текста трейсов: `masked` (по умолчанию) или `full` (opt-in).              |
+| `Sampler`          | `trace.Sampler`              | `nil` (значит «всегда»)                | Решение о записи трейса по `trace_id`.                                             |
+| `HideInput`        | `bool`                       | `false`                                | Обнулять поле `input` во всех документах.                                          |
+| `HideOutput`       | `bool`                       | `false`                                | Обнулять поле `output` во всех документах.                                         |
+| `Sinks`            | `[]trace.Sink`               | `nil`                                  | Дополнительные приёмники документов (например, `trace.NewRecorder`).               |
+| `MaxTotalTokens`   | `int`                        | `0` (без лимита)                       | Бюджет токенов хода; при превышении — `ErrBudget`.                                 |
+| `Egress`           | `EgressPolicy`               | нулевое (правило выключено)            | Правила эгресса инструментов (`RuleOfTwo`).                                        |
+| `Approver`         | `Approver`                   | `nil`                                  | Кто решает по инструментам с `RequireApproval`; без него — `ErrApprovalRequired`.  |
+| `BeforeToolCall`   | `BeforeToolHook`             | `nil`                                  | App-level before-хук; хук инструмента его заменяет.                                |
+| `AfterToolCall`    | `AfterToolHook`              | `nil`                                  | App-level after-хук; хук инструмента его заменяет.                                 |
 
 `DefaultMaxSteps`, `DefaultMaxCallsPerTool`, `DefaultToolTimeout`, `DefaultArgsMaxBytes` и `DefaultTopK` — константы пакета `kit`. `GuardMaxChars`, `GuardCacheSize`, `ChunkSize` и `ChunkOverlap` добираются конструкторами `guard.New` и `chunk.New` из констант `guard.*` и `chunk.*`.
 

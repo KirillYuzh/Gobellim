@@ -219,6 +219,28 @@ Sink получает **те же** документы, но уже после �
 поставлен в очередь. Поэтому sink'ом нельзя «поправить» то, что ушло в ES, —
 только отправить данные дальше (аналитика, тесты, свой стор).
 
+## Обработчики наблюдений: `TraceProcessors`
+
+`Config.TraceProcessors` — срез `func(*trace.Observation)`, которые правят
+observation **до** сборки ES-документа и до sink'ов. Так можно доредактировать
+(`Metadata`, `Tags`, текст) или отбросить документ целиком, очистив `Name`:
+
+```go
+kit.Config{
+	TraceProcessors: []func(*trace.Observation){
+		func(o *trace.Observation) {
+			if o.GuardAction == "reject" {
+				o.Tags = append(o.Tags, "alert")
+			}
+		},
+	},
+}
+```
+
+В отличие от sink'а обработчик работает до сериализации, поэтому его правки
+попадают и в ES, и в sink'и. Сэмплирование (`Sampler`) идёт раньше: до
+отброшенного сэмплером документа обработчик не доходит.
+
 ## Ретенция: ILM и `Prune`
 
 Traces и observations живут в data streams `kit-traces` и `kit-observations`.
