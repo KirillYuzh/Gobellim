@@ -12,7 +12,7 @@ ES подключается через интерфейс `store.ES` (I-12, D21)
 
 ```go
 type Request struct {
-    Method      string // GET, POST, PUT, DELETE, HEAD
+    Method      string // GET, POST, PUT, DELETE
     Path        string // может уже нести query string
     Body        []byte
     ContentType string // "" -> application/json
