@@ -16,8 +16,8 @@
 | `GuardMaxChars`    | `int`               | `8000` (`guard.DefaultMaxChars`)       | Лимит текста для guard.                                                           |
 | `GuardCacheSize`   | `int`               | `4096` (`guard.DefaultCacheSize`)      | Размер LRU-кэша вердиктов guard.                                                  |
 | `Tokenizer`        | `chunk.Tokenizer`   | `chunk.WhitespaceTokenizer{}`          | Токенайзер чанкера; ORT-токенайзера в сборке нет.                                 |
-| `ChunkSize`        | `int`               | `400` (`chunk.DefaultSize`)            | Токенов в чанке.                                                                  |
-| `ChunkOverlap`     | `int`               | `80` (`chunk.DefaultOverlap`)          | Перекрытие чанков, `< ChunkSize`.                                                 |
+| `ChunkSize`        | `int`               | `400` (`chunk.DefaultSize`)            | Единиц токенайзера в чанке; у дефолтного `WhitespaceTokenizer` — слов.            |
+| `ChunkOverlap`     | `int`               | `80` (`chunk.DefaultOverlap`)          | Перекрытие в тех же единицах, `< ChunkSize`.                                      |
 | `MaxSteps`         | `int`               | `8` (`DefaultMaxSteps`)                | Лимит цикла «модель → инструменты → модель».                                      |
 | `MaxCallsPerTool`  | `int`               | `3` (`DefaultMaxCallsPerTool`)         | Лимит вызовов одного инструмента.                                                 |
 | `ToolTimeout`      | `time.Duration`     | `30s` (`DefaultToolTimeout`)           | Таймаут одного вызова инструмента.                                                |
