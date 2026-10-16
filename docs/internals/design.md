@@ -258,6 +258,16 @@ type Verdict struct {
 	Text     string
 	Tripwire *Tripwire
 	Version  string
+
+	// Substitutions — значения, которые заменил mask (только при Action == Mask),
+	// чтобы вызывающий мог вернуть их инструменту с AllowPII.
+	Substitutions []Substitution
+}
+
+type Substitution struct {
+	Placeholder string
+	Category    Category
+	Value       string `json:"-"`
 }
 ```
 
@@ -545,6 +555,7 @@ type StreamChunk struct {
 func Effects(e Effects) ToolOption            // Read | Write | Egress
 func EgressHosts(hosts ...string) ToolOption  // allowlist для Egress
 func EgressAny() ToolOption                   // явный отказ от allowlist: любой хост
+func AllowPII(b bool) ToolOption              // подставлять реальные значения (BR-04)
 func RequireApproval(b bool) ToolOption
 func ValidateOutput(b bool) ToolOption        // item 5: валидация выхода
 func ModelView(f func(string) string) ToolOption // item 4: что видит модель
@@ -858,3 +869,9 @@ AllowedOrigins, Logger})`, `mcp.ServerTool`, `mcp.FromTool(app, def)`,
   инструмент — ошибка JSON-RPC, ошибка обработчика — `CallResult.IsError`; запрос с
   заголовком `Origin` отклоняется, пока источник не в `AllowedOrigins`.
   `kit.App.CallTool(ctx, name, args)` — одиночный вызов инструмента через примитив.
+- **Возврат PII инструменту (D55):** `guard.Verdict.Substitutions`
+  (`Substitution{Placeholder, Category, Value}`; `Value` помечен `json:"-"`)
+  заполняется при `Mask`; `OnViolation` получает вердикт без сырых значений.
+  `kit.AllowPII(true)` разрешает подстановку значений в args инструмента — только
+  при однозначном отображении заглушки и только внутри вызова; результат
+  маскируется обратно. Замена формата заглушки не потребовалась.

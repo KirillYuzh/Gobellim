@@ -170,6 +170,7 @@ if _, err := kit.Tool(app, "close_ticket", closeTicket,
 - `Effects(kit.EffectEgress)` — инструмент может вынести данные за границу доверия.
 - `EgressHosts(...)` — allowlist хостов из аргументов; пустой список **без** `EgressAny()` — отказ (`ErrUnauthorized`, fail-closed).
 - `EgressAny()` — явный opt-in «любой хост»: нужен, когда инструмент ходит наружу, но URL не в аргументах.
+- `AllowPII(true)` — инструмент получает реальные значения, которые guard замаскировал на входе (`BR-04`); только при однозначной заглушке и только внутри вызова.
 - `RequireApproval(true)` — рантайм вызывает `Config.Approver`. Без `Approver` такой вызов даёт `ErrApprovalRequired`.
 - `ValidateOutput(true)` — результат проверяется по JSON Schema типа `Out`; несовпадение логируется, но не фатально.
 - `ModelView(fn)` — что видит модель вместо результата; приложению уходит исходная строка.

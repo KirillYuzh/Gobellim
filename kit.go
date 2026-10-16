@@ -511,10 +511,14 @@ func (a *App) guardTrace(pr core.Principal, traceID, name string, tags []string,
 	}
 }
 
-func (a *App) guardText(ctx context.Context, rail guard.Rail, name, text, traceID string) (string, bool, error) {
-	v, err := call.Guard(ctx, a.calls, call.Req{
+func (a *App) guardTextVerdict(ctx context.Context, rail guard.Rail, name, text, traceID string) (guard.Verdict, error) {
+	return call.Guard(ctx, a.calls, call.Req{
 		Kind: call.KindGuard, Name: name, Rail: rail, Text: text, TraceID: traceID,
 	})
+}
+
+func (a *App) guardText(ctx context.Context, rail guard.Rail, name, text, traceID string) (string, bool, error) {
+	v, err := a.guardTextVerdict(ctx, rail, name, text, traceID)
 	if err != nil {
 		return "", false, err
 	}
@@ -547,6 +551,7 @@ type turn struct {
 	invalidTries map[string]int
 	approved     map[string]bool
 	untrusted    bool
+	subs         []guard.Substitution
 }
 
 func (a *App) Chat(ctx context.Context, req ChatRequest) (out model.Message, err error) {
@@ -587,14 +592,15 @@ func (a *App) Chat(ctx context.Context, req ChatRequest) (out model.Message, err
 		approved:     make(map[string]bool),
 	}
 	for i := range client {
-		text, untrusted, gerr := a.guardText(ctx, guard.RailInput, "guard:input", client[i].Content, traceID)
+		v, gerr := a.guardTextVerdict(ctx, guard.RailInput, "guard:input", client[i].Content, traceID)
 		if gerr != nil {
 			return model.Message{}, gerr
 		}
-		if untrusted {
+		if v.Action != guard.Allow {
 			t.untrusted = true
 		}
-		client[i].Content = text
+		t.subs = append(t.subs, v.Substitutions...)
+		client[i].Content = v.Text
 	}
 
 	system := req.System
@@ -775,7 +781,11 @@ func (a *App) execTool(ctx context.Context, tc model.ToolCall, t *turn) (string,
 		}, func(ctx context.Context, span *call.Span) (string, error) {
 			tctx, cancel := context.WithTimeout(ctx, a.cfg.ToolTimeout)
 			defer cancel()
-			res, ierr := def.invoke(tctx, tc.Args)
+			args, rehydrated := rehydrateArgs(tc.Args, def.allowPII, t.subs)
+			res, ierr := def.invoke(tctx, args)
+			if rehydrated {
+				res = maskValues(res, t.subs)
+			}
 			span.Output = res
 			return res, ierr
 		})

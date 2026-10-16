@@ -77,10 +77,34 @@ type Verdict struct {
 	Tripwire *Tripwire
 	Version  string
 
+	// Substitutions carries the values the mask replaced, so a caller can
+	// rehydrate them for a tool that opted in. It is set only when Action is
+	// Mask. Values are raw user data: never trace or log them.
+	Substitutions []Substitution
+
 	// Degraded is true when an optional layer failed and the verdict was
 	// produced by the remaining layers. DegradedReason holds the layer errors.
 	Degraded       bool
 	DegradedReason string
+}
+
+// Substitution is one masked span: the placeholder written into the text and the
+// value it replaced. The value is tagged out of JSON so it cannot leave through
+// a serialised verdict.
+type Substitution struct {
+	Placeholder string
+	Category    Category
+	Value       string `json:"-"`
+}
+
+// withoutSubstitutions drops the raw values, for the paths where the verdict
+// leaves the pipeline through a callback.
+func (v Verdict) withoutSubstitutions() Verdict {
+	if len(v.Substitutions) == 0 {
+		return v
+	}
+	v.Substitutions = nil
+	return v
 }
 
 type Detector interface {
@@ -164,7 +188,7 @@ func (p *Pipeline) Check(ctx context.Context, rail Rail, text string) (Verdict, 
 	v.Degraded = len(degraded) > 0
 	v.DegradedReason = strings.Join(degraded, "; ")
 	if v.Action != Allow && p.onViolation != nil {
-		p.onViolation(v)
+		p.onViolation(v.withoutSubstitutions())
 	}
 	return v, nil
 }
@@ -267,7 +291,7 @@ func decide(rail Rail, text string, findings []Finding) Verdict {
 	}
 	v := Verdict{Action: action, Rail: rail, Findings: findings, Text: text}
 	if action == Mask {
-		v.Text = maskRunes(text, mergeMaskSpans(findings))
+		v.Text, v.Substitutions = maskRunes(text, mergeMaskSpans(findings))
 	}
 	if action == Reject {
 		v.Tripwire = tripwireFor(rail, findings)
@@ -356,14 +380,15 @@ func tripwireFor(rail Rail, findings []Finding) *Tripwire {
 	}
 }
 
-func maskRunes(text string, spans []Finding) string {
+func maskRunes(text string, spans []Finding) (string, []Substitution) {
 	if len(spans) == 0 {
-		return text
+		return text, nil
 	}
 	sort.Slice(spans, func(i, j int) bool { return spans[i].Start < spans[j].Start })
 
 	runes := []rune(text)
 	var b strings.Builder
+	var subs []Substitution
 	prev := 0
 	for _, s := range spans {
 		if s.Start < prev {
@@ -376,18 +401,21 @@ func maskRunes(text string, spans []Finding) string {
 		if end > len(runes) {
 			end = len(runes)
 		}
+		if end < s.Start {
+			continue
+		}
 		b.WriteString(string(runes[prev:s.Start]))
-		b.WriteString("[")
-		b.WriteString(string(s.Category))
-		b.WriteString(":")
-		b.WriteString(s.Label)
-		b.WriteString("]")
+		placeholder := "[" + string(s.Category) + ":" + s.Label + "]"
+		b.WriteString(placeholder)
+		if value := string(runes[s.Start:end]); value != "" {
+			subs = append(subs, Substitution{Placeholder: placeholder, Category: s.Category, Value: value})
+		}
 		prev = end
 	}
 	if prev < len(runes) {
 		b.WriteString(string(runes[prev:]))
 	}
-	return b.String()
+	return b.String(), subs
 }
 
 type lru struct {

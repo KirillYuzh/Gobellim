@@ -57,6 +57,7 @@ type ToolDef struct {
 	effect          Effect
 	egressHosts     []string
 	egressAny       bool
+	allowPII        bool
 	requireApproval bool
 	validateOutput  bool
 	modelView       func(string) string
@@ -80,6 +81,8 @@ func (t *ToolDef) Effect() Effect { return t.effect }
 func (t *ToolDef) EgressHosts() []string { return append([]string(nil), t.egressHosts...) }
 
 func (t *ToolDef) EgressAny() bool { return t.egressAny }
+
+func (t *ToolDef) AllowPII() bool { return t.allowPII }
 
 func (t *ToolDef) RequireApproval() bool { return t.requireApproval }
 
@@ -150,6 +153,7 @@ type toolOptions struct {
 	effect          Effect
 	egressHosts     []string
 	egressAny       bool
+	allowPII        bool
 	requireApproval bool
 	validateOutput  bool
 	modelView       func(string) string
@@ -168,6 +172,10 @@ func EgressHosts(hosts ...string) ToolOption {
 }
 
 func EgressAny() ToolOption { return func(o *toolOptions) { o.egressAny = true } }
+
+// AllowPII lets the runtime put the values the input guard masked back into this
+// tool's arguments, but only when each placeholder stands for exactly one value.
+func AllowPII(b bool) ToolOption { return func(o *toolOptions) { o.allowPII = b } }
 
 func RequireApproval(b bool) ToolOption { return func(o *toolOptions) { o.requireApproval = b } }
 
@@ -217,6 +225,7 @@ func Tool[In, Out any](app *App, name string, fn func(ctx context.Context, in In
 		effect:          o.effect,
 		egressHosts:     o.egressHosts,
 		egressAny:       o.egressAny,
+		allowPII:        o.allowPII,
 		requireApproval: o.requireApproval,
 		validateOutput:  o.validateOutput,
 		modelView:       o.modelView,
@@ -296,6 +305,7 @@ func RawTool(app *App, name string, schema json.RawMessage, fn func(ctx context.
 		effect:          o.effect,
 		egressHosts:     o.egressHosts,
 		egressAny:       o.egressAny,
+		allowPII:        o.allowPII,
 		requireApproval: o.requireApproval,
 		validateOutput:  o.validateOutput,
 		modelView:       o.modelView,

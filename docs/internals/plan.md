@@ -260,12 +260,13 @@ check`. Обвязка зелёная: прогоны на раннере про
 - [x] OTLP-синк трейсов (`trace.NewOTLP`) без внешних зависимостей (stdlib).
 - [x] Часть 3: `flow` сужен до `Step` (D47); `App.Health()` и `HealthChecker` (D48); реранкинг (`rerank`, `SearchRequest.Rerank`, D49); поиск по инструментам (`Config.ToolSearch`, D50); MCP-клиент и `kit.RawTool` (D51); роли документации разведены (D52).
 - [x] MCP-сервер и `App.CallTool` (D54): `mcp.NewServer` (stdio и streamable HTTP, `Origin`-allowlist), `mcp.FromTool` ведёт вызов через `App.CallTool`, поэтому право/guard/egress/трейс не пропускаются.
+- [x] Возврат PII инструменту (`AllowPII`, `D55`): подстановка только при однозначном отображении заглушки и только внутри вызова; `Verdict.Substitutions` не покидает процесс через callback'и; формат `[PII:…]` не изменился.
 - [x] Документы приведены в соответствие с кодом (docs/**, README, AGENTS.md,
       demo/README).
 
 ## Смотрите также
 
-- [Решения и допущения](./decisions.md) — `D1`…`D54`, `A1`…`A9`
+- [Решения и допущения](./decisions.md) — `D1`…`D55`, `A1`…`A9`
 - [Архитектура](./architecture.md) — пакеты и рантайм, на которые опирается
   план
 - [Бизнес-правила](./business-rules.md) — `BR-01`…`BR-97`, проверяемые на

@@ -81,14 +81,15 @@ func (a *App) ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamChu
 		approved:     make(map[string]bool),
 	}
 	for i := range client {
-		text, untrusted, gerr := a.guardText(ctx, guard.RailInput, "guard:input", client[i].Content, traceID)
+		v, gerr := a.guardTextVerdict(ctx, guard.RailInput, "guard:input", client[i].Content, traceID)
 		if gerr != nil {
 			return nil, gerr
 		}
-		if untrusted {
+		if v.Action != guard.Allow {
 			t.untrusted = true
 		}
-		client[i].Content = text
+		t.subs = append(t.subs, v.Substitutions...)
+		client[i].Content = v.Text
 	}
 
 	go a.streamTurn(ctx, req, pr, client, t, streamer, ch)

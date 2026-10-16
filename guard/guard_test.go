@@ -75,6 +75,41 @@ func TestPipelineMask(t *testing.T) {
 	}
 }
 
+func TestPipelineMaskRecordsSubstitutions(t *testing.T) {
+	text := "номер 112-233-445 95 конец"
+	start := utf8.RuneCountInString("номер ")
+	end := start + utf8.RuneCountInString("112-233-445 95")
+	d := &fakeDetector{name: "L1", find: []Finding{{Category: CatPII, Label: "SNILS", Start: start, End: end, Layer: "L1"}}}
+	p, _ := New(Options{Layers: []Detector{d}})
+
+	v, err := p.Check(context.Background(), RailOutput, text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "номер [PII:SNILS] конец"; v.Text != want {
+		t.Fatalf("masked = %q, want %q", v.Text, want)
+	}
+	if len(v.Substitutions) != 1 {
+		t.Fatalf("substitutions = %+v", v.Substitutions)
+	}
+	if sub := v.Substitutions[0]; sub.Placeholder != "[PII:SNILS]" || sub.Value != "112-233-445 95" {
+		t.Fatalf("substitution = %+v", sub)
+	}
+
+	var seen Verdict
+	calls := 0
+	p2, _ := New(Options{Layers: []Detector{d}, OnViolation: func(v Verdict) { calls++; seen = v }})
+	if _, err := p2.Check(context.Background(), RailOutput, text); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("onViolation calls = %d, want 1", calls)
+	}
+	if len(seen.Substitutions) != 0 {
+		t.Fatalf("onViolation must not see the raw values: %+v", seen.Substitutions)
+	}
+}
+
 func TestPipelineMergesAdjacentSpans(t *testing.T) {
 	text := "abcdefgh"
 	d := &fakeDetector{name: "L1", find: []Finding{
