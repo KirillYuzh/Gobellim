@@ -31,12 +31,6 @@ func Suspend(payload any) *Suspension { return &Suspension{Payload: payload} }
 
 func (s *Suspension) Error() string { return "flow: suspended" }
 
-type StepResult struct {
-	ID     string `json:"id"`
-	Status Status `json:"status"`
-	Error  string `json:"error,omitempty"`
-}
-
 type Result[Out any] struct {
 	Status     Status
 	Output     Out
@@ -44,7 +38,6 @@ type Result[Out any] struct {
 	Suspension *Suspension
 	Snapshot   []byte
 	State      State
-	Steps      []StepResult
 }
 
 type Step[In, Out any] struct {
@@ -102,131 +95,73 @@ func NewResumable[In, Out, Resume any](
 
 func (s *Step[In, Out]) ID() string { return s.r.id() }
 
-func (s *Step[In, Out]) Pipeline() *Pipeline[In, Out] {
-	return &Pipeline[In, Out]{steps: []runnable{s.r}, in: s.r.inputSchema(), out: s.r.outputSchema()}
-}
-
-type Pipeline[In, Out any] struct {
-	steps []runnable
-	in    *compiled
-	out   *compiled
-}
-
-func Then[In, Mid, Out any](p *Pipeline[In, Mid], next *Step[Mid, Out]) *Pipeline[In, Out] {
-	steps := make([]runnable, 0, len(p.steps)+1)
-	steps = append(steps, p.steps...)
-	steps = append(steps, next.r)
-	return &Pipeline[In, Out]{steps: steps, in: p.in, out: next.r.outputSchema()}
-}
-
-func Chain[A, B, C any](first *Step[A, B], second *Step[B, C]) *Pipeline[A, C] {
-	return Then(first.Pipeline(), second)
-}
-
-func Chain3[A, B, C, D any](s1 *Step[A, B], s2 *Step[B, C], s3 *Step[C, D]) *Pipeline[A, D] {
-	return Then(Then(s1.Pipeline(), s2), s3)
-}
-
-func (p *Pipeline[In, Out]) Run(ctx context.Context, in In) Result[Out] {
-	return p.RunWithState(ctx, nil, in)
-}
-
-func (p *Pipeline[In, Out]) RunWithState(ctx context.Context, st State, in In) Result[Out] {
+func (s *Step[In, Out]) Run(ctx context.Context, st State, in In) Result[Out] {
+	if st == nil {
+		st = State{}
+	}
 	raw, err := json.Marshal(in)
 	if err != nil {
-		return Result[Out]{Status: StatusFailed, Error: fmt.Errorf("flow: encode input: %w: %w", err, core.ErrInvalidArgs)}
+		return Result[Out]{Status: StatusFailed, Error: fmt.Errorf("flow: encode input: %w: %w", err, core.ErrInvalidArgs), State: st}
 	}
-	return p.runFrom(ctx, st, raw, 0, nil, nil)
+	if err := ctx.Err(); err != nil {
+		return Result[Out]{Status: StatusFailed, Error: err, State: st}
+	}
+	out, err := s.r.run(ctx, st, raw)
+	if err != nil {
+		return failure[Out](err, st, raw)
+	}
+	return success[Out](out, st)
 }
 
-func (p *Pipeline[In, Out]) Resume(ctx context.Context, snapshotBytes []byte, data any) Result[Out] {
+func (s *Step[In, Out]) Resume(ctx context.Context, snapshotBytes []byte, data any) Result[Out] {
 	var snap snapshot
 	if err := json.Unmarshal(snapshotBytes, &snap); err != nil {
 		return Result[Out]{Status: StatusFailed, Error: fmt.Errorf("flow: decode snapshot: %w: %w", err, core.ErrInvalidArgs)}
-	}
-	if snap.StepIndex < 0 || snap.StepIndex >= len(p.steps) {
-		return Result[Out]{Status: StatusFailed, Error: fmt.Errorf("flow: snapshot step index %d is out of range: %w", snap.StepIndex, core.ErrInvalidArgs)}
-	}
-	payload, err := json.Marshal(data)
-	if err != nil {
-		return Result[Out]{Status: StatusFailed, Error: fmt.Errorf("flow: encode resume payload: %w: %w", err, core.ErrInvalidArgs)}
 	}
 	st := State(snap.State)
 	if st == nil {
 		st = State{}
 	}
-	return p.runFrom(ctx, st, snap.StepInput, snap.StepIndex, payload, snap.Steps)
+	payload, err := json.Marshal(data)
+	if err != nil {
+		return Result[Out]{Status: StatusFailed, Error: fmt.Errorf("flow: encode resume payload: %w: %w", err, core.ErrInvalidArgs), State: st}
+	}
+	out, err := s.r.resume(ctx, st, snap.StepInput, payload)
+	if err != nil {
+		return failure[Out](err, st, snap.StepInput)
+	}
+	return success[Out](out, st)
+}
+
+func failure[Out any](err error, st State, input json.RawMessage) Result[Out] {
+	var susp *Suspension
+	if errors.As(err, &susp) {
+		snap, serr := json.Marshal(snapshot{State: st, StepInput: input})
+		if serr != nil {
+			return Result[Out]{Status: StatusFailed, Error: fmt.Errorf("flow: encode snapshot: %w", serr), State: st}
+		}
+		return Result[Out]{Status: StatusSuspended, Suspension: susp, Snapshot: snap, State: st}
+	}
+	return Result[Out]{Status: StatusFailed, Error: err, State: st}
+}
+
+func success[Out any](out json.RawMessage, st State) Result[Out] {
+	var value Out
+	if len(out) > 0 {
+		if err := json.Unmarshal(out, &value); err != nil {
+			return Result[Out]{Status: StatusFailed, Error: fmt.Errorf("flow: decode output: %w: %w", err, core.ErrInvalidArgs), State: st}
+		}
+	}
+	return Result[Out]{Status: StatusSuccess, Output: value, State: st}
 }
 
 type snapshot struct {
 	State     map[string]any  `json:"state"`
-	StepIndex int             `json:"step_index"`
 	StepInput json.RawMessage `json:"step_input"`
-	Steps     []StepResult    `json:"steps"`
-}
-
-func (p *Pipeline[In, Out]) runFrom(ctx context.Context, st State, input json.RawMessage, from int, payload json.RawMessage, prior []StepResult) Result[Out] {
-	if st == nil {
-		st = State{}
-	}
-	steps := make([]StepResult, 0, len(p.steps))
-	steps = append(steps, prior...)
-
-	if err := ctx.Err(); err != nil {
-		return Result[Out]{Status: StatusFailed, Error: err, State: st, Steps: steps}
-	}
-	if from == 0 {
-		if err := validate(p.in, input, "input"); err != nil {
-			return Result[Out]{Status: StatusFailed, Error: err, State: st, Steps: steps}
-		}
-	}
-
-	current := input
-	for i := from; i < len(p.steps); i++ {
-		step := p.steps[i]
-
-		var (
-			raw json.RawMessage
-			err error
-		)
-		if i == from && len(payload) > 0 {
-			raw, err = step.resume(ctx, st, current, payload)
-		} else {
-			raw, err = step.run(ctx, st, current)
-		}
-		if err != nil {
-			var susp *Suspension
-			if errors.As(err, &susp) {
-				snap, serr := json.Marshal(snapshot{State: st, StepIndex: i, StepInput: current, Steps: steps})
-				if serr != nil {
-					return Result[Out]{Status: StatusFailed, Error: fmt.Errorf("flow: encode snapshot: %w", serr), State: st, Steps: steps}
-				}
-				seen := append(append([]StepResult(nil), steps...), StepResult{ID: step.id(), Status: StatusSuspended})
-				return Result[Out]{Status: StatusSuspended, Suspension: susp, Snapshot: snap, State: st, Steps: seen}
-			}
-			steps = append(steps, StepResult{ID: step.id(), Status: StatusFailed, Error: err.Error()})
-			return Result[Out]{Status: StatusFailed, Error: err, State: st, Steps: steps}
-		}
-		steps = append(steps, StepResult{ID: step.id(), Status: StatusSuccess})
-		current = raw
-	}
-
-	if err := validate(p.out, current, "output"); err != nil {
-		return Result[Out]{Status: StatusFailed, Error: err, State: st, Steps: steps}
-	}
-	var out Out
-	if len(current) > 0 {
-		if err := json.Unmarshal(current, &out); err != nil {
-			return Result[Out]{Status: StatusFailed, Error: fmt.Errorf("flow: decode output: %w: %w", err, core.ErrInvalidArgs), State: st, Steps: steps}
-		}
-	}
-	return Result[Out]{Status: StatusSuccess, Output: out, State: st, Steps: steps}
 }
 
 type runnable interface {
 	id() string
-	inputSchema() *compiled
-	outputSchema() *compiled
 	run(ctx context.Context, st State, in json.RawMessage) (json.RawMessage, error)
 	resume(ctx context.Context, st State, in, payload json.RawMessage) (json.RawMessage, error)
 }
@@ -240,9 +175,7 @@ type runner[In, Out any] struct {
 	resumeFn     func(ctx context.Context, st State, in In, payload json.RawMessage) (Out, error)
 }
 
-func (r *runner[In, Out]) id() string              { return r.stepID }
-func (r *runner[In, Out]) inputSchema() *compiled  { return r.in }
-func (r *runner[In, Out]) outputSchema() *compiled { return r.out }
+func (r *runner[In, Out]) id() string { return r.stepID }
 
 func (r *runner[In, Out]) run(ctx context.Context, st State, in json.RawMessage) (json.RawMessage, error) {
 	if err := validate(r.in, in, r.stepID+" input"); err != nil {
