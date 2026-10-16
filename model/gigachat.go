@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/gobellim/kit/internal/core"
-	"github.com/gobellim/kit/internal/oauth"
+	"github.com/KirillYuzh/Gobellim/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/oauth"
 )
 
 const (

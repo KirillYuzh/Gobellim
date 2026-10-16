@@ -8,13 +8,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gobellim/kit/authz"
-	"github.com/gobellim/kit/embed"
-	"github.com/gobellim/kit/guard"
-	"github.com/gobellim/kit/model"
-	"github.com/gobellim/kit/rerank"
-	"github.com/gobellim/kit/store"
-	"github.com/gobellim/kit/trace"
+	"github.com/KirillYuzh/Gobellim/authz"
+	"github.com/KirillYuzh/Gobellim/chunk"
+	"github.com/KirillYuzh/Gobellim/embed"
+	"github.com/KirillYuzh/Gobellim/guard"
+	"github.com/KirillYuzh/Gobellim/model"
+	"github.com/KirillYuzh/Gobellim/rerank"
+	"github.com/KirillYuzh/Gobellim/store"
+	"github.com/KirillYuzh/Gobellim/trace"
 )
 
 type fakeEmbedder struct{ dim int }
@@ -46,7 +47,7 @@ func newRealApp(t *testing.T, es store.ES, llm model.Client, emb embed.Embedder,
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := Config{ES: es, LLM: llm, Embedder: emb, Policy: policy}
+	cfg := Config{ES: es, LLM: llm, Embedder: emb, Policy: policy, Tokenizer: chunk.WhitespaceTokenizer{}}
 	if tweak != nil {
 		tweak(&cfg)
 	}
@@ -98,8 +99,8 @@ func TestResponseCacheServesRepeatedCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Content != "cached-answer" || second.Content != "cached-answer" {
-		t.Fatalf("answers = %q, %q", first.Content, second.Content)
+	if first.Message.Content != "cached-answer" || second.Message.Content != "cached-answer" {
+		t.Fatalf("answers = %q, %q", first.Message.Content, second.Message.Content)
 	}
 	if len(llm.got) != 1 {
 		t.Fatalf("model calls = %d, want 1 (the second call must hit the cache)", len(llm.got))
@@ -275,14 +276,15 @@ func TestHealthMarksBrokenComponents(t *testing.T) {
 	}
 }
 
-func TestHealthReportsDegradedGuardMode(t *testing.T) {
+func TestHealthReportsTheFailOpenPolicy(t *testing.T) {
 	llm := &scripted{t: t, queue: []model.Response{}}
 	app := newRealApp(t, discardES{}, llm, nil, testPolicyMemory, func(c *Config) {
-		c.GuardMode = GuardDegraded
+		c.GuardL2 = stubDetector{name: "l2"}
+		c.GuardFailOpen = []guard.Rail{guard.RailInput}
 	})
 
 	h := app.Health()
-	if !h.Degraded || h.GuardMode != GuardDegraded {
+	if !h.Degraded || len(h.GuardFailOpen) != 1 || h.GuardFailOpen[0] != "input" {
 		t.Fatalf("health = %+v", h)
 	}
 }

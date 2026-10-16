@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/gobellim/kit/model"
+	"github.com/KirillYuzh/Gobellim/model"
 )
 
 const toolSearchPolicy = `

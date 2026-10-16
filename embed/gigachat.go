@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/gobellim/kit/internal/core"
-	"github.com/gobellim/kit/internal/httpjson"
-	"github.com/gobellim/kit/internal/oauth"
+	"github.com/KirillYuzh/Gobellim/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/httpjson"
+	"github.com/KirillYuzh/Gobellim/internal/oauth"
 )
 
 const (

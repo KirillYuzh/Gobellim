@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 const DefaultRetrievalToolName = "search_knowledge"

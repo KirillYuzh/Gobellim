@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"hash"
 
-	"github.com/gobellim/kit/internal/cache"
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/cache"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 const cacheKeyDomain = "kit/embed/cache/v1"

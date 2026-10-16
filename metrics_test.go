@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/gobellim/kit/guard"
-	"github.com/gobellim/kit/model"
+	"github.com/KirillYuzh/Gobellim/guard"
+	"github.com/KirillYuzh/Gobellim/model"
 )
 
 func TestMetricsAndHealthExposeGuardCounters(t *testing.T) {

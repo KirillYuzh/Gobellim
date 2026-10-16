@@ -27,10 +27,10 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/gobellim/kit"
-	"github.com/gobellim/kit/eval"
-	"github.com/gobellim/kit/model"
-	"github.com/gobellim/kit/trace"
+	"github.com/KirillYuzh/Gobellim"
+	"github.com/KirillYuzh/Gobellim/eval"
+	"github.com/KirillYuzh/Gobellim/model"
+	"github.com/KirillYuzh/Gobellim/trace"
 )
 
 func TestBot(t *testing.T) {

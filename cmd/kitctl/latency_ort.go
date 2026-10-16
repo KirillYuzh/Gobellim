@@ -3,8 +3,8 @@
 package main
 
 import (
-	"github.com/gobellim/kit/guard"
-	"github.com/gobellim/kit/guard/gliner"
+	"github.com/KirillYuzh/Gobellim/guard"
+	"github.com/KirillYuzh/Gobellim/guard/gliner"
 )
 
 func newL2Detector(dir, model string) (guard.Detector, error) {

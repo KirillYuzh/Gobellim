@@ -67,8 +67,8 @@ kit не владеет моделью. Вы приносите клиент ч�
 
 ```go
 import (
-	"github.com/gobellim/kit"
-	"github.com/gobellim/kit/model"
+	"github.com/KirillYuzh/Gobellim"
+	"github.com/KirillYuzh/Gobellim/model"
 )
 
 llm, err := model.OpenAI(os.Getenv("OPENAI_API_KEY"), "gpt-4o-mini")
@@ -106,7 +106,9 @@ func newLLM(cfg Config) (model.Client, error) {
 }
 ```
 
-`model.Client` требует только `Chat(ctx, Request)` и `Model()`. Свой провайдер —
+`model.Client` требует только `Chat(ctx, Request)` и `Model()`. Необязательные
+расширения — `model.Streamer` (стриминг) и `model.Regional` (`Region()`,
+резидентность: вне `model.RegionRU` маскирование PII обязательно, BR-106). Свой провайдер —
 это ваша реализация этих двух методов; остальное (guard, трейс, лимиты) берёт на
 себя ядро.
 

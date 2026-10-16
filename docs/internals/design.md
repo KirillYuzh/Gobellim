@@ -80,12 +80,13 @@ flowchart TD
 | I-13 | Тесты — только stdlib. Обвязка **подключена**: CI (`.github/workflows/ci.yml`) гоняет джобы build, test, race, ort-vet, lint, fumpt; `golangci-lint` (`gofumpt`, `govet`, `errcheck`, `staticcheck`, `gosec`, `depguard` и др.) и `make check` дают ту же планку локально. Правила импортов закодированы дважды — `depguard` в `.golangci.yml` и stdlib-тест `internal/importrules`. Обвязка **подключена и зелёная**: `golangci-lint` v2.13.0 локально даёт 0 замечаний, а прогоны workflow на раннере зелёные (push в `develop`/`main` и pull request). |
 | I-14 | Единственный источник правды о вердиктах — этот документ и `guardrails.md`; `BR-27`/`architecture.md` не заявляют больше, чем умеет модель.                                                                                                                                                                                                                                                                                                                                                                                                               |
 | I-15 | Публичный API не содержит «выключателей безопасности»: `AllowAll` живёт в `guard/guardtest`.                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| I-16 | Деградация guard явная: режим задаёт `Config.GuardMode` (`GuardStrict` — fail-closed по умолчанию; `GuardDegraded` — недоступный необязательный (ML) слой пропускается, вердикт помечается `Degraded`, observation — `guard_degraded`). Детерминированный слой (L1) обязателен всегда; деградировавшие вердикты не кэшируются.                                                                                                                                                                                                                            |
+| I-16 | Деградация guard явная и **по рельсам**: `Config.GuardFailOpen` перечисляет рельсы, на которых упавший необязательный (ML) слой пропускается (вердикт помечается `Degraded`, observation — `guard_degraded`). Пустой список (по умолчанию) — fail-closed на каждом рельсе; детерминированный слой (L1) обязателен всегда; деградировавшие вердикты не кэшируются.                                                                                                                                                                                         |
 | I-17 | Память ограничена парой `tenant` + `user_id` принципала: история треда, очистка и recall фильтруют по обоим. `thread_id` даёт вызывающий, поэтому сам по себе доступа не даёт; пустой `UserID` — `ErrUnauthorized`. История треда на чтении считается доверенной (замаскирована при записи) и повторно через L2 не проходит, но флаг недоверенности отдельного сообщения при загрузке восстанавливается (BR-98, D59).                                                                                                                                     |
 | I-18 | Недоверенный ввод помечается (spotlighting): результат инструмента (включая retrieval) оборачивается в `<untrusted-data>…</untrusted-data>` **после** `ModelView`, а в системный промпт добавляется напоминание трактовать этот блок как данные, а не инструкции. По умолчанию включено (`Config.Spotlight` = `SpotlightOn`); `SpotlightOff` — явный opt-in.                                                                                                                                                                                              |
 | I-19 | `ChatStream` — расширение `Chat`, а не второй путь: цикл tools, RBAC, память, бюджет и трейс работают так же. Скользящее окно (`streamMinWindow` = 400 рун) отправляет каждый кусок ответа через рельс `output` до эмиссии, удерживая хвост `streamHoldback` = 96 рун; отказ рельса даёт `Retract` и аборт. Для клиента без `model.Streamer` — откат на буферизованный `Chat` одним чанком. Инвариант потока: `Done.Final.Content` равен конкатенации выданных `Text`.                                                                                    |
 | I-20 | Остаточное ограничение стриминга документируется, а не скрывается: совпадение длиннее `streamHoldback` (96 рун) без границы предложения внутри всё ещё может пересечь окно и просочиться в уже выданный текст. Один проход guard на окно (не на весь ответ) — осознанная цена стриминга.                                                                                                                                                                                                                                                                  |
 | I-21 | Смещения находок даны в координатах исходного текста. `canonicalizeMap` отдаёт для каждой канонической руны диапазон исходных рун, поэтому находка L1 отображается обратно и маска накрывает ровно сопоставленный ввод, даже если каноникализация руну отбросила (zero-width, bidi) или склеила (комбинирующая последовательность). Слой с `UsesNaturalText() == true` получает исходный текст, и его смещения уже верны (`D63`, `D64`).                                                                                                                  |
+| I-22 | Недоверенность хода определяется происхождением данных, а не вердиктом детектора (`BR-101`): результат инструмента (retrieval, `webfetch`, MCP) помечает ход `untrusted` **всегда**, независимо от действия guard. Поэтому Rule of Two не обходится результатом, который L1/L2 пропустил, а taint следует за данными, а не за решением модели (`D68`).                                                                                                                                                                                                    |
 
 ## 3. Контракты пакетов
 
@@ -301,9 +302,11 @@ type Substitution struct {
 - `maskRunes` остаётся, но перед маскированием спаны объединяются и
   сортируются; приоритет категорий задаётся таблицей.
 - `AllowAll` переезжает в `guard/guardtest`.
-- `Options.Optional []string` — имена необязательных слоёв; упавший optional-слой
-  не роняет проверку, а помечает вердикт `Verdict.Degraded = true` и заполняет
-  `Verdict.DegradedReason`. Деградировавшие вердикты не кладутся в кэш.
+- `Options.OptionalByRail map[Rail][]string` — имена необязательных слоёв **по
+  рельсу**: одна политика на рельс, плоского «на всех рельсах» варианта нет (§5.25).
+  Упавший optional-слой не роняет проверку, а помечает вердикт `Verdict.Degraded =
+true` и заполняет `Verdict.DegradedReason`. Деградировавшие вердикты не кладутся
+  в кэш.
 - `Verdict` получает `Degraded bool` и `DegradedReason string` (I-16).
 
 ### 3.5 `embed`
@@ -496,7 +499,7 @@ func Run(ctx context.Context, rec *trace.Recorder, cases []Case,
 
 ```go
 type Config struct {
-	// ... ES, LLM, Pricing, Embedder, Policy, GuardL2, GuardMode, GuardMaxChars,
+	// ... ES, LLM, Pricing, Embedder, Policy, GuardL2, GuardFailOpen, GuardMaxChars,
 	//     GuardCacheSize, GuardWindowChars, GuardOnViolation, Tokenizer, ChunkSize,
 	//     ChunkOverlap, MaxSteps, MaxCallsPerTool, ToolTimeout, ArgsMaxBytes, TopK, Logger
 	TraceText      trace.TextPolicy
@@ -543,12 +546,31 @@ const (
 	SpotlightOff
 )
 
+// Chat возвращает не только ответ, но и аудит хода (D70).
+func (a *App) Chat(ctx context.Context, req ChatRequest) (Response, error)
+
+type Response struct {
+	Message  model.Message
+	Usage    model.Usage
+	TraceID  string
+	Decision DecisionReport
+}
+
+// DecisionReport — аудит хода: какая политика и версия guard приняли решение и
+// помечен ли ход недоверенным. Пошаговая деталь живёт в трейсе.
+type DecisionReport struct {
+	GuardVersion string
+	PolicyHash   string
+	Untrusted    bool
+}
+
 // ChatStream — стриминг расширением Chat (I-19). Вызывающий обязан вычитать
 // канал до закрытия.
 func (a *App) ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamChunk, error)
 
 type StreamChunk struct {
 	Text    string        // подтверждённый, уже проверенный текст
+	TraceID string        // id хода; заполнен во всех чанках
 	Retract bool          // клиент отбрасывает показанное; поток абортится ошибкой
 	Done    bool          // последний чанк, с собранным Final
 	Final   model.Message
@@ -976,3 +998,61 @@ AllowedOrigins, Logger})`, `mcp.ServerTool`, `mcp.FromTool(app, def)`,
   перечисляет неверсионные задачи; `thresholdFor(clsThreshold, threshold, thresholds,
 label)` читает `cls_threshold` (D65).
 - `Pipeline.cacheKey(inspected)` — ключ по инспектируемому тексту и версии (D66).
+
+### 5.20 Недоверенность по происхождению (D68)
+
+- `Chat` и `ChatStream` помечают ход `untrusted` в точке, где результат инструмента
+  попадает в контекст, а не только при `Action != Allow`/усечении: любой результат
+  инструмента — данные извне доверенного потока управления. Закрывает обход Rule of
+  Two (BR-51, BR-101, I-22).
+
+### 5.21 ES опционален (D69)
+
+- `kit.New` больше не требует `Config.ES`: при `ES == nil` пишется info в лог, а `trace.Writer` не запускает ES-горутину и просто форвардит события в `Sinks`.
+- `App.requireES()` охраняет `esDo` (Ingest/Search/Delete/Prune/memory) и `memoryWorking`; `App.Setup` без ES — no-op.
+
+### 5.22 Ответ `Chat` — `Response` (D70)
+
+- `Chat` возвращает `Response{Message, Usage, TraceID, Decision}` вместо `model.Message`: вызывающий связывает ответ с трейсом, а `Decision` несёт версию guard, хэш политики и признак недоверенности хода.
+- `Decision` собирается в `defer`, поэтому доступен и при ошибке (аудит отказа).
+- `StreamChunk` получает `TraceID` — поток связывается с трейсом так же.
+
+### 5.23 Чанкер требует токенайзер (D71)
+
+- `Config.Tokenizer` больше не подставляется молча: `chunk.New` вызывается только при непустом токенайзере, `a.chunker == nil` означает «чанкинга нет».
+- `Ingest` без токенайзера — `ErrInvalidConfig` (рядом с проверкой `Embedder`); `New` с `Embedder` и без токенайзера пишет warning.
+
+### 5.24 Ключ идемпотентности инструмента (D72)
+
+- `kit.IdempotencyKey(ctx)` отдаёт инструменту стабильный ключ вызова (`sha256` имени и
+  канонических аргументов) — то же значение, что `ToolCallInfo.Fingerprint`.
+- Ключ инжектится в контекст инструмента в `execTool` рядом с таймаутом; ядро ключей не
+  хранит.
+
+### 5.25 Один FailPolicy на рельс (D73)
+
+- `Config` теряет `GuardMode`, `GuardDegradedRails`, `GuardEnsembles` и
+  `GuardL2ArtifactSHA256`; остаётся `GuardFailOpen []guard.Rail` — список рельсов,
+  на которых упавший ML-слой не роняет запрос (пусто = fail-closed везде, BR-06).
+- Составные детекторы собирает плагин L2 и передаёт один `guard.Detector` в
+  `Config.GuardL2`; хэш артефакта детектор отдаёт сам через `guard.ArtifactHash`.
+- `Health` вместо `GuardMode`/`DegradedRails` несёт `GuardFailOpen []string`.
+- Плоский `guard.Options.Optional []string` удалён: политика деградации задаётся
+  только `Options.OptionalByRail` — «одна FailPolicy на рельс» держится на всех
+  уровнях.
+
+### 5.26 Резидентность провайдера (`model.Regional`, D74)
+
+- `model.Region` (`RegionRU`/`RegionEU`/`RegionUS`) и необязательный интерфейс
+  `model.Regional` (`Region() Region`) — рядом с `ContextWindow` и `Streamer`.
+- Вне `RegionRU` маскирование PII обязательно: `execTool` не применяет `AllowPII`,
+  инструмент получает заглушки (BR-106); `New` пишет warning.
+
+### 5.28 Параллельные read-only вызовы инструментов (D79)
+
+- `runToolCalls` заменил цикл по `ToolCalls` в `Chat` и `ChatStream`: батч целиком из
+  `EffectRead` без approval идёт параллельно (лимит `maxToolConcurrency` = 8), иначе —
+  последовательно.
+- `turn` получил `sync.Mutex` и аксессоры (`takeCall`, `takeInvalidTry`,
+  `markUntrusted`/`isUntrusted`, `reserveApproval`/`releaseApproval`); consume-once
+  одобрений резервирует fingerprint до вызова `Approver` (BR-53).

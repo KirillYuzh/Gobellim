@@ -5,8 +5,8 @@ package guardrail
 import (
 	"log/slog"
 
-	"github.com/gobellim/kit/guard"
-	"github.com/gobellim/kit/guard/gliner"
+	"github.com/KirillYuzh/Gobellim/guard"
+	"github.com/KirillYuzh/Gobellim/guard/gliner"
 )
 
 const sessions = 2

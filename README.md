@@ -5,6 +5,8 @@
 ![Go](https://img.shields.io/badge/Go-1.24-00ADD8?logo=go&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+![Gobellim](./site/public/gobellim-compact-white.svg)
+
 Native Go primitives for using LLMs safely: retrieval, tool calling and
 guardrails behind one permission-checked call path.
 
@@ -30,14 +32,14 @@ guardrails behind one permission-checked call path.
 ## Install
 
 ```sh
-go get github.com/gobellim/kit
+go get github.com/KirillYuzh/Gobellim
 ```
 
 ## Quickstart
 
 ```go
 app, err := kit.New(ctx, kit.Config{
-	ES:     es,     // your Elasticsearch client (store.ES)
+	ES:     es,     // optional: your store.ES client (retrieval, memory, traces)
 	LLM:    llm,    // vLLM, Ollama, OpenAI-compatible or GigaChat
 	Policy: policy, // authz.Load("policy.yaml")
 })

@@ -132,3 +132,39 @@ jobs:
       - name: publish report to the job summary
         if: always()
         run: cat guard-quality.md >> "$GITHUB_STEP_SUMMARY"
+
+  perf:
+    name: perf budget
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      # Hard gate: direct requires, go.sum size, and the module closure of the
+      # default build. A dependency cannot land silently.
+      - name: dependency budgets
+        run: go run ./scripts/perfbudget/
+      # Published, not gated: ns/op depends on the runner. The allocation gate
+      # lives in perf_gate_test.go and runs in the `test` job.
+      - name: benchmarks (core overhead, no L2)
+        run: |
+          set -o pipefail
+          go test -run '^$' -bench . -benchmem ./... | tee bench.txt
+      - name: publish benchmarks to the job summary
+        if: always()
+        run: |
+          {
+            echo '### Benchmarks — core overhead, no L2'
+            echo '```'
+            cat bench.txt
+            echo '```'
+            echo 'Download the `bench` artifact as the baseline and compare with `benchstat old.txt new.txt`.'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: upload benchmarks
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench
+          path: bench.txt

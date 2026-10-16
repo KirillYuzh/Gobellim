@@ -3,8 +3,8 @@ package kitengine
 import (
 	"context"
 
-	"github.com/gobellim/kit"
-	"github.com/gobellim/kit/demo/internal/domain"
+	"github.com/KirillYuzh/Gobellim"
+	"github.com/KirillYuzh/Gobellim/demo/internal/domain"
 )
 
 // triageSystem is deliberately small: the schema, not the prompt, is what pins

@@ -6,15 +6,16 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/gobellim/kit"
-	"github.com/gobellim/kit/authz"
-	"github.com/gobellim/kit/demo/internal/domain"
-	"github.com/gobellim/kit/demo/internal/usecase"
-	"github.com/gobellim/kit/embed"
-	"github.com/gobellim/kit/guard"
-	"github.com/gobellim/kit/model"
-	"github.com/gobellim/kit/store"
-	"github.com/gobellim/kit/trace"
+	kit "github.com/KirillYuzh/Gobellim"
+	"github.com/KirillYuzh/Gobellim/authz"
+	"github.com/KirillYuzh/Gobellim/chunk"
+	"github.com/KirillYuzh/Gobellim/demo/internal/domain"
+	"github.com/KirillYuzh/Gobellim/demo/internal/usecase"
+	"github.com/KirillYuzh/Gobellim/embed"
+	"github.com/KirillYuzh/Gobellim/guard"
+	"github.com/KirillYuzh/Gobellim/model"
+	"github.com/KirillYuzh/Gobellim/store"
+	"github.com/KirillYuzh/Gobellim/trace"
 )
 
 type Config struct {
@@ -44,6 +45,7 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 		Embedder:  cfg.Embedder,
 		Policy:    cfg.Policy,
 		GuardL2:   cfg.GuardL2,
+		Tokenizer: chunk.WhitespaceTokenizer{},
 		TraceText: cfg.TraceText,
 		Sampler:   cfg.Sampler,
 		Logger:    cfg.Logger,
@@ -82,7 +84,7 @@ func (e *Engine) Ask(ctx context.Context, req usecase.ChatRequest) (domain.Answe
 	if err != nil {
 		return domain.Answer{}, translate(err)
 	}
-	return domain.Answer{Content: answer.Content}, nil
+	return domain.Answer{Content: answer.Message.Content}, nil
 }
 
 func kitPrincipal(p domain.Principal) kit.Principal {

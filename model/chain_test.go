@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gobellim/kit/internal/httpjson"
+	"github.com/KirillYuzh/Gobellim/internal/httpjson"
 )
 
 type fakeClient struct {

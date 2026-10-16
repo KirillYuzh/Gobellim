@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 const structureInstruction = "Convert the following text into JSON that validates against the provided JSON Schema. Return only JSON."

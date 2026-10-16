@@ -24,9 +24,9 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/gobellim/kit"
-	"github.com/gobellim/kit/authz"
-	"github.com/gobellim/kit/model"
+	"github.com/KirillYuzh/Gobellim"
+	"github.com/KirillYuzh/Gobellim/authz"
+	"github.com/KirillYuzh/Gobellim/model"
 )
 
 type weatherIn struct {
@@ -75,7 +75,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(answer.Content)
+	fmt.Println(answer.Message.Content)
 }
 
 func getWeather(_ context.Context, in weatherIn) (string, error) {
@@ -112,10 +112,13 @@ if _, err := kit.Tool(app, "get_weather", getWeather, kit.Desc("Текущая �
 
 ### Клиент Elasticsearch
 
-В примере выше `es` — ваш клиент. kit не поставляет клиент Elasticsearch (D10):
-контракт — интерфейс `store.ES` с единственным методом `Do(ctx, store.Request)`.
-Тип контента, `refresh` и идемпотентность — поля `store.Request`; kit **не** выводит
-их из строки пути (инвариант I-12). Минимальная реализация:
+`Config.ES` опционален (BR-102, D69): без него работают чат, инструменты и
+`Generate`, а операции хранилища (`Ingest`/`Search`/`Delete`/`Prune`, память) дают
+`ErrInvalidConfig`, и `Setup` ничего не делает. В примере выше `es` — ваш клиент.
+kit не поставляет клиент Elasticsearch (D10): контракт — интерфейс `store.ES` с
+единственным методом `Do(ctx, store.Request)`. Тип контента, `refresh` и
+идемпотентность — поля `store.Request`; kit **не** выводит их из строки пути
+(инвариант I-12). Минимальная реализация:
 
 ```go
 type httpES struct {
@@ -200,7 +203,7 @@ roles:
 Поднимите стек, затем запустите бота из корня репозитория:
 
 ```sh
-cd deploy && docker compose up -d elasticsearch grafana
+cd demo/deploy && docker compose up -d elasticsearch grafana
 ```
 
 ```sh

@@ -7,12 +7,12 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gobellim/kit/authz"
-	"github.com/gobellim/kit/internal/call"
-	"github.com/gobellim/kit/internal/core"
-	"github.com/gobellim/kit/internal/id"
-	"github.com/gobellim/kit/model"
-	"github.com/gobellim/kit/store"
+	"github.com/KirillYuzh/Gobellim/authz"
+	"github.com/KirillYuzh/Gobellim/internal/call"
+	"github.com/KirillYuzh/Gobellim/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/id"
+	"github.com/KirillYuzh/Gobellim/model"
+	"github.com/KirillYuzh/Gobellim/store"
 )
 
 const (
@@ -258,6 +258,9 @@ func (a *App) memoryWorking(ctx context.Context, pr core.Principal, threadID str
 	}
 	if threadID == "" {
 		return nil, fmt.Errorf("kit: memory working: thread ID is required: %w", core.ErrInvalidConfig)
+	}
+	if err := a.requireES(); err != nil {
+		return nil, err
 	}
 	docID := store.MemoryWorkingID(pr.Tenant, threadID)
 	req := store.RawRequest(http.MethodGet, "/"+store.IndexMemoryWorking+"/_doc/"+docID, nil, "")

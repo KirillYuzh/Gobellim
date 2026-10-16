@@ -57,7 +57,7 @@ policy.yaml        RBAC: user → база знаний, admin → база зн
 ## Запуск
 
 ```sh
-cd deploy && docker compose up -d
+cd demo/deploy && docker compose up -d
 ```
 
 Так поднимаются Elasticsearch, сервер эмбеддингов

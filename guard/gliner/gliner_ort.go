@@ -17,9 +17,9 @@ import (
 	"github.com/daulet/tokenizers"
 	orts "github.com/yalue/onnxruntime_go"
 
-	"github.com/gobellim/kit/guard"
-	"github.com/gobellim/kit/internal/core"
-	"github.com/gobellim/kit/internal/ort"
+	"github.com/KirillYuzh/Gobellim/guard"
+	"github.com/KirillYuzh/Gobellim/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/ort"
 )
 
 const DefaultModel = "hivetrace__gliner-guard-omni"

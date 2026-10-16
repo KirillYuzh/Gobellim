@@ -3,7 +3,7 @@ package guard
 import (
 	"fmt"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 type Rail string

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gobellim/kit/demo/internal/domain"
+	"github.com/KirillYuzh/Gobellim/demo/internal/domain"
 )
 
 type fakeEngine struct {

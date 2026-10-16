@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gobellim/kit"
-	"github.com/gobellim/kit/authz"
-	"github.com/gobellim/kit/model"
-	"github.com/gobellim/kit/store"
+	"github.com/KirillYuzh/Gobellim"
+	"github.com/KirillYuzh/Gobellim/authz"
+	"github.com/KirillYuzh/Gobellim/model"
+	"github.com/KirillYuzh/Gobellim/store"
 )
 
 type nopES struct{}

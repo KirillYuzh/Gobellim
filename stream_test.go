@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/gobellim/kit/model"
+	"github.com/KirillYuzh/Gobellim/model"
 )
 
 type fakeStreamer struct {

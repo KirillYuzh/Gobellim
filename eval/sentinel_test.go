@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/gobellim/kit/internal/core"
-	"github.com/gobellim/kit/trace"
+	"github.com/KirillYuzh/Gobellim/internal/core"
+	"github.com/KirillYuzh/Gobellim/trace"
 )
 
 func TestRecordedWithoutATraceReturnsErrNotFound(t *testing.T) {

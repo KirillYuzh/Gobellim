@@ -38,6 +38,10 @@ models/
 # Editor/IDE
 # .idea/
 # .vscode/
-/docslint
 
+# Built tool binaries
+/docslint
 /guardqual
+
+# Turbopack cache at the repository root, written by site/next.config.mjs
+/.next/

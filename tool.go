@@ -9,8 +9,8 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/gobellim/kit/authz"
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/authz"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 	invopop "github.com/invopop/jsonschema"
 	stjs "github.com/santhosh-tekuri/jsonschema/v6"
 )
@@ -39,13 +39,33 @@ func (e Effect) String() string {
 func (e Effect) IsEgress() bool { return e == EffectEgress }
 
 type ToolCallInfo struct {
-	UserID      string
-	Tenant      string
-	Tool        string
-	Args        string
+	UserID string
+	Tenant string
+	Tool   string
+	Args   string
+	// Fingerprint is the stable key of this call: sha256 of the tool name and its
+	// canonical arguments — the same value kit.IdempotencyKey exposes to the tool.
 	Fingerprint string
 	Effect      Effect
 	CallIndex   int
+}
+
+type idempotencyKeyCtxKey struct{}
+
+// withIdempotencyKey carries the call's idempotency key to the tool function.
+func withIdempotencyKey(ctx context.Context, key string) context.Context {
+	return context.WithValue(ctx, idempotencyKeyCtxKey{}, key)
+}
+
+// IdempotencyKey returns the stable key of the current tool call: sha256 of the
+// tool name and its canonical arguments (the same value as
+// ToolCallInfo.Fingerprint). It is stable across repeats of the same call, so an
+// effectful tool can forward it downstream (e.g. as an "Idempotency-Key" header)
+// and let the effect deduplicate instead of applying twice. It returns "" outside
+// a kit.Tool call.
+func IdempotencyKey(ctx context.Context) string {
+	key, _ := ctx.Value(idempotencyKeyCtxKey{}).(string)
+	return key
 }
 
 type BeforeToolHook func(ctx context.Context, info ToolCallInfo) (proceed bool, output string, err error)

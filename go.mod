@@ -1,4 +1,4 @@
-module github.com/gobellim/kit
+module github.com/KirillYuzh/Gobellim
 
 go 1.24
 
