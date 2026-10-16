@@ -5,17 +5,20 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
+
+	"github.com/gobellim/kit/internal/core"
 )
 
+var EnsureStepTimeout = 30 * time.Second
+
 type step struct {
-	method string
-	path   string
-	body   []byte
+	method      string
+	path        string
+	contentType string
+	body        []byte
 }
 
-// EnsureSchema creates the ILM policy, the trace/observation data stream
-// templates and, when dims is positive, the chunks index.
-// It is idempotent: an "already exists" response is treated as success.
 func EnsureSchema(ctx context.Context, es ES, dims int) error {
 	ilm, err := ILMPolicyBody(DefaultILMDays)
 	if err != nil {
@@ -23,21 +26,24 @@ func EnsureSchema(ctx context.Context, es ES, dims int) error {
 	}
 
 	steps := []step{
-		{http.MethodPut, "/_ilm/policy/" + ILMPolicyName, ilm},
-		{http.MethodPut, "/_index_template/" + TraceTemplateName, TracesTemplateBody()},
-		{http.MethodPut, "/_index_template/" + ObservationTemplateName, ObservationsTemplateBody()},
+		{http.MethodPut, "/_ilm/policy/" + ILMPolicyName, "application/json", ilm},
+		{http.MethodPut, "/_index_template/" + TraceTemplateName, "application/json", TracesTemplateBody()},
+		{http.MethodPut, "/_index_template/" + ObservationTemplateName, "application/json", ObservationsTemplateBody()},
 	}
 	if dims > 0 {
 		chunks, err := ChunksIndexBody(dims)
 		if err != nil {
 			return err
 		}
-		steps = append(steps, step{http.MethodPut, "/" + IndexChunks, chunks})
+		steps = append(steps, step{http.MethodPut, "/" + IndexChunks, "application/json", chunks})
 	}
 	for _, s := range steps {
-		status, body, err := es.Do(ctx, s.method, s.path, strings.NewReader(string(s.body)))
+		req := RawRequest(s.method, s.path, s.body, s.contentType)
+		stepCtx, cancel := context.WithTimeout(ctx, EnsureStepTimeout)
+		status, body, err := es.Do(stepCtx, req)
+		cancel()
 		if err != nil {
-			return fmt.Errorf("store: bootstrap %s: %w", s.path, err)
+			return fmt.Errorf("store: bootstrap %s: %w", req.EffectivePath(), err)
 		}
 		if status >= 200 && status < 300 {
 			continue
@@ -45,7 +51,8 @@ func EnsureSchema(ctx context.Context, es ES, dims int) error {
 		if alreadyExists(body) {
 			continue
 		}
-		return fmt.Errorf("store: bootstrap %s: status %d: %s", s.path, status, Snippet(body))
+		return fmt.Errorf("store: bootstrap %s: status %d: %s: %w",
+			req.EffectivePath(), status, Snippet(body), core.ErrProvider)
 	}
 	return nil
 }

@@ -9,18 +9,23 @@ import (
 	"github.com/gobellim/kit/internal/core"
 )
 
+const (
+	MaxTopK          = 1000
+	MaxNumCandidates = 10000
+)
+
 type Hit struct {
 	ID     string
 	Score  float64
 	Source json.RawMessage
 }
 
-// ACLFilter is the deny-by-default ACL clause: the document tenant must match the principal tenant
-// and its acl list must contain one of the principal's roles. An empty role list matches nothing.
-func ACLFilter(p core.Principal) map[string]any {
+func ACLFilter(p core.Principal) (map[string]any, error) {
+	if p.Tenant == "" {
+		return nil, fmt.Errorf("store: acl filter requires a tenant: %w", core.ErrInvalidArgs)
+	}
 	roles := p.Roles
 	if roles == nil {
-
 		roles = []string{}
 	}
 	return map[string]any{
@@ -32,7 +37,7 @@ func ACLFilter(p core.Principal) map[string]any {
 				map[string]any{"term": map[string]any{"quarantined": false}},
 			},
 		},
-	}
+	}, nil
 }
 
 type SearchQuery struct {
@@ -42,14 +47,20 @@ type SearchQuery struct {
 	Principal     core.Principal
 	TopK          int
 	NumCandidates int
+	Filter        Filter
+
+	filterQuery map[string]any
 }
 
-func (q SearchQuery) normalized() SearchQuery {
+func (q SearchQuery) normalized() (SearchQuery, error) {
 	if q.Index == "" {
 		q.Index = IndexChunks
 	}
 	if q.TopK <= 0 {
 		q.TopK = DefaultTopK
+	}
+	if q.TopK > MaxTopK {
+		q.TopK = MaxTopK
 	}
 	if q.NumCandidates <= 0 {
 		q.NumCandidates = q.TopK * 10
@@ -57,13 +68,42 @@ func (q SearchQuery) normalized() SearchQuery {
 			q.NumCandidates = 100
 		}
 	}
-	return q
+	if q.NumCandidates > MaxNumCandidates {
+		q.NumCandidates = MaxNumCandidates
+	}
+	compiled, err := CompileFilter(q.Filter)
+	if err != nil {
+		return q, err
+	}
+	q.filterQuery = compiled
+	return q, nil
 }
 
-// MSearchNDJSON renders the _msearch body: a kNN query followed by a BM25 query,
-// both carrying the principal ACL filter.
+func (q SearchQuery) effectiveFilter() (map[string]any, error) {
+	acl, err := ACLFilter(q.Principal)
+	if err != nil {
+		return nil, err
+	}
+	if q.filterQuery == nil {
+		return acl, nil
+	}
+	return map[string]any{
+		"bool": map[string]any{
+			"filter": []any{acl, q.filterQuery},
+		},
+	}, nil
+}
+
 func MSearchNDJSON(q SearchQuery) ([]byte, error) {
-	q = q.normalized()
+	var err error
+	q, err = q.normalized()
+	if err != nil {
+		return nil, err
+	}
+	filter, err := q.effectiveFilter()
+	if err != nil {
+		return nil, err
+	}
 	source := []string{"doc_id", TextField, "position"}
 
 	header := map[string]any{"index": q.Index}
@@ -73,9 +113,8 @@ func MSearchNDJSON(q SearchQuery) ([]byte, error) {
 			"knn": map[string]any{
 				"field":          VectorField,
 				"query_vector":   q.Vector,
-				"k":              q.TopK,
 				"num_candidates": q.NumCandidates,
-				"filter":         ACLFilter(q.Principal),
+				"filter":         filter,
 			},
 		},
 		"_source": source,
@@ -85,7 +124,7 @@ func MSearchNDJSON(q SearchQuery) ([]byte, error) {
 		"query": map[string]any{
 			"bool": map[string]any{
 				"must":   []any{map[string]any{"match": map[string]any{TextField: q.Text}}},
-				"filter": []any{ACLFilter(q.Principal)},
+				"filter": []any{filter},
 			},
 		},
 		"_source": source,
@@ -104,15 +143,22 @@ func MSearchNDJSON(q SearchQuery) ([]byte, error) {
 }
 
 type msearchResponse struct {
-	Responses []struct {
-		Hits struct {
-			Hits []struct {
-				ID     string          `json:"_id"`
-				Score  float64         `json:"_score"`
-				Source json.RawMessage `json:"_source"`
-			} `json:"hits"`
+	Responses []msearchItem `json:"responses"`
+}
+
+type msearchItem struct {
+	Error  json.RawMessage `json:"error"`
+	Status int             `json:"status"`
+	Shards struct {
+		Failed int `json:"failed"`
+	} `json:"_shards"`
+	Hits struct {
+		Hits []struct {
+			ID     string          `json:"_id"`
+			Score  float64         `json:"_score"`
+			Source json.RawMessage `json:"_source"`
 		} `json:"hits"`
-	} `json:"responses"`
+	} `json:"hits"`
 }
 
 func ParseMSearch(body []byte) ([][]Hit, error) {
@@ -121,7 +167,15 @@ func ParseMSearch(body []byte) ([][]Hit, error) {
 		return nil, fmt.Errorf("store: parse msearch response: %w", err)
 	}
 	lists := make([][]Hit, 0, len(parsed.Responses))
-	for _, r := range parsed.Responses {
+	for i, r := range parsed.Responses {
+		if len(r.Error) > 0 {
+			return nil, fmt.Errorf("store: msearch response %d failed with status %d: %s: %w",
+				i, r.Status, Snippet(r.Error), core.ErrProvider)
+		}
+		if r.Shards.Failed > 0 {
+			return nil, fmt.Errorf("store: msearch response %d had %d failed shards: %w",
+				i, r.Shards.Failed, core.ErrProvider)
+		}
 		hits := make([]Hit, 0, len(r.Hits.Hits))
 		for _, h := range r.Hits.Hits {
 			hits = append(hits, Hit{ID: h.ID, Score: h.Score, Source: h.Source})
@@ -131,8 +185,6 @@ func ParseMSearch(body []byte) ([][]Hit, error) {
 	return lists, nil
 }
 
-// RRF fuses ranked hit lists with Reciprocal Rank Fusion and returns the top-k,
-// scoring each id as sum over lists of 1 / (rankConstant + rank + 1).
 func RRF(lists [][]Hit, rankConstant, topK int) []Hit {
 	if rankConstant <= 0 {
 		rankConstant = DefaultRRFRankConst
@@ -157,7 +209,12 @@ func RRF(lists [][]Hit, rankConstant, topK int) []Hit {
 		h.Score = scores[id]
 		out = append(out, h)
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Score != out[j].Score {
+			return out[i].Score > out[j].Score
+		}
+		return out[i].ID < out[j].ID
+	})
 	if topK > 0 && len(out) > topK {
 		out = out[:topK]
 	}
