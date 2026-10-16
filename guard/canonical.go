@@ -28,11 +28,20 @@ var homoglyphs = map[rune]rune{
 	'а': 'a', 'е': 'e', 'о': 'o', 'р': 'p', 'с': 'c', 'у': 'y', 'х': 'x',
 }
 
+// Canonicalize folds text to a comparable form: NFKC, then case folding with
+// invisible/homoglyph/full-width normalisation, then NFKC again — the second
+// pass composes sequences that the case folding made composable.
 func Canonicalize(text string) string {
 	if text == "" {
 		return ""
 	}
-	s := norm.NFKC.String(text)
+	// NFKC leaves a rune unnormalised when the text carries invalid UTF-8, so the
+	// result would not be a fixed point: sanitise first.
+	s := strings.ToValidUTF8(text, "\uFFFD")
+	return norm.NFKC.String(fold(norm.NFKC.String(s)))
+}
+
+func fold(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for _, r := range s {

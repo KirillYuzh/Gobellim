@@ -678,6 +678,8 @@ README описывают именно это поведение.
 - На рельсе `output` категории INJECTION/UNSAFE дают `Detect`, а не `Mask`.
 - L2 GLiNER: метки сущностей → `PII`; метки классификации маппятся так: явный `category_map` переопределяет всё; значение-категория (`PII`/`SECRET`/`INJECTION`/`UNSAFE`) задаёт категорию; значение **`SAFE`** подавляет находку для этой метки (`category_map` принимает именно эти пять значений); без маппинга работает эвристика (`unsafe/harmful/...` → `UNSAFE`, `inject/jailbreak/attack/override/exfiltrat/abuse` → `INJECTION`), а встроенный список безопасных имён даёт «ничего не сообщать». Незнакомая, немаппленная метка fail-safe → `UNSAFE` (I-14). Go принимает N групп классификации: у каждой своё имя `output`, `multi_label` + `sigmoid`, пороги на метку/группу (`thresholds`). Поставляемый по умолчанию экспорт компактен (`person/email/phone` + `safe/unsafe`); богатый (32 сущности, 5 групп, 70 меток классификации; адверсариальные метки дают `INJECTION`) собирается `export.py --schema full` (D28, D35).
 - L2 получает не всё окно guard: тензорный вход ограничен `Config.MaxTokens` (`DefaultMaxTokens` = 512, кламп до `max_sequence_length` модели), поэтому хвост длинного входа размечает только L1 (D34).
+- `Canonicalize` — фиксированная точка: невалидный UTF-8 санируется, затем NFKC →
+  `fold` → снова NFKC (D56).
 
 ### 5.4 `embed`
 
@@ -875,3 +877,12 @@ AllowedOrigins, Logger})`, `mcp.ServerTool`, `mcp.FromTool(app, def)`,
   `kit.AllowPII(true)` разрешает подстановку значений в args инструмента — только
   при однозначном отображении заглушки и только внутри вызова; результат
   маскируется обратно. Замена формата заглушки не потребовалась.
+
+### 5.14 Фаззинг и фиксированная точка каноникализации (D56)
+
+- `FuzzCanonicalize`, `FuzzDecodedVariants` (`guard`), `FuzzCompileFilter`,
+  `FuzzRRF` (`store`) — stdlib-фаззинг; находки пишутся в `testdata/fuzz` как
+  регрессия.
+- `Canonicalize` — фиксированная точка: невалидный UTF-8 санируется
+  (`strings.ToValidUTF8`) до первого NFKC, затем `fold` (регистр, гомоглифы,
+  невидимые, полноширинные цифры), затем ещё один NFKC.

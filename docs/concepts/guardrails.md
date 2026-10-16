@@ -53,7 +53,7 @@ flowchart TD
 
 ### Слои и порядок
 
-- L0 — каноникализация (`Canonicalize`: NFKC, case-fold, удаление zero-width/bidi, фолдинг кириллических гомоглифов, нормализация цифр) и `DecodedVariants` (base64/hex/percent-фрагменты, декодированные и переданные повторно в L1).
+- L0 — каноникализация (`Canonicalize`: NFKC, case-fold, удаление zero-width/bidi, фолдинг кириллических гомоглифов, нормализация цифр; результат — фиксированная точка, невалидный UTF-8 санируется до NFKC) и `DecodedVariants` (base64/hex/percent-фрагменты, декодированные и переданные повторно в L1).
 - L1 — детерминированный слой `guard/rules`: фразы, regex, контрольные суммы. Подключается всегда.
 - L2 — ML-модель за интерфейсом `guard.Detector`. В v1 одна модель: ONNX-экспорт `hivetrace/gliner-guard-omni` (см. ниже). В сборке без тега `ort` ML-слой — заглушка fail-closed.
 
