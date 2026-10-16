@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gobellim/kit/internal/core"
-	"github.com/gobellim/kit/internal/id"
+	"github.com/KirillYuzh/Gobellim/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/id"
 )
 
 type TokenSource struct {

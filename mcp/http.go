@@ -11,8 +11,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/gobellim/kit/internal/core"
-	"github.com/gobellim/kit/internal/httpjson"
+	"github.com/KirillYuzh/Gobellim/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/httpjson"
 )
 
 const sessionHeader = "Mcp-Session-Id"

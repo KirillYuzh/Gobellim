@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gobellim/kit/authz"
-	"github.com/gobellim/kit/model"
+	"github.com/KirillYuzh/Gobellim/authz"
+	"github.com/KirillYuzh/Gobellim/model"
 )
 
 func mustPolicy(t *testing.T, policyYAML string) *authz.Policy {

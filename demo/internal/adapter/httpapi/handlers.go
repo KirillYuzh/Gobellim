@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gobellim/kit/demo/internal/domain"
-	"github.com/gobellim/kit/demo/internal/usecase"
+	"github.com/KirillYuzh/Gobellim/demo/internal/domain"
+	"github.com/KirillYuzh/Gobellim/demo/internal/usecase"
 )
 
 const maxBodyBytes = 1 << 20

@@ -10,7 +10,7 @@ import (
 	invopop "github.com/invopop/jsonschema"
 	stjs "github.com/santhosh-tekuri/jsonschema/v6"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 type State map[string]any

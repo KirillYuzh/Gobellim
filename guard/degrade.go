@@ -6,23 +6,18 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 const DefaultDegradedWarnInterval = time.Minute
 
 type degradationPolicy struct {
-	everywhere map[string]bool
-	byRail     map[Rail]map[string]bool
+	byRail map[Rail]map[string]bool
 }
 
-func newDegradationPolicy(flat []string, byRail map[Rail][]string) (degradationPolicy, error) {
+func newDegradationPolicy(byRail map[Rail][]string) (degradationPolicy, error) {
 	p := degradationPolicy{
-		everywhere: make(map[string]bool, len(flat)),
-		byRail:     make(map[Rail]map[string]bool, len(byRail)),
-	}
-	for _, name := range flat {
-		p.everywhere[name] = true
+		byRail: make(map[Rail]map[string]bool, len(byRail)),
 	}
 	for rail, names := range byRail {
 		if !ValidRail(rail) {
@@ -39,9 +34,6 @@ func newDegradationPolicy(flat []string, byRail map[Rail][]string) (degradationP
 }
 
 func (p degradationPolicy) allows(rail Rail, layerName, detectorName string) bool {
-	if p.everywhere[layerName] || p.everywhere[detectorName] {
-		return true
-	}
 	byRail, ok := p.byRail[rail]
 	if !ok {
 		return false

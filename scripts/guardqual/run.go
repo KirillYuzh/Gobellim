@@ -9,10 +9,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gobellim/kit/guard"
-	"github.com/gobellim/kit/guard/gliner"
-	"github.com/gobellim/kit/guard/rules"
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/guard"
+	"github.com/KirillYuzh/Gobellim/guard/gliner"
+	"github.com/KirillYuzh/Gobellim/guard/rules"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 type detector interface {

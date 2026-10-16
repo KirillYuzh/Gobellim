@@ -58,7 +58,7 @@ policy.yaml        RBAC: user → knowledge base, admin → knowledge base + wea
 ## Run
 
 ```sh
-cd deploy && docker compose up -d
+cd demo/deploy && docker compose up -d
 ```
 
 That starts Elasticsearch, the embeddings server

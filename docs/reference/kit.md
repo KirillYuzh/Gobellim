@@ -1,6 +1,6 @@
 # Справочник kit
 
-Полный справочник фасада `github.com/gobellim/kit`: конфигурация, жизненный цикл,
+Полный справочник фасада `github.com/KirillYuzh/Gobellim`: конфигурация, жизненный цикл,
 операции, типы, инструменты и ошибки.
 
 Все операции идут через единый примитив `internal/call` (`authz → guard → span →
@@ -15,19 +15,19 @@ fn`). Добавлять middleware или обходить политику н�
 
 | Поле               | Тип                          | По умолчанию                           | Назначение                                                                         |
 | ------------------ | ---------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------- |
-| `ES`               | `store.ES`                   | — (обязательно)                        | Клиент Elasticsearch пишет пользователь.                                           |
+| `ES`               | `store.ES`                   | `nil`                                  | Опционален: без него работают `Chat`/`CallTool`/`Generate`; нужен для ingest/search/memory (BR-102). |
 | `LLM`              | `model.Client`               | — (обязательно)                        | Клиент чата.                                                                       |
 | `Pricing`          | `model.Pricing`              | нулевое (стоимость `0`)                | Цена модели за 1M токенов; библиотека считает `usage.cost` и `cost`.               |
 | `Embedder`         | `embed.Embedder`             | `nil`                                  | Нужен только для `Ingest` и `Search`; чат-приложение может не задавать.            |
 | `Policy`           | `*authz.Policy`              | — (обязательно)                        | Разобранный `policy.yaml`.                                                         |
 | `GuardL2`          | `guard.Detector`             | `nil`                                  | ML-слой guard; при `nil` остаётся только детерминированный L1.                     |
-| `GuardMode`        | `kit.GuardMode`              | `kit.GuardStrict`                      | `GuardStrict` — fail-closed; `GuardDegraded` — упавший ML-слой не роняет запрос.   |
+| `GuardFailOpen`    | `[]guard.Rail`               | `nil` (fail-closed везде)              | Рельсы, где упавший ML-слой не роняет запрос (BR-06, D73).                         |
 | `GuardMaxChars`    | `int`                        | `8000` (`guard.DefaultMaxChars`)       | Лимит текста для guard.                                                            |
 | `GuardCacheSize`   | `int`                        | `4096` (`guard.DefaultCacheSize`)      | Размер LRU-кэша вердиктов guard.                                                   |
 | `GuardWindowChars` | `int`                        | `1024` (`guard.DefaultWindowChars`)    | Окно детекции: текст длиннее идёт перекрывающимися окнами, чтобы L2 видел хвост.   |
 | `GuardOnViolation` | `func(guard.Verdict)`        | `nil`                                  | Колбэк на каждый вердикт, кроме allow; без сырых значений (`AllowPII`).            |
-| `Tokenizer`        | `chunk.Tokenizer`            | `chunk.WhitespaceTokenizer{}`          | Токенайзер чанкера; ORT-токенайзера в сборке нет.                                  |
-| `ChunkSize`        | `int`                        | `400` (`chunk.DefaultSize`)            | Единиц токенайзера в чанке; у дефолтного `WhitespaceTokenizer` — слов.             |
+| `Tokenizer`        | `chunk.Tokenizer`            | `nil`                                  | Токенайзер чанкера; без него `Ingest` — `ErrInvalidConfig` (BR-104).               |
+| `ChunkSize`        | `int`                        | `400` (`chunk.DefaultSize`)            | Единиц токенайзера в чанке; у `WhitespaceTokenizer` — слов, а не токенов.          |
 | `ChunkOverlap`     | `int`                        | `80` (`chunk.DefaultOverlap`)          | Перекрытие в тех же единицах, `< ChunkSize`.                                       |
 | `MaxSteps`         | `int`                        | `8` (`DefaultMaxSteps`)                | Лимит цикла «модель → инструменты → модель».                                       |
 | `MaxCallsPerTool`  | `int`                        | `3` (`DefaultMaxCallsPerTool`)         | Лимит вызовов одного инструмента.                                                  |
@@ -62,7 +62,7 @@ fn`). Добавлять middleware или обходить политику н�
 
 `TraceText` в режиме `full` печатает предупреждение при `New`: в ES пойдёт необработанный текст. Значения `Sampler` разбираются из строки `always|never|ratio:<float>` функцией `trace.SamplerFromString`.
 
-`GuardMode` управляет реакцией на недоступность ML-слоя (I-16). `GuardStrict` (по умолчанию) — fail-closed: ошибка любого слоя отклоняет операцию (`ErrGuardUnavailable`). `GuardDegraded` оставляет детерминированный L1, пропускает упавший `GuardL2` и помечает вердикт и observation флагом `guard_degraded`; при старте печатается `slog.Warn`.
+`GuardFailOpen` управляет реакцией на недоступность ML-слоя (I-16, D73). По умолчанию список пуст — fail-closed: ошибка любого слоя отклоняет операцию (`ErrGuardUnavailable`). На перечисленных рельсах детерминированный L1 остаётся, упавший `GuardL2` пропускается, а вердикт и observation помечаются `guard_degraded`; при старте печатается `slog.Warn`.
 
 `Pricing` — цена модели за миллион токенов (`model.Pricing{InputPerMTok, OutputPerMTok}`). Нулевое значение означает «цена неизвестна» и даёт `usage.cost`/`cost` = 0. Ненулевое — библиотека считает стоимость каждого вызова и суммирует её в trace (`Chat`, `Generate`); в observation генерации пишется цена одного вызова.
 
@@ -116,23 +116,27 @@ observation (I-08).
 ### Chat
 
 ```go
-func (a *App) Chat(ctx context.Context, req ChatRequest) (model.Message, error)
+func (a *App) Chat(ctx context.Context, req ChatRequest) (Response, error)
 ```
 
-Гоняет guard, модель и инструменты в цикле и возвращает финальное сообщение.
+Гоняет guard, модель и инструменты в цикле и возвращает `Response` — финальное
+сообщение плюс аудит хода: `Usage`, `TraceID` и `Decision` (версия guard, хэш
+политики и признак недоверенности хода, BR-103).
 Требует права `chat` (как и остальные операции, `Chat` проверяет право в
 примитиве вызова; права на инструменты проверяются отдельно). При заданном
 `ThreadID` подгружает историю треда и дописывает ход — нужно ещё право `memory`
 (см. [Память](../concepts/memory.md)).
-Ответ возвращается целиком; поток — у `ChatStream`.
+Ответ возвращается целиком; поток — у `ChatStream`. `Response` заполняется и при
+ошибке (`TraceID`, `Decision`), поэтому отказ тоже аудируем.
 На последнем шаге цикла `tool_choice` становится `none`, чтобы
 модель отвечала, а не открывала вызов, который уже не исполнится.
 
 ```go
-msg, err := app.Chat(ctx, kit.ChatRequest{
+res, err := app.Chat(ctx, kit.ChatRequest{
     System:   "Ты ассистент.",
     Messages: []model.Message{{Role: model.RoleUser, Content: "Привет"}},
 })
+fmt.Println(res.Message.Content, res.TraceID)
 ```
 
 ### ChatStream
@@ -147,7 +151,8 @@ func (a *App) ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamChu
 предложения) **до** эмиссии; отказ рельса даёт `StreamChunk.Retract` и аборт.
 Требует права `chat`. Если клиент LLM не реализует `model.Streamer`, `ChatStream`
 откатывается на буферизованный `Chat` и выдаёт один чанк `Text` + `Done`.
-Вызывающий обязан вычитать канал до закрытия. Остаточный риск: совпадение длиннее
+Вызывающий обязан вычитать канал до закрытия. Каждый `StreamChunk` несёт
+`TraceID` хода. Остаточный риск: совпадение длиннее
 хвоста без границы может пересечь окно (I-20).
 
 ```go
@@ -504,6 +509,7 @@ const (
 ```go
 type StreamChunk struct {
     Text    string        // подтверждённый, уже проверенный текст
+    TraceID string        // id хода; заполнен во всех чанках
     Retract bool          // отбросить показанное; поток завершится ошибкой
     Done    bool          // последний чанк, с собранным Final
     Final   model.Message
@@ -549,7 +555,7 @@ type HealthChecker = core.HealthChecker // Health() HealthStatus
 type Health struct {
     Healthy       bool
     Degraded      bool
-    GuardMode     GuardMode
+    GuardFailOpen []string
     GuardVersion  string
     GuardStats    guard.Stats // Scans, Blocked, Truncated, Degradations, Latency
     TraceQueue    int

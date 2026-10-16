@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/gobellim/kit/guard"
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/guard"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 type Config struct {

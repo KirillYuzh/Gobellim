@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 var EnsureStepTimeout = 30 * time.Second

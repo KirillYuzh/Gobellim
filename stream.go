@@ -7,13 +7,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gobellim/kit/authz"
-	"github.com/gobellim/kit/guard"
-	"github.com/gobellim/kit/internal/call"
-	"github.com/gobellim/kit/internal/core"
-	"github.com/gobellim/kit/internal/id"
-	"github.com/gobellim/kit/model"
-	"github.com/gobellim/kit/trace"
+	"github.com/KirillYuzh/Gobellim/authz"
+	"github.com/KirillYuzh/Gobellim/guard"
+	"github.com/KirillYuzh/Gobellim/internal/call"
+	"github.com/KirillYuzh/Gobellim/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/id"
+	"github.com/KirillYuzh/Gobellim/model"
+	"github.com/KirillYuzh/Gobellim/trace"
 )
 
 const (
@@ -23,6 +23,7 @@ const (
 
 type StreamChunk struct {
 	Text    string
+	TraceID string
 	Retract bool
 	Done    bool
 	Final   model.Message
@@ -49,13 +50,13 @@ func (a *App) ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamChu
 	if !ok {
 		go func() {
 			defer close(ch)
-			msg, cerr := a.Chat(ctx, req)
+			res, cerr := a.Chat(ctx, req)
 			if cerr != nil {
-				ch <- StreamChunk{Err: cerr}
+				ch <- StreamChunk{Err: cerr, TraceID: res.TraceID}
 				return
 			}
-			ch <- StreamChunk{Text: msg.Content}
-			ch <- StreamChunk{Done: true, Final: msg}
+			ch <- StreamChunk{Text: res.Message.Content, TraceID: res.TraceID}
+			ch <- StreamChunk{Done: true, Final: res.Message, TraceID: res.TraceID}
 		}()
 		return ch, nil
 	}
@@ -74,7 +75,7 @@ func (a *App) ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamChu
 			return nil, gerr
 		}
 		if v.Action != guard.Allow || v.Truncated {
-			t.untrusted = true
+			t.markUntrusted()
 		}
 		t.subs = append(t.subs, v.Substitutions...)
 		client[i].Content = v.Text
@@ -113,11 +114,11 @@ func (a *App) streamTurn(ctx context.Context, req ChatRequest, pr core.Principal
 	if req.ThreadID != "" {
 		history, historyUntrusted, herr := a.memoryLoad(ctx, pr, req.ThreadID, a.memoryLimit(), traceID)
 		if herr != nil {
-			ch <- StreamChunk{Err: herr}
+			ch <- StreamChunk{TraceID: traceID, Err: herr}
 			return
 		}
 		if historyUntrusted {
-			t.untrusted = true
+			t.markUntrusted()
 		}
 		if a.memoryRecall() > 0 && a.cfg.Embedder != nil {
 			hits, rerr := a.memoryRecallHits(ctx, pr, client[len(client)-1].Content, a.memoryRecall(), traceID)
@@ -129,7 +130,7 @@ func (a *App) streamTurn(ctx context.Context, req ChatRequest, pr core.Principal
 				}
 				for _, h := range hits {
 					if h.Untrusted {
-						t.untrusted = true
+						t.markUntrusted()
 					}
 				}
 			}
@@ -166,7 +167,7 @@ func (a *App) streamTurn(ctx context.Context, req ChatRequest, pr core.Principal
 			emit: func(s string) error {
 				emitted.WriteString(s)
 				select {
-				case ch <- StreamChunk{Text: s}:
+				case ch <- StreamChunk{TraceID: traceID, Text: s}:
 					return nil
 				case <-ctx.Done():
 					return ctx.Err()
@@ -210,9 +211,9 @@ func (a *App) streamTurn(ctx context.Context, req ChatRequest, pr core.Principal
 		})
 		if cerr != nil {
 			if errors.Is(cerr, errStreamGuarded) {
-				ch <- StreamChunk{Retract: true}
+				ch <- StreamChunk{TraceID: traceID, Retract: true}
 			}
-			ch <- StreamChunk{Err: cerr}
+			ch <- StreamChunk{TraceID: traceID, Err: cerr}
 			return
 		}
 
@@ -221,7 +222,7 @@ func (a *App) streamTurn(ctx context.Context, req ChatRequest, pr core.Principal
 		total.TotalTokens += resp.Usage.TotalTokens
 		total.Cost += resp.Usage.Cost
 		if a.cfg.MaxTotalTokens > 0 && total.TotalTokens > a.cfg.MaxTotalTokens {
-			ch <- StreamChunk{Err: fmt.Errorf("kit: chat: token budget %d exceeded (%d): %w",
+			ch <- StreamChunk{TraceID: traceID, Err: fmt.Errorf("kit: chat: token budget %d exceeded (%d): %w",
 				a.cfg.MaxTotalTokens, total.TotalTokens, core.ErrBudget)}
 			return
 		}
@@ -229,9 +230,9 @@ func (a *App) streamTurn(ctx context.Context, req ChatRequest, pr core.Principal
 		if len(resp.Message.ToolCalls) == 0 {
 			if err := wg.Close(); err != nil {
 				if errors.Is(err, errStreamGuarded) {
-					ch <- StreamChunk{Retract: true}
+					ch <- StreamChunk{TraceID: traceID, Retract: true}
 				}
-				ch <- StreamChunk{Err: err}
+				ch <- StreamChunk{TraceID: traceID, Err: err}
 				return
 			}
 			out = resp.Message
@@ -240,30 +241,23 @@ func (a *App) streamTurn(ctx context.Context, req ChatRequest, pr core.Principal
 				turnMsgs := make([]model.Message, 0, len(client)+1)
 				turnMsgs = append(turnMsgs, client...)
 				turnMsgs = append(turnMsgs, out)
-				if aerr := a.memoryAppend(ctx, pr, req.ThreadID, turnMsgs, t.untrusted, traceID); aerr != nil {
+				if aerr := a.memoryAppend(ctx, pr, req.ThreadID, turnMsgs, t.isUntrusted(), traceID); aerr != nil {
 					a.logger().Warn("kit: chat: memory append failed", "err", aerr)
 				}
 			}
-			ch <- StreamChunk{Done: true, Final: out}
+			ch <- StreamChunk{TraceID: traceID, Done: true, Final: out}
 			return
 		}
 
 		msgs = append(msgs, resp.Message)
-		for _, tc := range resp.Message.ToolCalls {
-			result, terr := a.execTool(ctx, tc, t)
-			if terr != nil {
-				ch <- StreamChunk{Err: terr}
-				return
-			}
-			msgs = append(msgs, model.Message{
-				Role:       model.RoleTool,
-				ToolCallID: tc.ID,
-				Name:       tc.Name,
-				Content:    result,
-			})
+		results, terr := a.runToolCalls(ctx, resp.Message.ToolCalls, t)
+		if terr != nil {
+			ch <- StreamChunk{TraceID: traceID, Err: terr}
+			return
 		}
+		msgs = append(msgs, results...)
 	}
-	ch <- StreamChunk{Err: fmt.Errorf("kit: chat: reached max_steps=%d: %w", a.cfg.MaxSteps, core.ErrMaxSteps)}
+	ch <- StreamChunk{TraceID: traceID, Err: fmt.Errorf("kit: chat: reached max_steps=%d: %w", a.cfg.MaxSteps, core.ErrMaxSteps)}
 }
 
 type windowGuard struct {

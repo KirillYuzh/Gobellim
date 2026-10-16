@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 const ProtocolVersion = "2025-06-18"

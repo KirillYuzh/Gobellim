@@ -5,7 +5,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 	"gopkg.in/yaml.v3"
 )
 

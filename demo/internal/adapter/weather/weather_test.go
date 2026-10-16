@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/gobellim/kit/demo/internal/domain"
+	"github.com/KirillYuzh/Gobellim/demo/internal/domain"
 )
 
 func TestParse(t *testing.T) {

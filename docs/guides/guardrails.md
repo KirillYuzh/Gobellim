@@ -20,7 +20,7 @@ Guardrail — конвейер проверок текста, который р�
 ## Быстрый старт
 
 ```go
-import "github.com/gobellim/kit/guard/gliner"
+import "github.com/KirillYuzh/Gobellim/guard/gliner"
 
 l2, err := gliner.New(gliner.Config{Model: "hivetrace__gliner-guard-omni"})
 if err != nil {
@@ -125,9 +125,9 @@ type Config struct {
   (`TestWindowFitsTokenBudget`). Весь текст в пределах `GuardMaxChars` L2
   проходит — окнами.
 - Любая ошибка модели (нет каталога, не поднялся ORT, плохой тензор, таймаут
-  очереди) в режиме `GuardStrict` возвращается как `ErrGuardUnavailable`:
-  операция отклоняется, а не пропускается (fail-closed). В режиме `GuardDegraded`
-  ошибка L2 не фатальна: вердикт строится по L1 и помечается `guard_degraded`.
+  очереди) возвращается как `ErrGuardUnavailable`: операция отклоняется, а не
+  пропускается (fail-closed). На рельсах из `Config.GuardFailOpen` ошибка L2 не
+  фатальна: вердикт строится по L1 и помечается `guard_degraded`.
   Без тега `ort` пакет собирается заглушкой, чей `Detect` тоже возвращает
   `ErrGuardUnavailable`.
 - Перед использованием каталог можно проверить: `kitctl verify models` (и
@@ -377,7 +377,7 @@ fast-fail так же, как встроенные.
 который ничего не находит и не может «упасть»:
 
 ```go
-import "github.com/gobellim/kit/guard/guardtest"
+import "github.com/KirillYuzh/Gobellim/guard/guardtest"
 
 app, err := kit.New(ctx, kit.Config{
 	ES: es, LLM: llm, Policy: policy,

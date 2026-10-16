@@ -51,7 +51,7 @@ kit/
     internal/adapter/weather/                провайдер инструмента погоды
     internal/adapter/memory/                 mock Directory и bearer-токены
     internal/adapter/elastic/                клиент Elasticsearch
-  deploy/                                    Dockerfile, docker-compose.yml, policy.yaml, grafana/
+    deploy/                                  Dockerfile, docker-compose.yml, grafana/
   docs/                                      документация
   testdata/                                  золотые файлы, parity-фикстуры
 ```

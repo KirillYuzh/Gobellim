@@ -87,7 +87,7 @@ go run ./cmd/kitctl model pull hivetrace/gliner-guard-omni
 
 ## Контейнер
 
-`deploy/Dockerfile` — две стадии: builder (`golang:1.24-bookworm`) и slim runtime
+`demo/deploy/Dockerfile` — две стадии: builder (`golang:1.24-bookworm`) и slim runtime
 (`debian:bookworm-slim`). Образ работает от non-root (`kit`, uid 10001), политика
 копируется в `/etc/kit/policy.yaml` (`KIT_POLICY`).
 
@@ -97,7 +97,7 @@ COPY --from=builder /src/libonnxruntime.so /usr/lib/libonnxruntime.so
 ENV KIT_ORT_LIB=/usr/lib/libonnxruntime.so
 ```
 
-`deploy/docker-compose.yml`:
+`demo/deploy/docker-compose.yml`:
 
 | Сервис          | Детали                                                                   |
 | --------------- | ------------------------------------------------------------------------ |
@@ -217,7 +217,7 @@ guard_version = <policy_hash>/<layer_id>     // например "9f3c…/L1+L2"
 | `Sinks`          | дополнительные приёмники; писатель в ES всегда остаётся первым                                                                     |
 | очередь писателя | 4096 документов; batch 500 / 2 с / 5 MB; 3 ретрая, backoff 200 мс                                                                  |
 | `dropped`        | счётчик отброшенных при переполнении; `App` его не отдаёт — следите за `slog.Warn` `trace: dropping document` (`проверьте у себя`) |
-| Grafana          | `deploy/grafana/` — provisioning datasource и дашборд `kit-overview`                                                               |
+| Grafana          | `demo/deploy/grafana/` — provisioning datasource и дашборд `kit-overview`                                                               |
 
 `App.Close(ctx)` обязателен при остановке: он сбрасывает остаток очереди.
 Дашборды читают data streams напрямую (`kit-observations` по `kind`/`level`,
@@ -264,7 +264,7 @@ guard_version = <policy_hash>/<layer_id>     // например "9f3c…/L1+L2"
 
 - **По умолчанию нет ML-слоя.** Без `-tags ort` доступны только L1 и внешние
   провайдеры; локальный эмбеддер и guard L2 требуют ORT.
-- **`kit` не деплоит ES, Grafana и провайдеров.** `deploy/` — локальный стенд;
+- **`kit` не деплоит ES, Grafana и провайдеров.** `demo/deploy/` — локальный стенд;
   продовые ES/IdP/TLS — ваши (`проверьте у себя`).
 - **Нет готового решения для хранения снимков `flow`** и для очереди прогонов —
   это на стороне приложения.

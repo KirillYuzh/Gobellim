@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/gobellim/kit"
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 func ToolPrefix(server, tool string) string {

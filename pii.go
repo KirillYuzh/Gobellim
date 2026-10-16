@@ -3,7 +3,7 @@ package kit
 import (
 	"strings"
 
-	"github.com/gobellim/kit/guard"
+	"github.com/KirillYuzh/Gobellim/guard"
 )
 
 func rehydrateArgs(args string, allow bool, subs []guard.Substitution) (string, bool) {

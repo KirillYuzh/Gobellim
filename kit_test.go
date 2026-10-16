@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gobellim/kit/authz"
-	"github.com/gobellim/kit/guard"
-	"github.com/gobellim/kit/guard/guardtest"
-	"github.com/gobellim/kit/internal/call"
-	"github.com/gobellim/kit/model"
-	"github.com/gobellim/kit/store"
-	"github.com/gobellim/kit/trace"
+	"github.com/KirillYuzh/Gobellim/authz"
+	"github.com/KirillYuzh/Gobellim/guard"
+	"github.com/KirillYuzh/Gobellim/guard/guardtest"
+	"github.com/KirillYuzh/Gobellim/internal/call"
+	"github.com/KirillYuzh/Gobellim/model"
+	"github.com/KirillYuzh/Gobellim/store"
+	"github.com/KirillYuzh/Gobellim/trace"
 )
 
 func TestReflectSchemaStripsMetaAndForbidsExtra(t *testing.T) {
@@ -167,8 +167,8 @@ func TestChatUsesServerSystemPromptAndDropsClientSystem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.Content != "ok" {
-		t.Fatalf("content = %q", out.Content)
+	if out.Message.Content != "ok" {
+		t.Fatalf("content = %q", out.Message.Content)
 	}
 	if len(llm.got.Messages) != 2 {
 		t.Fatalf("model saw %+v", llm.got.Messages)
@@ -301,7 +301,7 @@ func TestToolErrorBecomesResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("chat = %v, want the tool error to be a result", err)
 	}
-	if out.Content != "recovered" {
+	if out.Message.Content != "recovered" {
 		t.Fatalf("out = %+v", out)
 	}
 	if len(llm.got) != 2 {

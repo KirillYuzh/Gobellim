@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gobellim/kit/trace"
+	"github.com/KirillYuzh/Gobellim/trace"
 )
 
 func Includes(substr string) Check {

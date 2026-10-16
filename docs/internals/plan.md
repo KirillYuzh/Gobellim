@@ -12,8 +12,8 @@
 > интерфейсами: заглушки активны без тега `ort` (`//go:build !ort`). Поэтому
 > сборка по умолчанию (`go build ./...` без тега) **не требует нативных
 > библиотек**. Заглушки не дают ML-функциональности: `guard/gliner` возвращает
-> `ErrGuardUnavailable` (fail-closed в режиме `GuardStrict`, BR-06; в
-> `GuardDegraded` ошибка ML-слоя не фатальна), `embed.NewLocal` — ошибку
+> `ErrGuardUnavailable` (fail-closed по умолчанию, BR-06; на рельсах из
+> `Config.GuardFailOpen` ошибка ML-слоя не фатальна), `embed.NewLocal` — ошибку
 > конфигурации. При этом детерминированный слой guard (L1, `guard/rules`)
 > полностью работоспособен в сборке по умолчанию. Под тегом `ort` реализованы и
 > ML-слой guard (`guard/gliner`, ONNX-only; parity-тест на 12/12 фикстур), и
@@ -61,7 +61,7 @@
 | `internal/importrules` | stdlib-тест правил импортов (I-13)                                                                                          | архитектура |
 | `cmd/kitctl`           | `model pull`, `policy check`, `verify window/models/parity/latency`                                                         | архитектура |
 | `demo`                 | пример: Clean Architecture сервис (`cmd/bot` + `internal/{domain,usecase,adapter}`)                                         | архитектура |
-| `deploy`               | `docker-compose.yml`, `grafana/`                                                                                            | архитектура |
+| `demo/deploy`          | `docker-compose.yml`, `grafana/`                                                                                            | архитектура |
 | `testdata`             | золотые файлы, parity-фикстуры                                                                                              | архитектура |
 
 Провайдеры: одно OpenAI-совместимое ядро плюс явные конструкторы `VLLM` (тонкая
@@ -222,7 +222,7 @@ check`. Обвязка зелёная: прогоны на раннере про
       `masked` по умолчанию с opt-in `full`, аудит-поля, детерминированный
       sampling, export-лимиты и processors.
 - [x] `demo`: mock-авторизация, чат с tools (погода и роль), RBAC по ролям.
-- [x] `deploy/`: `docker-compose.yml` + Grafana provisioning и дашборды
+- [x] `demo/deploy/`: `docker-compose.yml` + Grafana provisioning и дашборды
       (латентность/ошибки, токены/стоимость, срабатывания guard, топ tools и
       отказы авторизации, последние trace).
 - [x] `cmd/kitctl`: `model pull`, `policy check`, `verify window/models/parity/latency`.
@@ -265,7 +265,7 @@ check`. Обвязка зелёная: прогоны на раннере про
       локально, дефолтный экспорт остаётся компактным (D35).
 - [x] CLI-ридер трейсов `demo/cmd/traces` (список + `-trace <id>` с observations и scores); JSON-API не реализован.
 - [x] `usage.cost`/`cost` заполняются библиотекой по `Config.Pricing` (`model.Pricing`); нулевая цена даёт `0`.
-- [x] Guard: режим `Config.GuardMode` (`GuardStrict`/`GuardDegraded`), деградация видна в observation (`guard_degraded`) (I-16).
+- [x] Guard: деградация по рельсам — `Config.GuardFailOpen`, деградация видна в observation (`guard_degraded`) (I-16, D73).
 - [x] Право `chat` на операцию `Chat` (`authz.PermChat`).
 - [x] Идентичность эмбеддера: `embed_model` в чанке, поиск фильтрует по текущей модели (BR-79).
 - [x] Память: история треда, семантический recall и working-память в ES; право `memory`; скоуп `tenant` + `user_id`; порядок по `seq`; `Chat.ThreadID` (I-17, BR-81…BR-84).
@@ -294,9 +294,9 @@ check`. Обвязка зелёная: прогоны на раннере про
 
 ## Смотрите также
 
-- [Решения и допущения](./decisions.md) — `D1`…`D67`, `A1`…`A9`
+- [Решения и допущения](./decisions.md) — `D1`…`D79`, `A1`…`A9`
 - [Архитектура](./architecture.md) — пакеты и рантайм, на которые опирается
   план
-- [Бизнес-правила](./business-rules.md) — `BR-01`…`BR-100`, проверяемые на
+- [Бизнес-правила](./business-rules.md) — `BR-01`…`BR-108`, проверяемые на
   этапах
 - [Ориентиры](./references.md) — идеи для реализации

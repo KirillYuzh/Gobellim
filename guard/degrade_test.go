@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 type logRecord struct {
@@ -114,10 +114,14 @@ func TestOptionalByRailRejectsUnknownRails(t *testing.T) {
 	}
 }
 
-func TestFlatOptionalAppliesToEveryRail(t *testing.T) {
+func TestOptionalByRailAppliesToEveryDeclaredRail(t *testing.T) {
+	optional := make(map[Rail][]string, len(Rails()))
+	for _, r := range Rails() {
+		optional[r] = []string{"L2"}
+	}
 	p, err := New(Options{
-		Layers:   []Detector{&fakeDetector{name: "L1"}, &fakeDetector{name: "L2", err: core.ErrGuardUnavailable}},
-		Optional: []string{"L2"},
+		Layers:         []Detector{&fakeDetector{name: "L1"}, &fakeDetector{name: "L2", err: core.ErrGuardUnavailable}},
+		OptionalByRail: optional,
 	})
 	if err != nil {
 		t.Fatal(err)

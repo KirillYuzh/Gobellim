@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 func compileToJSON(t *testing.T, f Filter) string {

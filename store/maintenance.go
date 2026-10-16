@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 func DeleteByDocBody(docID, tenant string) ([]byte, error) {

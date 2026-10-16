@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 func TestChunksIndexBodyUsesDims(t *testing.T) {

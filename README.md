@@ -30,14 +30,14 @@ guardrails behind one permission-checked call path.
 ## Install
 
 ```sh
-go get github.com/gobellim/kit
+go get github.com/KirillYuzh/Gobellim
 ```
 
 ## Quickstart
 
 ```go
 app, err := kit.New(ctx, kit.Config{
-	ES:     es,     // your Elasticsearch client (store.ES)
+	ES:     es,     // optional: your store.ES client (retrieval, memory, traces)
 	LLM:    llm,    // vLLM, Ollama, OpenAI-compatible or GigaChat
 	Policy: policy, // authz.Load("policy.yaml")
 })

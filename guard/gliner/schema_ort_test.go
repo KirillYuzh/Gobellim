@@ -6,7 +6,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/gobellim/kit/guard"
+	"github.com/KirillYuzh/Gobellim/guard"
 )
 
 func newMultiGroupConfig() modelConfig {

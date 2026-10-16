@@ -71,10 +71,11 @@ flowchart TD
    цена по пропускной способности (см. «Тюнинг»).
 
 > [!WARNING]
-> **Токенайзер по умолчанию — `chunk.WhitespaceTokenizer`** (разбиение по
-> пробелам), а не «настоящий» BPE-токенайзер. `ChunkSize` при этом — число
-> «слов», а не токенов модели. Для точных окон по токенам свяжите свой
-> `chunk.Tokenizer` (интерфейс `Tokens(text) []chunk.Token`) в `Config.Tokenizer`.
+> **Токенайзер обязателен.** `Config.Tokenizer` нужно задать явно: без него
+> `Ingest` возвращает `ErrInvalidConfig` (BR-104). `chunk.WhitespaceTokenizer`
+> считает слова, а не токены модели, поэтому его `ChunkSize` — оценка сверху;
+> для точных окон свяжите свой `chunk.Tokenizer` (интерфейс
+> `Tokens(text) []chunk.Token`).
 
 Размерность векторов — контракт: `store.ValidateChunk(c, dims)` требует, чтобы у
 обычного чанка был вектор ровно `dims` длины (`Embedder.Dim()`), а у карантинного
@@ -302,8 +303,9 @@ hits, err := app.Search(ctx, kit.SearchRequest{Query: "какой у меня т
 
 - **Нет клиента Elasticsearch** — вы приносите реализацию `store.ES`; kit не
   выводит `Content-Type`/`refresh` из пути (I-12).
-- **Токенайзер по умолчанию — whitespace,** а не токенайзер модели. Точные
-  оконные размеры требуют своего `chunk.Tokenizer`.
+- **Токенайзер чанкера задаёт вызывающий** (`Config.Tokenizer`) — дефолта нет.
+  `chunk.WhitespaceTokenizer` считает слова; точные оконные размеры требуют
+  своего `chunk.Tokenizer` (BR-104).
 - **RRF считается в Go,** потому что server-side RRF требует лицензии выше
   basic. RRF-скор — не сопоставим с BM25/kNN-скорингами напрямую.
 - **Модельного ре-скоринга нет** — после RRF идёт либо реранкинг (если задан

@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/gobellim/kit/demo/internal/domain"
+	"github.com/KirillYuzh/Gobellim/demo/internal/domain"
 )
 
 type Directory interface {

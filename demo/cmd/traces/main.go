@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gobellim/kit/demo/internal/adapter/elastic"
-	"github.com/gobellim/kit/store"
+	"github.com/KirillYuzh/Gobellim/demo/internal/adapter/elastic"
+	"github.com/KirillYuzh/Gobellim/store"
 )
 
 func main() {

@@ -13,13 +13,13 @@
 | `Policy`           | `*authz.Policy`              | — (обязательно)                        | Разобранный `policy.yaml`.                                                               |
 | `GuardL2`          | `guard.Detector`             | `nil`                                  | ML-слой guard (плагин L2, не входит в сборку по умолчанию); при `nil` остаётся только детерминированный L1. |
 <!-- derived: BR-26 -->
-| `GuardMode`        | `kit.GuardMode`              | `kit.GuardStrict`                      | `GuardStrict` — fail-closed; `GuardDegraded` — упавший ML-слой не роняет запрос.         |
+| `GuardFailOpen`    | `[]guard.Rail`               | `nil` (fail-closed везде)              | Рельсы, где упавший ML-слой не роняет запрос (BR-06, D73).                         |
 | `GuardMaxChars`    | `int`                        | `8000` (`guard.DefaultMaxChars`)       | Лимит текста для guard.                                                                  |
 | `GuardCacheSize`   | `int`                        | `4096` (`guard.DefaultCacheSize`)      | Размер LRU-кэша вердиктов guard.                                                         |
 | `GuardWindowChars` | `int`                        | `1024` (`guard.DefaultWindowChars`)    | Окно детекции: текст длиннее идёт перекрывающимися окнами, чтобы L2 видел хвост.         |
 | `GuardOnViolation` | `func(guard.Verdict)`        | `nil`                                  | Колбэк на каждый вердикт, кроме allow; вердикт приходит без сырых значений (`AllowPII`). |
-| `Tokenizer`        | `chunk.Tokenizer`            | `chunk.WhitespaceTokenizer{}`          | Токенайзер чанкера; ORT-токенайзера в сборке нет.                                        |
-| `ChunkSize`        | `int`                        | `400` (`chunk.DefaultSize`)            | Единиц токенайзера в чанке; у дефолтного `WhitespaceTokenizer` — слов.                   |
+| `Tokenizer`        | `chunk.Tokenizer`            | `nil`                                  | Токенайзер чанкера; без него `Ingest` — `ErrInvalidConfig` (BR-104).               |
+| `ChunkSize`        | `int`                        | `400` (`chunk.DefaultSize`)            | Единиц токенайзера в чанке; у `WhitespaceTokenizer` — слов, а не токенов.          |
 | `ChunkOverlap`     | `int`                        | `80` (`chunk.DefaultOverlap`)          | Перекрытие в тех же единицах, `< ChunkSize`.                                             |
 | `MaxSteps`         | `int`                        | `8` (`DefaultMaxSteps`)                | Лимит цикла «модель → инструменты → модель».                                             |
 | `MaxCallsPerTool`  | `int`                        | `3` (`DefaultMaxCallsPerTool`)         | Лимит вызовов одного инструмента.                                                        |

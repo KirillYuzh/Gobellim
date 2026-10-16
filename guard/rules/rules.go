@@ -7,7 +7,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/gobellim/kit/guard"
+	"github.com/KirillYuzh/Gobellim/guard"
 )
 
 var injectionPhrases = foldPhrases([]string{

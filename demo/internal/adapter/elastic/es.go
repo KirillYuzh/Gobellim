@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/gobellim/kit/store"
+	"github.com/KirillYuzh/Gobellim/store"
 )
 
 type Client struct {

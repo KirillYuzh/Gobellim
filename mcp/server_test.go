@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gobellim/kit"
+	"github.com/KirillYuzh/Gobellim"
 )
 
 func echoServer(t *testing.T, handler func(ctx context.Context, args json.RawMessage) (string, error)) *Server {

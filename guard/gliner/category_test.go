@@ -3,7 +3,7 @@ package gliner
 import (
 	"testing"
 
-	"github.com/gobellim/kit/guard"
+	"github.com/KirillYuzh/Gobellim/guard"
 )
 
 func TestCategoryForClassHonoursGroupTask(t *testing.T) {

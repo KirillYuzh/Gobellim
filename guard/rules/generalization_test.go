@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gobellim/kit/guard"
+	"github.com/KirillYuzh/Gobellim/guard"
 )
 
 func pipeline(t *testing.T) *guard.Pipeline {

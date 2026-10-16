@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/gobellim/kit/internal/core"
-	"github.com/gobellim/kit/internal/id"
-	"github.com/gobellim/kit/model"
+	"github.com/KirillYuzh/Gobellim/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/id"
+	"github.com/KirillYuzh/Gobellim/model"
 )
 
 func (a *App) CallTool(ctx context.Context, name string, args json.RawMessage) (string, error) {

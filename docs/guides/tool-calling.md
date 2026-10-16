@@ -133,6 +133,7 @@ def.permission)`). Запрещённые инструменты **не попа
   (`example.com` покрывает `cdn.example.com`, но не `notexample.com`); пустой
   `EgressHosts` без `EgressAny()` — отказ (`ErrUnauthorized`), а `EgressAny()`
   — явный opt-in «любой хост»;
+
 <!-- derived: BR-51 -->
 
 - **Rule of Two** (включён по умолчанию): если на этом ходу уже был недоверенный
@@ -143,7 +144,15 @@ def.permission)`). Запрещённые инструменты **не попа
 
 Отказ любого правила — `ErrUnauthorized` и прерывание хода.
 
-### 7. Хуки `BeforeToolCall` / `AfterToolCall`
+### 7. Параллелизм батча
+
+Если модель вернула несколько вызовов в одном сообщении, они исполняются параллельно
+только когда **все** они read-only (`EffectRead` без `RequireApproval`) — тогда порядок
+не важен. Любой `Write`/`Egress`/approval делает батч последовательным, чтобы эффекты
+шли в порядке модели (`BR-108`). Лимит параллелизма — восемь вызовов; результаты
+возвращаются в порядке модели, первый фатальный отказ отменяет остальные.
+
+### 8. Хуки `BeforeToolCall` / `AfterToolCall`
 
 Хуки бывают двух уровней:
 
@@ -177,13 +186,13 @@ type AfterToolHook  func(ctx context.Context, info ToolCallInfo, result string, 
 - `AfterToolCall` вызывается **всегда**: при успехе, при сбое и для результата,
   подставленного before-хуком. Возвращённая ошибка **заменяет** исходную.
 
-### 8. Исполнение и таймаут
+### 9. Исполнение и таймаут
 
 Инструмент вызывается через `call.Do` (kind `tool`) с контекстом, ограниченным
 `Config.ToolTimeout` (по умолчанию `DefaultToolTimeout` = 30 s). `ToolCallInfo`
 передаётся хукам с `Effect` и `CallIndex`.
 
-### 9. Guard результата — последним
+### 10. Guard результата — последним
 
 Результат (уже после after-хука) прогоняется через `call.Guard` на рельсе
 `RailToolResult`, имя observation — `guard:tool_result`.
@@ -198,7 +207,7 @@ type AfterToolHook  func(ctx context.Context, info ToolCallInfo, result string, 
 хуком, проверяется так же, как результат самого инструмента, и обойти guard
 нельзя (BR-62).
 
-### 10. `ValidateOutput` и `ModelView`
+### 11. `ValidateOutput` и `ModelView`
 
 - `ValidateOutput(true)` — при регистрации выводится схема из типа `Out`;
   результат после guard проверяется по ней, и при несовпадении модели уходит
@@ -209,7 +218,7 @@ type AfterToolHook  func(ctx context.Context, info ToolCallInfo, result string, 
   исходная строка; модели — то, что вернул `fn`. Пустой `ModelView` возвращает
   результат без изменений.
 
-### 11. Ошибка — данные для модели
+### 12. Ошибка — данные для модели
 
 Нефатальная ошибка (неизвестный инструмент, превышение лимита, невалидные или
 слишком большие аргументы, сбой функции, ошибка нефатального хука, reject guard)
@@ -357,10 +366,12 @@ if _, err := kit.RetrievalTool(app, "search_knowledge"); err != nil {
 | `{"error":"result blocked by guard"}`                         | Результат попал под `INJECTION`/`UNSAFE` на рельсе `tool_result`                      | Что возвращает инструмент; режет ли `GuardMaxChars`/`L2`; при необходимости маскируйте в инструменте |
 | Подтверждение не запрашивается                                | `RequireApproval(false)` или `Approver` не задан (тогда была бы ошибка)               | Опции инструмента и `Config.Approver`                                                                |
 | `ErrApprovalRequired` на повторном вызове                     | Одобрение того же fingerprint уже израсходовано в этом ходе                           | Спроектируйте флоу так, чтобы одно одобрение = один вызов (или меняйте аргументы)                    |
-| Эгресс отклонён                                               | Хост вне `EgressHosts` или сработал Rule of Two (включён по умолчанию)                  | Извлечённые хосты из аргументов, `turn.untrusted`, `Config.Egress.AllowEgressAfterUntrusted`         |
+| Эгресс отклонён                                               | Хост вне `EgressHosts` или сработал Rule of Two (включён по умолчанию)                | Извлечённые хосты из аргументов, `turn.untrusted`, `Config.Egress.AllowEgressAfterUntrusted`         |
+
 <!-- derived: BR-51 -->
-| Модель получила `{"error": …}` вместо данных инструмента      | `ValidateOutput(true)`: результат не совпал со схемой `Out`                           | Почините инструмент или снимите `ValidateOutput`; ход помечен недоверенным                           |
-| `ErrBudget`                                                   | Превышен `MaxTotalTokens` хода                                                        | Значение лимита и число шагов/вызовов                                                                |
+
+| Модель получила `{"error": …}` вместо данных инструмента | `ValidateOutput(true)`: результат не совпал со схемой `Out` | Почините инструмент или снимите `ValidateOutput`; ход помечен недоверенным |
+| `ErrBudget` | Превышен `MaxTotalTokens` хода | Значение лимита и число шагов/вызовов |
 
 ## Чего библиотека не делает (ограничения)
 

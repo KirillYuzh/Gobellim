@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 func TestEnsembleMergesDetectorFindings(t *testing.T) {
@@ -203,7 +203,7 @@ func TestNewRejectsBrokenEnsembles(t *testing.T) {
 func TestFlatLayersStillWork(t *testing.T) {
 	l1 := &fakeDetector{name: "L1", find: []Finding{{Category: CatPII, Label: "SNILS", Start: 0, End: 11}}}
 	l2 := &fakeDetector{name: "L2"}
-	p, err := New(Options{Layers: []Detector{l1, l2}, Optional: []string{"L2"}})
+	p, err := New(Options{Layers: []Detector{l1, l2}, OptionalByRail: map[Rail][]string{RailInput: {"L2"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

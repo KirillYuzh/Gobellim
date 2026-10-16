@@ -6,7 +6,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/gobellim/kit/demo/internal/domain"
+	"github.com/KirillYuzh/Gobellim/demo/internal/domain"
 )
 
 // Memory is a concurrency-safe in-memory audit store. Swap it for your own

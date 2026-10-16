@@ -12,15 +12,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gobellim/kit/authz"
-	"github.com/gobellim/kit/embed"
-	"github.com/gobellim/kit/guard"
-	"github.com/gobellim/kit/guard/guardtest"
-	"github.com/gobellim/kit/guard/rules"
-	"github.com/gobellim/kit/internal/call"
-	"github.com/gobellim/kit/model"
-	"github.com/gobellim/kit/store"
-	"github.com/gobellim/kit/trace"
+	"github.com/KirillYuzh/Gobellim/authz"
+	"github.com/KirillYuzh/Gobellim/embed"
+	"github.com/KirillYuzh/Gobellim/guard"
+	"github.com/KirillYuzh/Gobellim/guard/guardtest"
+	"github.com/KirillYuzh/Gobellim/guard/rules"
+	"github.com/KirillYuzh/Gobellim/internal/call"
+	"github.com/KirillYuzh/Gobellim/model"
+	"github.com/KirillYuzh/Gobellim/store"
+	"github.com/KirillYuzh/Gobellim/trace"
 )
 
 type memES struct {

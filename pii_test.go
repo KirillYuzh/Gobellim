@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gobellim/kit/authz"
-	"github.com/gobellim/kit/guard"
-	"github.com/gobellim/kit/internal/call"
-	"github.com/gobellim/kit/model"
+	"github.com/KirillYuzh/Gobellim/authz"
+	"github.com/KirillYuzh/Gobellim/guard"
+	"github.com/KirillYuzh/Gobellim/internal/call"
+	"github.com/KirillYuzh/Gobellim/model"
 )
 
 type passthroughGuard struct{}

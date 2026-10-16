@@ -1,8 +1,8 @@
 package kit
 
 import (
-	"github.com/gobellim/kit/internal/call"
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/call"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 var (

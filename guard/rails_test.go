@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 func TestRailsAreExactlyTheThreeWorkingOnes(t *testing.T) {

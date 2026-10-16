@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/gobellim/kit/internal/core"
-	"github.com/gobellim/kit/internal/httpjson"
+	"github.com/KirillYuzh/Gobellim/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/httpjson"
 )
 
 type remoteRequest struct {

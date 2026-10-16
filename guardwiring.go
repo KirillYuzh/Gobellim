@@ -3,136 +3,91 @@ package kit
 import (
 	"fmt"
 	"sort"
-	"strings"
 
-	"github.com/gobellim/kit/guard"
-	"github.com/gobellim/kit/guard/rules"
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/guard"
+	"github.com/KirillYuzh/Gobellim/guard/rules"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
-func (c Config) guardLayers() ([]guard.Detector, []guard.Ensemble, string) {
+// guardLayers is the pipeline the core builds: the deterministic L1 rule layer,
+// plus the optional ML layer (Config.GuardL2). A plugin that wants to combine
+// several ML detectors composes them into a single guard.Detector and passes it
+// as GuardL2 — the core knows nothing about ensembles.
+func (c Config) guardLayers() ([]guard.Detector, string) {
 	layers := []guard.Detector{rules.New()}
 	model := ""
 	if c.GuardL2 != nil {
 		layers = append(layers, c.GuardL2)
 		model = c.GuardL2.Name()
 	}
-	ensembles := make([]guard.Ensemble, len(c.GuardEnsembles))
-	copy(ensembles, c.GuardEnsembles)
-	if model == "" && len(ensembles) > 0 {
-		model = ensembleModel(ensembles)
-	}
-	return layers, ensembles, model
+	return layers, model
 }
 
-func ensembleModel(ensembles []guard.Ensemble) string {
-	parts := make([]string, 0, len(ensembles))
-	for _, e := range ensembles {
-		parts = append(parts, e.Name+"("+strings.Join(detectorNames(e.Detectors), "+")+")")
-	}
-	return strings.Join(parts, "+")
+// guardArtifact is the ML artifact digest folded into the guard version. It comes
+// from the detectors themselves (guard.ArtifactHash); a detector that cannot
+// report one contributes nothing, and the segment is simply absent.
+func guardArtifact(layers []guard.Detector) string {
+	return guard.ArtifactHashes(layers)
 }
 
-func detectorNames(detectors []guard.Detector) []string {
-	out := make([]string, 0, len(detectors))
-	for _, d := range detectors {
-		if d == nil {
-			continue
-		}
-		out = append(out, d.Name())
-	}
-	return out
-}
-
-func guardArtifact(cfg Config, layers []guard.Detector, ensembles []guard.Ensemble) (string, error) {
-	if h := cfg.GuardL2ArtifactSHA256; h != "" && !validSHA256Hex(h) {
-		return "", fmt.Errorf("kit: Config.GuardL2ArtifactSHA256 must be 64 lowercase hex characters, got %d characters: %w",
-			len(h), core.ErrInvalidConfig)
-	}
-	detectors := make([]guard.Detector, 0, len(layers)+len(ensembles))
-	detectors = append(detectors, layers...)
-	for _, e := range ensembles {
-		detectors = append(detectors, e.Detectors...)
-	}
-	if h := guard.ArtifactHashes(detectors); h != "" {
-		return h, nil
-	}
-	return cfg.GuardL2ArtifactSHA256, nil
-}
-
-func validSHA256Hex(s string) bool {
-	if len(s) != 64 {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
-}
-
-func mlLayerNames(layers []guard.Detector, ensembles []guard.Ensemble) []string {
-	var out []string
+func mlLayerNames(layers []guard.Detector) []string {
+	out := make([]string, 0, len(layers)-1)
 	for _, l := range layers[1:] {
 		out = append(out, l.Name())
 	}
-	for _, e := range ensembles {
-		out = append(out, e.Name)
-		out = append(out, detectorNames(e.Detectors)...)
-	}
 	return out
 }
 
-func optionalEverywhere(cfg Config, layers []guard.Detector, ensembles []guard.Ensemble) []string {
-	if cfg.GuardMode != GuardDegraded {
-		return nil
-	}
-	return mlLayerNames(layers, ensembles)
-}
-
-func degradedRailNames(cfg Config) []string {
-	if len(cfg.GuardDegradedRails) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(cfg.GuardDegradedRails))
-	for rail, on := range cfg.GuardDegradedRails {
-		if on {
-			out = append(out, rail)
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	sort.Strings(out)
-	return out
-}
-
-func optionalByRail(cfg Config, layers []guard.Detector, ensembles []guard.Ensemble) (map[guard.Rail][]string, error) {
-	if len(cfg.GuardDegradedRails) == 0 {
+// failOpenRails normalises Config.GuardFailOpen: it validates the rail names,
+// de-duplicates them and returns them sorted, or nil when none is set.
+func failOpenRails(cfg Config) ([]guard.Rail, error) {
+	if len(cfg.GuardFailOpen) == 0 {
 		return nil, nil
 	}
-	rails := make([]guard.Rail, 0, len(cfg.GuardDegradedRails))
-	for name := range cfg.GuardDegradedRails {
-		rail := guard.Rail(name)
+	out := make([]guard.Rail, 0, len(cfg.GuardFailOpen))
+	seen := make(map[guard.Rail]bool, len(cfg.GuardFailOpen))
+	for _, rail := range cfg.GuardFailOpen {
 		if !guard.ValidRail(rail) {
-			return nil, fmt.Errorf("kit: Config.GuardDegradedRails names the unknown rail %q: %w", name, core.ErrInvalidConfig)
+			return nil, fmt.Errorf("kit: Config.GuardFailOpen names the unknown rail %q: %w", rail, core.ErrInvalidConfig)
 		}
-		rails = append(rails, rail)
+		if seen[rail] {
+			continue
+		}
+		seen[rail] = true
+		out = append(out, rail)
 	}
-	names := mlLayerNames(layers, ensembles)
-	if len(names) == 0 {
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out, nil
+}
+
+// optionalByRail maps Config.GuardFailOpen onto the pipeline's per-rail optional
+// layer set. Rails absent from the list stay fail-closed (BR-06).
+func optionalByRail(cfg Config, layers []guard.Detector) (map[guard.Rail][]string, error) {
+	rails, err := failOpenRails(cfg)
+	if err != nil {
+		return nil, err
+	}
+	names := mlLayerNames(layers)
+	if len(rails) == 0 || len(names) == 0 {
 		return nil, nil
 	}
 	out := make(map[guard.Rail][]string, len(rails))
 	for _, rail := range rails {
-		if cfg.GuardDegradedRails[string(rail)] {
-			out[rail] = names
-		}
-	}
-	if len(out) == 0 {
-		return nil, nil
+		out[rail] = names
 	}
 	return out, nil
+}
+
+// degradedRailNames is the health view of Config.GuardFailOpen. The rail names
+// are already validated in New, so an invalid value here is ignored.
+func degradedRailNames(cfg Config) []string {
+	rails, err := failOpenRails(cfg)
+	if err != nil || len(rails) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(rails))
+	for _, rail := range rails {
+		out = append(out, string(rail))
+	}
+	return out
 }

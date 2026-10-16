@@ -107,7 +107,7 @@ type ToolCallInfo struct {
 	Tenant      string
 	Tool        string
 	Args        string
-	Fingerprint string // хэш tool + канонических аргументов
+	Fingerprint string // стабильный ключ вызова: sha256(tool + канонические аргументы)
 	Effect      Effect
 	CallIndex   int // 1-based счётчик вызовов этого инструмента в ходе
 }
@@ -115,6 +115,15 @@ type ToolCallInfo struct {
 type BeforeToolHook func(ctx context.Context, info ToolCallInfo) (proceed bool, output string, err error)
 type AfterToolHook  func(ctx context.Context, info ToolCallInfo, result string, err error) (string, error)
 ```
+
+### Идемпотентность вызова
+
+`Chat` с инструментом, у которого есть побочный эффект, сам по себе не идемпотентен:
+повтор хода повторит и эффект. Инструмент получает стабильный ключ вызова через
+`kit.IdempotencyKey(ctx)` — это тот же `sha256` имени инструмента и канонических
+аргументов, что и `Fingerprint`, и он одинаков для повторов одного вызова. Передайте
+его downstream (например, заголовком `Idempotency-Key`), чтобы дедуплицировал эффект,
+а не ядро (BR-105).
 
 Порядок в `execTool`:
 
@@ -205,8 +214,8 @@ app, err := kit.New(ctx, kit.Config{
 
 ```go
 import (
-	"github.com/gobellim/kit"
-	"github.com/gobellim/kit/webfetch"
+	"github.com/KirillYuzh/Gobellim"
+	"github.com/KirillYuzh/Gobellim/webfetch"
 )
 
 if _, err := webfetch.New(app, "web_fetch", webfetch.Config{

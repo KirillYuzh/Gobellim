@@ -5,8 +5,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/gobellim/kit/embed"
-	"github.com/gobellim/kit/model"
+	"github.com/KirillYuzh/Gobellim/embed"
+	"github.com/KirillYuzh/Gobellim/model"
 )
 
 type countingEmbedder struct {

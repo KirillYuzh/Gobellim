@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 const (

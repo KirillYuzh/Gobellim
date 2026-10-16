@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/gobellim/kit/authz"
-	"github.com/gobellim/kit/embed"
-	"github.com/gobellim/kit/guard"
-	"github.com/gobellim/kit/guard/gliner"
+	"github.com/KirillYuzh/Gobellim/authz"
+	"github.com/KirillYuzh/Gobellim/embed"
+	"github.com/KirillYuzh/Gobellim/guard"
+	"github.com/KirillYuzh/Gobellim/guard/gliner"
 )
 
 const (

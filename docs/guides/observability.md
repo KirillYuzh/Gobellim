@@ -263,7 +263,7 @@ deleted, err := app.Prune(ctx, 30*24*time.Hour)
 
 ## Дашборды
 
-В `deploy/grafana/` лежат provisioning datasource и дашборд `kit-overview`
+В `demo/deploy/grafana/` лежат provisioning datasource и дашборд `kit-overview`
 (`uid: kit-overview`). Панели читают data streams напрямую:
 
 | Панель                 | Поток (datasource uid) | Запрос / метрика                                |

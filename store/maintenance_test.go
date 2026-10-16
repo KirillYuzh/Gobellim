@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 func TestDeleteByDocBody(t *testing.T) {

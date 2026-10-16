@@ -9,7 +9,7 @@ import (
 
 	"github.com/daulet/tokenizers"
 
-	"github.com/gobellim/kit/guard"
+	"github.com/KirillYuzh/Gobellim/guard"
 )
 
 func TestWindowFitsTokenBudget(t *testing.T) {

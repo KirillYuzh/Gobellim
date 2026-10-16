@@ -18,7 +18,7 @@ kit подключается как обычный Go-модуль. Сборка
 Подключите модуль:
 
 ```sh
-go get github.com/gobellim/kit
+go get github.com/KirillYuzh/Gobellim
 ```
 
 Проверьте сборку, `vet` и тесты:
@@ -163,7 +163,7 @@ go run ./cmd/kitctl model pull intfloat/multilingual-e5-small
 Elasticsearch и Grafana поднимаются из `deploy/`:
 
 ```sh
-cd deploy && docker compose up -d elasticsearch grafana
+cd demo/deploy && docker compose up -d elasticsearch grafana
 ```
 
 Elasticsearch слушает `9200`, Grafana — `3000`. Дашборды провижнятся из файлов.

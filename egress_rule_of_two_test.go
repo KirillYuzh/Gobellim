@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/gobellim/kit/model"
+	"github.com/KirillYuzh/Gobellim/model"
 )
 
 func TestRuleOfTwoIsEnforcedByDefault(t *testing.T) {
@@ -79,7 +79,10 @@ func TestRuleOfTwoBlocksEgressInARealTurn(t *testing.T) {
 	}
 }
 
-func TestRuleOfTwoAllowsEgressOnATrustedTurn(t *testing.T) {
+// ruleOfTwoTurn runs a fetch_page (EffectRead) then a send_mail (EffectEgress) in
+// one Chat turn and reports the error and whether the egress handler ran.
+func ruleOfTwoTurn(t *testing.T, fetchResult string, optOut bool) (bool, error) {
+	t.Helper()
 	type fetchIn struct {
 		URL string `json:"url"`
 	}
@@ -95,12 +98,13 @@ func TestRuleOfTwoAllowsEgressOnATrustedTurn(t *testing.T) {
 	app := newRealApp(t, discardES{}, llm, nil, testPolicyMemory, func(c *Config) {
 		c.MaxSteps = 5
 		c.MaxCallsPerTool = 2
+		if optOut {
+			c.Egress = EgressPolicy{AllowEgressAfterUntrusted: true}
+		}
 	})
 	sent := false
 	if _, err := Tool(app, "fetch_page",
-		func(context.Context, fetchIn) (string, error) {
-			return "страница без персональных данных", nil
-		},
+		func(context.Context, fetchIn) (string, error) { return fetchResult, nil },
 		Effects(EffectRead)); err != nil {
 		t.Fatal(err)
 	}
@@ -111,12 +115,59 @@ func TestRuleOfTwoAllowsEgressOnATrustedTurn(t *testing.T) {
 	}
 
 	ctx := WithPrincipal(context.Background(), Principal{UserID: "u", Tenant: "t", Roles: []string{"admin"}})
-	if _, err := app.Chat(ctx, ChatRequest{Messages: []model.Message{
+	_, err := app.Chat(ctx, ChatRequest{Messages: []model.Message{
 		{Role: model.RoleUser, Content: "возьми страницу и отправь её по почте"},
+	}})
+	return sent, err
+}
+
+// TestRuleOfTwoBlocksEgressAfterAnAllowedToolResult is the regression test for the
+// hole session.md found: a tool result the guard *allowed* used to leave the turn
+// trusted, so a later egress call slipped through. Origin-based taint (BR-101) must
+// close it — the turn is untrusted regardless of the verdict.
+func TestRuleOfTwoBlocksEgressAfterAnAllowedToolResult(t *testing.T) {
+	sent, err := ruleOfTwoTurn(t, "страница без персональных данных", false)
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("err = %v, want ErrUnauthorized", err)
+	}
+	if sent {
+		t.Fatal("the egress handler must not run after any tool result")
+	}
+}
+
+func TestRuleOfTwoOptOutAllowsEgressAfterAToolResult(t *testing.T) {
+	sent, err := ruleOfTwoTurn(t, "страница без персональных данных", true)
+	if err != nil {
+		t.Fatalf("opt-out turn: %v", err)
+	}
+	if !sent {
+		t.Fatal("AllowEgressAfterUntrusted must let the egress handler run")
+	}
+}
+
+func TestRuleOfTwoAllowsEgressWithoutPriorToolResult(t *testing.T) {
+	type sendIn struct {
+		To string `json:"to"`
+	}
+	llm := &scripted{t: t, queue: []model.Response{
+		toolCallResponse("send_mail", `{"to":"a@example.com"}`),
+		textResponse("готово"),
+	}}
+	app := newRealApp(t, discardES{}, llm, nil, testPolicyMemory, func(c *Config) { c.MaxSteps = 3 })
+	sent := false
+	if _, err := Tool(app, "send_mail",
+		func(context.Context, sendIn) (string, error) { sent = true; return "sent", nil },
+		Effects(EffectEgress), EgressAny()); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := WithPrincipal(context.Background(), Principal{UserID: "u", Tenant: "t", Roles: []string{"admin"}})
+	if _, err := app.Chat(ctx, ChatRequest{Messages: []model.Message{
+		{Role: model.RoleUser, Content: "отправь письмо"},
 	}}); err != nil {
 		t.Fatalf("trusted turn: %v", err)
 	}
 	if !sent {
-		t.Fatal("the egress handler must run on a trusted turn")
+		t.Fatal("egress without a prior tool result must be allowed")
 	}
 }

@@ -63,10 +63,11 @@ kit/
   guard/guardtest/                          AllowAll — тестовый детектор (I-15)
   model/                                    Message, Client, openai.go openai_stream.go vllm.go ollama.go gigachat.go, chain.go, history.go
   embed/                                    Embedder, presets.go, remote.go, openai.go, gigachat.go, local.go, local_ort.go
-  chunk/                                    токенный чанкер + Tokenizer (по умолчанию WhitespaceTokenizer)
+  chunk/                                    токенный чанкер + Tokenizer (обязателен для Ingest)
   store/                                    ES interface + Request, index.go (маппинги), chunks.go, search.go, filter.go, bulk.go, memory.go (индексы и запросы памяти), maintenance.go, ensure.go
   trace/                                    модель Langfuse, async writer (writer.go), policy.go (TextPolicy/Sampler), sink.go, otlp.go (Sink OTLP/HTTP)
   eval/                                     детерминированные проверки трейсов (только stdlib; зависит от trace и internal/core, не от kit) — ноль внешних зависимостей
+  kittest/                                  тестовый набор: fake model.Client, скриптовый guard.Detector, контрактные тесты для плагинов
   flow/                                     один типизированный шаг `Step[In,Out]` со schema-контрактом и suspend/resume (без Pipeline/builder-DSL, D47); единственное внешнее ребро ядра — валидатор схем (D67)
   rerank/                                   реранкер за интерфейсом Reranker + адаптер TEI/Cohere (/rerank), детерминированный `Reorder`
   mcp/                                      клиент Model Context Protocol (stdio и streamable HTTP) + `Register` — инструменты как `mcp:<server>:<tool>`; сервер `NewServer`/`FromTool` отдаёт инструменты наружу через `App.CallTool`
@@ -74,12 +75,14 @@ kit/
   internal/importrules/                     stdlib-тест правил импортов (I-13); дублирует правила depguard из .golangci.yml
   cmd/kitctl/                               model pull, policy check, verify window/models/parity/latency
   demo/                         пример на Clean Architecture: cmd/bot + internal/{domain,usecase,adapter}
-  deploy/                                   Dockerfile, docker-compose.yml, grafana/ (policy — demo/policy.yaml)
+    deploy/                                 Dockerfile, docker-compose.yml, grafana/ (policy — demo/policy.yaml)
   docs/                                     документация: getting-started/, concepts/, reference/, internals/ (README-индекс)
   testdata/                                 золотые файлы, parity-фикстуры
   .github/workflows/ci.yml                  CI: build, test, race, ort-vet, lint, fumpt
   .golangci.yml Makefile                    линтер (gofumpt/govet/errcheck/staticcheck/gosec/depguard) и локальный `make check`
 ```
+
+`kittest` импортирует только порты (`model`, `guard`, `trace`) и никогда фасад `kit`, поэтому его может импортировать и тест самого ядра. Официальным плагин считается после контрактных тестов `kittest.DetectorContract`, `kittest.SinkContract` и `kittest.ScopeIsolation` (D78).
 
 **Правила зависимостей.** Правила обязательны (I-13) и **подключены**: их проверяют
 и stdlib-тест `internal/importrules` (в `go test ./...`), и правила `depguard` в
@@ -155,6 +158,9 @@ and must never import the root kit façade») запрещает ему подн
 | stdlib                                     | `net/http`, `encoding/json`, `log/slog`, `context`, `unicode`, `regexp` | HTTP-клиенты провайдеров, логи                                |
 
 ES-клиент в зависимости не входит (D10). Тестовые зависимости — только stdlib.
+`Config.ES` опционален (D69, BR-102): без него работают `Chat`, `ChatStream`,
+`CallTool`, `Generate`, `Score` и инструменты, а операции хранилища дают
+`ErrInvalidConfig`, `Setup` — no-op.
 
 ## Рантайм и сборка
 
@@ -286,7 +292,7 @@ flowchart TD
 | Утечка PII и секретов в ответе                             | guard rail `output` (mask); инъекция/unsafe на выходе помечаются `Detect`                                                         | правила + ML      |
 | Эксфильтрация через инструмент                             | `Effects` инструмента, host-allowlist для `Egress`, «Rule of Two» в рантайме                                                      | детерминированный |
 | PII в трейсах                                              | текст под явной политикой `Config.TraceText` (`masked` по умолчанию; `full` — opt-in с предупреждением)                           | детерминированный |
-| DoS через guard                                            | лимит `max_chars`, пул сессий, таймаут очереди, fail-closed (`GuardStrict`) или явная деградация (`GuardDegraded`)                | детерминированный |
+| DoS через guard                                            | лимит `max_chars`, пул сессий, таймаут очереди, fail-closed по умолчанию; явный fail-open по рельсам (`Config.GuardFailOpen`)                | детерминированный |
 | Бесконечный цикл tools                                     | `max_steps`, `max_calls` на tool, таймаут tool                                                                                    | детерминированный |
 | Утечка секретов в логах                                    | `slog` не пишет тексты сообщений; только id, размеры, категории                                                                   | дисциплина        |
 
@@ -349,7 +355,7 @@ JSON-API остаётся запланированным.
 внешних зависимостей, с детерминированными id (sha256), атрибутами `gen_ai.*` и
 `kit.*` и scores отдельным событием `score`.
 
-Grafana: в `deploy/grafana/` лежат provisioning ES-datasource и дашборды:
+Grafana: в `demo/deploy/grafana/` лежат provisioning ES-datasource и дашборды:
 латентность и ошибки по `name`/`kind`, токены по модели и tenant (панель
 стоимости читает `usage.cost`, который библиотека заполняет по `Config.Pricing`;
 `0`, если цена не задана — см. [Наблюдаемость](../concepts/observability.md)),
@@ -360,7 +366,7 @@ Grafana: в `deploy/grafana/` лежат provisioning ES-datasource и дашб�
 
 - [Бизнес-правила](./business-rules.md) — правила, которые обязана сохранять
   архитектура
-- [Решения и допущения](./decisions.md) — журнал `D1`…`D67` и допущения
+- [Решения и допущения](./decisions.md) — журнал `D1`…`D79` и допущения
   `A1`…`A9`
 - [План](./plan.md) — этапы, тесты, риски, Definition of Done
 - [Ориентиры](./references.md) — Go-проекты, с которых снимаются идеи

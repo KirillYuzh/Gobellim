@@ -12,7 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 type Action int
@@ -128,7 +128,6 @@ const (
 type Options struct {
 	Layers               []Detector
 	Ensembles            []Ensemble
-	Optional             []string
 	OptionalByRail       map[Rail][]string
 	MaxChars             int
 	CacheSize            int
@@ -168,7 +167,7 @@ func New(opts Options) (*Pipeline, error) {
 	if err != nil {
 		return nil, err
 	}
-	degradation, err := newDegradationPolicy(opts.Optional, opts.OptionalByRail)
+	degradation, err := newDegradationPolicy(opts.OptionalByRail)
 	if err != nil {
 		return nil, err
 	}
