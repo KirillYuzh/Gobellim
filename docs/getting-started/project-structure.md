@@ -51,7 +51,7 @@ kit/
     internal/adapter/weather/                провайдер инструмента погоды
     internal/adapter/memory/                 mock Directory и bearer-токены
     internal/adapter/elastic/                клиент Elasticsearch
-  deploy/                                    Dockerfile, docker-compose.yml, policy.yaml, grafana/
+    deploy/                                  Dockerfile, docker-compose.yml, grafana/
   docs/                                      документация
   testdata/                                  золотые файлы, parity-фикстуры
 ```
@@ -91,7 +91,7 @@ CI-джобе `lint`); нарушение ломает сборку. Огран�
 | Eval-проверки          | `eval/`                         | поверх `trace.Sink`/`Recorder`     |
 | Шаги пайплайна         | `flow/`                         | типизированные `flow.Step[In,Out]` |
 | Инструмент наружу      | `webfetch/`                     | `kit.EffectEgress` + SSRF-проверки |
-| Бизнес-логику сервиса  | вне фреймворка, в вашем сервисе | —                                  |
+| Бизнес-логику сервиса  | вне библиотеки, в вашем сервисе | —                                  |
 
 `model/` и `embed/` не знают друг о друге и о `store/`. Единственная точка, где эти
 пакеты собираются вместе, — фасад `kit`.

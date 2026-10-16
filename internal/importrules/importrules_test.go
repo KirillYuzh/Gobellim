@@ -82,6 +82,14 @@ var rules = []rule{
 		},
 	},
 	{
+		name:    "flow-internal-leaves-only",
+		desc:    "flow is a core primitive (D67): it may import only internal/** leaves — never the kit façade (import cycle), never internal/call, never the core family (authz/guard/model/embed/chunk/store/trace), never a sibling or transport package (eval/rerank/mcp/webfetch); stdlib and the two jsonschema libraries of D67 are outside this rule",
+		applies: func(pkg string) bool { return rootOf(pkg) == "flow" },
+		allows: func(pkg, imported string) bool {
+			return isUnderInternal(imported) && !isCallPrimitive(imported)
+		},
+	},
+	{
 		name:    "internal-no-facade",
 		desc:    "no file under internal/ may import the root kit façade (import-cycle risk)",
 		applies: func(pkg string) bool { return isUnderInternal(pkg) },
@@ -123,6 +131,10 @@ func isLeaf(dir string) bool {
 
 func isUnderInternal(dir string) bool {
 	return dir == "internal" || strings.HasPrefix(dir, "internal/")
+}
+
+func isCallPrimitive(dir string) bool {
+	return dir == "internal/call" || strings.HasPrefix(dir, "internal/call/")
 }
 
 func TestImportRules(t *testing.T) {
@@ -188,6 +200,115 @@ func TestImportRules(t *testing.T) {
 		fmt.Fprintf(&b, "\n    file(s): %s", strings.Join(sortedSet(v.files), ", "))
 	}
 	t.Error(b.String())
+}
+
+func TestFlowInternalLeavesOnly(t *testing.T) {
+	r := ruleByName(t, "flow-internal-leaves-only")
+
+	t.Run("applies to flow only", func(t *testing.T) {
+		for _, pkg := range []string{"flow", "flow/step"} {
+			if !r.applies(pkg) {
+				t.Errorf("rule %s must apply to %q", r.name, pkg)
+			}
+		}
+		for _, pkg := range []string{
+			"", "authz", "guard", "store", "trace", "eval",
+			"internal/core", "internal/call", "rerank", "mcp", "webfetch",
+			"cmd/kitctl", "demo/cmd/bot",
+		} {
+			if r.applies(pkg) {
+				t.Errorf("rule %s must not apply to %q", r.name, pkg)
+			}
+		}
+	})
+
+	t.Run("allows internal leaves", func(t *testing.T) {
+		for _, dir := range []string{
+			"internal/core", "internal/id", "internal/httpjson",
+			"internal/oauth", "internal/cache", "internal/ratelimit",
+			"internal/id/sub",
+		} {
+			if !r.allows("flow", dir) {
+				t.Errorf("flow may import %s", dir)
+			}
+		}
+	})
+
+	t.Run("rejects every forbidden edge", func(t *testing.T) {
+		forbidden := []struct {
+			what, dir string
+		}{
+			{"the kit façade", ""},
+			{"the authz core package", "authz"},
+			{"the guard core package", "guard"},
+			{"a guard subpackage", "guard/rules"},
+			{"the guard test detector", "guard/guardtest"},
+			{"the model package", "model"},
+			{"the embed package", "embed"},
+			{"the chunk package", "chunk"},
+			{"the store package", "store"},
+			{"the trace package", "trace"},
+			{"the call primitive", "internal/call"},
+			{"a call subpackage", "internal/call/x"},
+			{"the eval package", "eval"},
+			{"the rerank plugin", "rerank"},
+			{"the mcp client", "mcp"},
+			{"the webfetch tool", "webfetch"},
+			{"itself", "flow"},
+			{"the CLI", "cmd/kitctl"},
+			{"the demo", "demo/cmd/bot"},
+		}
+		for _, c := range forbidden {
+			if r.allows("flow", c.dir) {
+				t.Errorf("flow must not import %q (%s)", c.dir, c.what)
+			}
+		}
+	})
+
+	t.Run("current graph is inside the boundary", func(t *testing.T) {
+		root, modulePath := moduleRoot(t)
+		imports := collectImports(t, root, modulePath)
+		if len(imports["flow"]) == 0 {
+			t.Fatal("no imports collected for flow: the boundary would pass vacuously")
+		}
+		for _, pkg := range sortedPkgDirs(imports) {
+			if !r.applies(pkg) {
+				continue
+			}
+			for _, im := range imports[pkg] {
+				if !r.allows(pkg, im.dir) {
+					t.Errorf("%s:%d imports %s, which %s forbids", im.file, im.line, display(modulePath, im.dir), r.name)
+				}
+			}
+		}
+	})
+}
+
+func TestRuleNamesUnique(t *testing.T) {
+	seen := map[string]bool{}
+	for _, r := range rules {
+		if r.name == "" {
+			t.Error("rule with an empty name")
+		}
+		if seen[r.name] {
+			t.Errorf("duplicate rule name %q", r.name)
+		}
+		seen[r.name] = true
+		if r.desc == "" {
+			t.Errorf("rule %q has an empty desc", r.name)
+		}
+	}
+}
+
+func ruleByName(t *testing.T, name string) rule {
+	t.Helper()
+	for _, r := range rules {
+		if r.name == name {
+			return r
+		}
+	}
+	t.Fatalf("rule %q not found in the rules table", name)
+	return rule{}
 }
 
 func moduleRoot(t *testing.T) (root, modulePath string) {

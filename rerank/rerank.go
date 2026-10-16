@@ -1,7 +1,3 @@
-// Package rerank reorders retrieval candidates with a cross-encoder reranker.
-// Hybrid search (BM25 + kNN fused by RRF) is a recall step; a reranker is the
-// precision step that scores the candidates against the query before the caller
-// sees the top-k.
 package rerank
 
 import (
@@ -9,28 +5,16 @@ import (
 	"sort"
 )
 
-// Rank is one reranker verdict: the document's position in the input slice and
-// its relevance score (higher is better).
 type Rank struct {
 	Index int
 	Score float64
 }
 
-// Reranker scores documents against a query. Implementations talk to a
-// cross-encoder server; the ordering and truncation live in Reorder so every
-// implementation behaves the same.
 type Reranker interface {
 	Rerank(ctx context.Context, query string, documents []string) ([]Rank, error)
 	Name() string
 }
 
-// Reorder turns the reranker's verdicts into a best-first order over n
-// documents and truncates it to topK (topK <= 0 keeps everything).
-//
-// It is defensive on purpose: an out-of-range or repeated index is ignored, and
-// documents the reranker did not score keep their original relative order at
-// the end. The result is stable, so a no-op outcome is byte-for-byte the input
-// order.
 func Reorder(n int, ranks []Rank, topK int) []int {
 	if n <= 0 {
 		return nil

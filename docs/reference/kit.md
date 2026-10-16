@@ -1,6 +1,6 @@
 # Справочник kit
 
-Полный справочник фасада `github.com/gobellim/kit`: конфигурация, жизненный цикл,
+Полный справочник фасада `github.com/KirillYuzh/Gobellim`: конфигурация, жизненный цикл,
 операции, типы, инструменты и ошибки.
 
 Все операции идут через единый примитив `internal/call` (`authz → guard → span →
@@ -15,19 +15,19 @@ fn`). Добавлять middleware или обходить политику н�
 
 | Поле               | Тип                          | По умолчанию                           | Назначение                                                                         |
 | ------------------ | ---------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------- |
-| `ES`               | `store.ES`                   | — (обязательно)                        | Клиент Elasticsearch пишет пользователь.                                           |
+| `ES`               | `store.ES`                   | `nil`                                  | Опционален: без него работают `Chat`/`CallTool`/`Generate`; нужен для ingest/search/memory (BR-102). |
 | `LLM`              | `model.Client`               | — (обязательно)                        | Клиент чата.                                                                       |
-| `Pricing`          | `model.Pricing`              | нулевое (стоимость `0`)                | Цена модели за 1M токенов; framework считает `usage.cost` и `cost`.                |
+| `Pricing`          | `model.Pricing`              | нулевое (стоимость `0`)                | Цена модели за 1M токенов; библиотека считает `usage.cost` и `cost`.               |
 | `Embedder`         | `embed.Embedder`             | `nil`                                  | Нужен только для `Ingest` и `Search`; чат-приложение может не задавать.            |
 | `Policy`           | `*authz.Policy`              | — (обязательно)                        | Разобранный `policy.yaml`.                                                         |
 | `GuardL2`          | `guard.Detector`             | `nil`                                  | ML-слой guard; при `nil` остаётся только детерминированный L1.                     |
-| `GuardMode`        | `kit.GuardMode`              | `kit.GuardStrict`                      | `GuardStrict` — fail-closed; `GuardDegraded` — упавший ML-слой не роняет запрос.   |
+| `GuardFailOpen`    | `[]guard.Rail`               | `nil` (fail-closed везде)              | Рельсы, где упавший ML-слой не роняет запрос (BR-06, D73).                         |
 | `GuardMaxChars`    | `int`                        | `8000` (`guard.DefaultMaxChars`)       | Лимит текста для guard.                                                            |
 | `GuardCacheSize`   | `int`                        | `4096` (`guard.DefaultCacheSize`)      | Размер LRU-кэша вердиктов guard.                                                   |
 | `GuardWindowChars` | `int`                        | `1024` (`guard.DefaultWindowChars`)    | Окно детекции: текст длиннее идёт перекрывающимися окнами, чтобы L2 видел хвост.   |
 | `GuardOnViolation` | `func(guard.Verdict)`        | `nil`                                  | Колбэк на каждый вердикт, кроме allow; без сырых значений (`AllowPII`).            |
-| `Tokenizer`        | `chunk.Tokenizer`            | `chunk.WhitespaceTokenizer{}`          | Токенайзер чанкера; ORT-токенайзера в сборке нет.                                  |
-| `ChunkSize`        | `int`                        | `400` (`chunk.DefaultSize`)            | Единиц токенайзера в чанке; у дефолтного `WhitespaceTokenizer` — слов.             |
+| `Tokenizer`        | `chunk.Tokenizer`            | `nil`                                  | Токенайзер чанкера; без него `Ingest` — `ErrInvalidConfig` (BR-104).               |
+| `ChunkSize`        | `int`                        | `400` (`chunk.DefaultSize`)            | Единиц токенайзера в чанке; у `WhitespaceTokenizer` — слов, а не токенов.          |
 | `ChunkOverlap`     | `int`                        | `80` (`chunk.DefaultOverlap`)          | Перекрытие в тех же единицах, `< ChunkSize`.                                       |
 | `MaxSteps`         | `int`                        | `8` (`DefaultMaxSteps`)                | Лимит цикла «модель → инструменты → модель».                                       |
 | `MaxCallsPerTool`  | `int`                        | `3` (`DefaultMaxCallsPerTool`)         | Лимит вызовов одного инструмента.                                                  |
@@ -50,18 +50,21 @@ fn`). Добавлять middleware или обходить политику н�
 | `HideOutput`       | `bool`                       | `false`                                | Обнулять поле `output` во всех документах.                                         |
 | `Sinks`            | `[]trace.Sink`               | `nil`                                  | Дополнительные приёмники документов (например, `trace.NewRecorder`).               |
 | `MaxTotalTokens`   | `int`                        | `0` (без лимита)                       | Бюджет токенов хода; при превышении — `ErrBudget`.                                 |
-| `Egress`           | `EgressPolicy`               | нулевое (правило выключено)            | Правила эгресса инструментов (`RuleOfTwo`).                                        |
-| `Approver`         | `Approver`                   | `nil`                                  | Кто решает по инструментам с `RequireApproval`; без него — `ErrApprovalRequired`.  |
-| `BeforeToolCall`   | `BeforeToolHook`             | `nil`                                  | App-level before-хук; хук инструмента его заменяет.                                |
-| `AfterToolCall`    | `AfterToolHook`              | `nil`                                  | App-level after-хук; хук инструмента его заменяет.                                 |
+| `Egress`           | `EgressPolicy`               | нулевое (Rule of Two **включён**)      | Правила эгресса инструментов (`AllowEgressAfterUntrusted`).                        |
+
+<!-- derived: BR-51 -->
+
+| `Approver` | `Approver` | `nil` | Кто решает по инструментам с `RequireApproval`; без него — `ErrApprovalRequired`. |
+| `BeforeToolCall` | `BeforeToolHook` | `nil` | App-level before-хук; хук инструмента его заменяет. |
+| `AfterToolCall` | `AfterToolHook` | `nil` | App-level after-хук; хук инструмента его заменяет. |
 
 `DefaultMaxSteps`, `DefaultMaxCallsPerTool`, `DefaultToolTimeout`, `DefaultArgsMaxBytes` и `DefaultTopK` — константы пакета `kit`. `GuardMaxChars`, `GuardCacheSize`, `ChunkSize` и `ChunkOverlap` добираются конструкторами `guard.New` и `chunk.New` из констант `guard.*` и `chunk.*`.
 
 `TraceText` в режиме `full` печатает предупреждение при `New`: в ES пойдёт необработанный текст. Значения `Sampler` разбираются из строки `always|never|ratio:<float>` функцией `trace.SamplerFromString`.
 
-`GuardMode` управляет реакцией на недоступность ML-слоя (I-16). `GuardStrict` (по умолчанию) — fail-closed: ошибка любого слоя отклоняет операцию (`ErrGuardUnavailable`). `GuardDegraded` оставляет детерминированный L1, пропускает упавший `GuardL2` и помечает вердикт и observation флагом `guard_degraded`; при старте печатается `slog.Warn`.
+`GuardFailOpen` управляет реакцией на недоступность ML-слоя (I-16, D73). По умолчанию список пуст — fail-closed: ошибка любого слоя отклоняет операцию (`ErrGuardUnavailable`). На перечисленных рельсах детерминированный L1 остаётся, упавший `GuardL2` пропускается, а вердикт и observation помечаются `guard_degraded`; при старте печатается `slog.Warn`.
 
-`Pricing` — цена модели за миллион токенов (`model.Pricing{InputPerMTok, OutputPerMTok}`). Нулевое значение означает «цена неизвестна» и даёт `usage.cost`/`cost` = 0. Ненулевое — framework считает стоимость каждого вызова и суммирует её в trace (`Chat`, `Generate`); в observation генерации пишется цена одного вызова.
+`Pricing` — цена модели за миллион токенов (`model.Pricing{InputPerMTok, OutputPerMTok}`). Нулевое значение означает «цена неизвестна» и даёт `usage.cost`/`cost` = 0. Ненулевое — библиотека считает стоимость каждого вызова и суммирует её в trace (`Chat`, `Generate`); в observation генерации пишется цена одного вызова.
 
 Слой L2 (`GuardL2`) конструируется отдельно — `gliner.New(gliner.Config{...})` в ORT-сборке. Поля `Dir`, `Model`, `Sessions`, `Wait`, `MaxTokens`: `Dir` по умолчанию берётся из `KIT_MODELS_DIR`, затем `./models`; `Model` — `hivetrace__gliner-guard-omni`; `Sessions` — 2; `Wait` — 2 с; `MaxTokens` — `DefaultMaxTokens` = 512 (кламп до `max_sequence_length` модели). Метки, пороги, `prefix_ids`, позиции маркеров и `category_map` детектор читает из `<dir>/<model>/config.json`, а не из Go-конфига.
 
@@ -113,23 +116,27 @@ observation (I-08).
 ### Chat
 
 ```go
-func (a *App) Chat(ctx context.Context, req ChatRequest) (model.Message, error)
+func (a *App) Chat(ctx context.Context, req ChatRequest) (Response, error)
 ```
 
-Гоняет guard, модель и инструменты в цикле и возвращает финальное сообщение.
+Гоняет guard, модель и инструменты в цикле и возвращает `Response` — финальное
+сообщение плюс аудит хода: `Usage`, `TraceID` и `Decision` (версия guard, хэш
+политики и признак недоверенности хода, BR-103).
 Требует права `chat` (как и остальные операции, `Chat` проверяет право в
 примитиве вызова; права на инструменты проверяются отдельно). При заданном
 `ThreadID` подгружает историю треда и дописывает ход — нужно ещё право `memory`
 (см. [Память](../concepts/memory.md)).
-Ответ возвращается целиком; поток — у `ChatStream`.
+Ответ возвращается целиком; поток — у `ChatStream`. `Response` заполняется и при
+ошибке (`TraceID`, `Decision`), поэтому отказ тоже аудируем.
 На последнем шаге цикла `tool_choice` становится `none`, чтобы
 модель отвечала, а не открывала вызов, который уже не исполнится.
 
 ```go
-msg, err := app.Chat(ctx, kit.ChatRequest{
+res, err := app.Chat(ctx, kit.ChatRequest{
     System:   "Ты ассистент.",
     Messages: []model.Message{{Role: model.RoleUser, Content: "Привет"}},
 })
+fmt.Println(res.Message.Content, res.TraceID)
 ```
 
 ### ChatStream
@@ -144,7 +151,8 @@ func (a *App) ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamChu
 предложения) **до** эмиссии; отказ рельса даёт `StreamChunk.Retract` и аборт.
 Требует права `chat`. Если клиент LLM не реализует `model.Streamer`, `ChatStream`
 откатывается на буферизованный `Chat` и выдаёт один чанк `Text` + `Done`.
-Вызывающий обязан вычитать канал до закрытия. Остаточный риск: совпадение длиннее
+Вызывающий обязан вычитать канал до закрытия. Каждый `StreamChunk` несёт
+`TraceID` хода. Остаточный риск: совпадение длиннее
 хвоста без границы может пересечь окно (I-20).
 
 ```go
@@ -171,6 +179,18 @@ func (a *App) Health() Health
 h := app.Health()
 if !h.Healthy { log.Printf("unhealthy: %+v", h.Components) }
 ```
+
+### Metrics
+
+```go
+func (a *App) Metrics() Metrics
+```
+
+Счётчики для дашборда: вердикты guard (`Guard.Scans`, `Guard.Blocked`,
+`Guard.Truncated`, `Guard.Degradations` и гистограмма латентности `Guard.Latency`),
+глубина очереди trace-писателя и `TraceDropped`. Ядро не тянет библиотеку метрик —
+снимите снимок и отправьте его туда, где уже собираются метрики (например, из
+`otel`-плагина). Права не требует.
 
 ### CallTool
 
@@ -457,13 +477,20 @@ type Generated[T any] struct {
 }
 ```
 
-| Поле           | Тип                  | Назначение                                              |
-| -------------- | -------------------- | ------------------------------------------------------- |
-| `Value`        | `T`                  | Декодированное значение.                                |
-| `Raw`          | `string`             | Сырой ответ (уже прошедший output guard).               |
-| `Decoded`      | `bool`               | `true`, если ответ совпал со схемой и заполнил `Value`. |
-| `UsedFallback` | `bool`               | `true`, если вернулось значение `Fallback`.             |
-| `FinishReason` | `model.FinishReason` | Причина остановки модели.                               |
+| Поле           | Тип                  | Назначение                                                                               |
+| -------------- | -------------------- | ---------------------------------------------------------------------------------------- |
+| `Value`        | `T`                  | Декодированное значение.                                                                 |
+| `Raw`          | `string`             | Сырой ответ (уже прошедший output guard).                                                |
+| `Decoded`      | `bool`               | `true`, если ответ совпал со схемой и заполнил `Value`; `false` при `Warn` и `Fallback`. |
+| `UsedFallback` | `bool`               | `true`, если вернулось значение `Fallback`.                                              |
+| `FinishReason` | `model.FinishReason` | Причина остановки модели.                                                                |
+
+`Generate` валидирует сырой ответ по JSON Schema до декодирования в `T`: ответ сначала
+разбирается в `any` и проверяется скомпилированной схемой, и только прошедший проверку
+документ декодируется в `T`, а `Generated[T].Decoded` сообщает, какой из двух исходов
+случился.
+
+> Производное от D58 (`docs/internals/decisions.md`); `docs/internals/design.md` §5.
 
 ### ErrorStrategy
 
@@ -482,6 +509,7 @@ const (
 ```go
 type StreamChunk struct {
     Text    string        // подтверждённый, уже проверенный текст
+    TraceID string        // id хода; заполнен во всех чанках
     Retract bool          // отбросить показанное; поток завершится ошибкой
     Done    bool          // последний чанк, с собранным Final
     Final   model.Message
@@ -527,8 +555,9 @@ type HealthChecker = core.HealthChecker // Health() HealthStatus
 type Health struct {
     Healthy       bool
     Degraded      bool
-    GuardMode     GuardMode
+    GuardFailOpen []string
     GuardVersion  string
+    GuardStats    guard.Stats // Scans, Blocked, Truncated, Degradations, Latency
     TraceQueue    int
     TraceQueueCap int
     TraceDropped  int64
@@ -698,7 +727,7 @@ func (t *ToolDef) Fingerprint(args string) string
 
 ```go
 type EgressPolicy struct {
-    RuleOfTwo bool
+    AllowEgressAfterUntrusted bool
 }
 
 type ApprovalRequest struct {
@@ -717,9 +746,12 @@ type Approver interface {
 type ApproverFunc func(ctx context.Context, req ApprovalRequest) (bool, error)
 ```
 
-| Поле          | Назначение                                                              |
-| ------------- | ----------------------------------------------------------------------- |
-| `RuleOfTwo`   | Запрет эгресса в ходе, где уже был недоверенный ввод (untrusted input). |
+| Поле                        | Назначение                                                                                                                               |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `AllowEgressAfterUntrusted` | Opt-out из Rule of Two: снимает запрет эгресса в ходе, где уже был недоверенный ввод. Нулевое значение (`false`) — правило **включено**. |
+
+<!-- derived: BR-51 -->
+
 | `Fingerprint` | Хэш `tool` + канонических аргументов; реализация обязана его потребить. |
 
 `Approver` вызывается только для инструментов с `RequireApproval`. Одобрение **расходуется
@@ -812,10 +844,10 @@ Sentinels объявлены в `kit/errors.go` (реэкспорт из `intern
 | `ErrMaxSteps`         | Исчерпан `MaxSteps` цикла.                                                                                                                                                                          |
 | `ErrBudget`           | Превышен `Config.MaxTotalTokens`.                                                                                                                                                                   |
 | `ErrApprovalRequired` | Инструмент с `RequireApproval`, а `Approver` не задан, отказал или одобрение этого fingerprint уже израсходовано.                                                                                   |
-| `ErrTool`             | Зарезервирован под падение внутри инструмента; фасад возвращает такие сбои модели как результат, а не как ошибку.                                                                                   |
+| `ErrTool`             | Сбой, помеченный как падение внутри инструмента (`kit.go:913` — хуки, `mcp/register.go:70` — MCP-инструмент); фасад отдаёт такие сбои модели как результат, а не как ошибку.                        |
 | `ErrRateLimited`      | Лимит на тенанта исчерпан (`Config.RateLimit`, BR-86) до обращения к провайдеру; 429 провайдера приходит как `ErrProvider`.                                                                         |
-| `ErrToolNotFound`     | Возвращается `App.CallTool` для неизвестного инструмента; в `Chat` неизвестный инструмент — результат-ошибка модели.                                                                                |
-| `ErrNotFound`         | Зарезервирован для приложения и адаптеров; операции фасада его не возвращают.                                                                                                                       |
+| `ErrToolNotFound`     | Возвращается `App.CallTool` для неизвестного инструмента (`calltool.go:38`); в `Chat` неизвестный инструмент — результат-ошибка модели.                                                             |
+| `ErrNotFound`         | Объект не найден: в `eval` — трейс, который рекордер не получил (`eval/eval.go:103`); операции фасада его не возвращают.                                                                            |
 
 Разбор по слоям и что видит клиент — [Ошибки](./errors.md).
 

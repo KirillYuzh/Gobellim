@@ -12,15 +12,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gobellim/kit/authz"
-	"github.com/gobellim/kit/embed"
-	"github.com/gobellim/kit/guard"
-	"github.com/gobellim/kit/guard/guardtest"
-	"github.com/gobellim/kit/guard/rules"
-	"github.com/gobellim/kit/internal/call"
-	"github.com/gobellim/kit/model"
-	"github.com/gobellim/kit/store"
-	"github.com/gobellim/kit/trace"
+	"github.com/KirillYuzh/Gobellim/authz"
+	"github.com/KirillYuzh/Gobellim/embed"
+	"github.com/KirillYuzh/Gobellim/guard"
+	"github.com/KirillYuzh/Gobellim/guard/guardtest"
+	"github.com/KirillYuzh/Gobellim/guard/rules"
+	"github.com/KirillYuzh/Gobellim/internal/call"
+	"github.com/KirillYuzh/Gobellim/model"
+	"github.com/KirillYuzh/Gobellim/store"
+	"github.com/KirillYuzh/Gobellim/trace"
 )
 
 type memES struct {
@@ -57,8 +57,6 @@ func (f *memES) bulk(body []byte) (int, []byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for i := 0; i+1 < len(lines); i += 2 {
-		// UseNumber keeps int64 sequence numbers exact; float64 would collapse
-		// adjacent values at UnixNano magnitude, which Elasticsearch does not.
 		dec := json.NewDecoder(bytes.NewReader([]byte(lines[i+1])))
 		dec.UseNumber()
 		var doc map[string]any
@@ -489,7 +487,6 @@ func TestChatMarksAppendedMessagesUntrusted(t *testing.T) {
 	app := newMemoryAppWithGuard(t, es, llm, nil, testPolicyMemory, rules.New())
 	defer func() { _ = app.Close(context.Background()) }()
 
-	// A valid SNILS is masked on the input rail, which marks the turn untrusted.
 	if _, err := app.Chat(memoryCtx(), ChatRequest{
 		ThreadID: "th1",
 		Messages: []model.Message{{Role: model.RoleUser, Content: "snils 112-233-445 95"}},
@@ -527,7 +524,6 @@ func TestUntrustedHistoryBlocksEgressInTheNextTurn(t *testing.T) {
 				textResponse("done"),
 			}}
 			app := newMemoryApp(t, es, llm, nil, testPolicyMemory)
-			app.cfg.Egress = EgressPolicy{RuleOfTwo: true}
 			defer func() { _ = app.Close(context.Background()) }()
 
 			type sendIn struct {

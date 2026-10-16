@@ -30,7 +30,7 @@ if err != nil {
 
 ### Рельсы
 
-Рельсы — константы пакета `guard`: `RailInput` (`input`), `RailRetrieval` (`retrieval`), `RailExecution` (`execution`), `RailOutput` (`output`), `RailToolResult` (`tool_result`).
+Рельсы — константы пакета `guard`, и их ровно три: `RailInput` (`input`), `RailOutput` (`output`), `RailToolResult` (`tool_result`).
 
 ### Конвейер
 
@@ -100,24 +100,27 @@ if err != nil {
 app, err := kit.New(ctx, kit.Config{ES: es, LLM: llm, Policy: policy, GuardL2: l2})
 ```
 
-`Config.Dir` по умолчанию берётся из `KIT_MODELS_DIR`, затем `./models`; пул сессий — `Config.Sessions` (по умолчанию 2); ожидание свободной сессии — `Config.Wait` (по умолчанию 2 с); `Config.MaxTokens` ограничивает длину тензорного входа L2 (по умолчанию `DefaultMaxTokens` = 512, дополнительно клампится до `max_sequence_length` модели — у поставляемого экспорта 2048). Любая ошибка модели — нет каталога, не поднялся ORT, плохой тензор, таймаут очереди — возвращается как `ErrGuardUnavailable`: операция отклоняется, а не пропускается (режим `GuardStrict`; в `GuardDegraded` ошибка L2 не отклоняет операцию, см. «Fast-fail и fail-closed»). Пустой текст не даёт ни находок, ни ошибки.
+`Config.Dir` по умолчанию берётся из `KIT_MODELS_DIR`, затем `./models`; пул сессий — `Config.Sessions` (по умолчанию 2); ожидание свободной сессии — `Config.Wait` (по умолчанию 2 с); `Config.MaxTokens` ограничивает длину тензорного входа L2 (по умолчанию `DefaultMaxTokens` = 512, дополнительно клампится до `max_sequence_length` модели — у поставляемого экспорта 2048). Любая ошибка модели — нет каталога, не поднялся ORT, плохой тензор, таймаут очереди — возвращается как `ErrGuardUnavailable`: операция отклоняется, а не пропускается (fail-closed по умолчанию; рельс из `Config.GuardFailOpen` не отклоняет операцию,
+см. «Fast-fail и fail-closed»). Пустой текст не даёт ни находок, ни ошибки.
 
 Без тега `ort` тот же пакет собирается как заглушка: `Detect` возвращает `ErrGuardUnavailable` (fail-closed).
 
 ### Fast-fail и fail-closed
 
 При reject в L1/L2 дальнейшие слои и целевой вызов не выполняются. Поведение при
-недоступности слоя задаёт `Config.GuardMode` (I-16):
+недоступности слоя задаёт `Config.GuardFailOpen` (I-16) — список рельсов, на
+которых упавший ML-слой не роняет запрос:
 
-| Режим                  | Недоступен L1 (детерминированный) | Недоступен L2 (ML)                                    |
-| ---------------------- | --------------------------------- | ----------------------------------------------------- |
-| `GuardStrict` (дефолт) | `ErrGuardUnavailable` — отказ     | `ErrGuardUnavailable` — отказ                         |
-| `GuardDegraded`        | `ErrGuardUnavailable` — отказ     | L2 пропускается, вердикт от L1, флаг `guard_degraded` |
+| Рельс                              | Недоступен L1 (детерминированный) | Недоступен L2 (ML)                            |
+| ---------------------------------- | --------------------------------- | --------------------------------------------- |
+| в `GuardFailOpen`                  | `ErrGuardUnavailable` — отказ     | L2 пропускается, вердикт от L1, `guard_degraded` |
+| не в `GuardFailOpen` (дефолт)      | `ErrGuardUnavailable` — отказ     | `ErrGuardUnavailable` — отказ                 |
 
-`GuardDegraded` — осознанный компромисс доступности и полноты: детерминированный
-L1 продолжает работать, а факт деградации виден в observation (`guard_degraded`) и
-в вердикте. При старте с этим режимом печатается `slog.Warn`. Требовать отклонения
-при недоступности ML можно, оставив `GuardStrict` (по умолчанию).
+`GuardFailOpen` — осознанный компромисс доступности и полноты на конкретных
+рельсах: детерминированный L1 продолжает работать, а факт деградации виден в
+observation (`guard_degraded`) и в вердикте. При старте с непустым списком
+печатается `slog.Warn`. Требовать отклонения при недоступности ML по умолчанию —
+оставить список пустым.
 
 ### Действия и категории
 
@@ -198,6 +201,11 @@ flowchart TD
 | `input`       | L0/L1: фразы, regex, контрольные суммы RU PII и секретов. L2: классификация (`safety`/таксономия) и PII-сущности | атаки и unsafe → reject; PII → mask необратимо; иначе allow                                  |
 | `retrieval`   | ACL-фильтр tenant + roles внутри kNN и BM25, deny-by-default; карантин чанков при ingest                         | чанк вне ACL не возвращается; отклонённый чанк — в карантин                                  |
 | `execution`   | RBAC, JSON Schema со `additionalProperties: false`, лимиты args, steps, calls, timeout; ML не используется       | нет прав → `ErrUnauthorized`; невалидные args и лимит → результат-ошибка для модели          |
+
+> [!NOTE]
+> `retrieval` и `execution` — не рельсы guard: таких констант в пакете `guard` нет.
+> Это прямые проверки мимо `guard.Pipeline.Check`, они не пишут `guard:<rail>` и в
+> трейсах не видны.
 | `output`      | правила маскирования секретов и PII; L2 — та же модель; INJECTION/UNSAFE дают `Detect`                           | найдено → mask; инъекция/unsafe → detect; иначе allow                                        |
 | `tool_result` | результаты инструментов проверяются как `input`, fast-fail на инъекциях                                          | reject → результат заменяется на `{"error":"result blocked by guard"}`; PII и секреты → mask |
 
@@ -215,7 +223,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/gobellim/kit/internal/call"
+	"github.com/KirillYuzh/Gobellim/internal/call"
 )
 
 func writeError(w http.ResponseWriter, err error) {

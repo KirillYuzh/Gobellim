@@ -14,9 +14,6 @@ import (
 	"testing"
 )
 
-// TestMCPStdioHelperProcess is not a real test: when KIT_MCP_HELPER is set it
-// acts as a tiny MCP server over stdio, so the stdio transport can be tested
-// against a real subprocess.
 func TestMCPStdioHelperProcess(t *testing.T) {
 	if os.Getenv("KIT_MCP_HELPER") != "1" {
 		return
@@ -34,7 +31,7 @@ func TestMCPStdioHelperProcess(t *testing.T) {
 			continue
 		}
 		if len(req.ID) == 0 {
-			continue // notification
+			continue
 		}
 		id := string(req.ID)
 		switch req.Method {

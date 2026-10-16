@@ -16,20 +16,19 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gobellim/kit/authz"
-	"github.com/gobellim/kit/chunk"
-	"github.com/gobellim/kit/embed"
-	"github.com/gobellim/kit/guard"
-	"github.com/gobellim/kit/guard/rules"
-	"github.com/gobellim/kit/internal/cache"
-	"github.com/gobellim/kit/internal/call"
-	"github.com/gobellim/kit/internal/core"
-	"github.com/gobellim/kit/internal/id"
-	"github.com/gobellim/kit/internal/ratelimit"
-	"github.com/gobellim/kit/model"
-	"github.com/gobellim/kit/rerank"
-	"github.com/gobellim/kit/store"
-	"github.com/gobellim/kit/trace"
+	"github.com/KirillYuzh/Gobellim/authz"
+	"github.com/KirillYuzh/Gobellim/chunk"
+	"github.com/KirillYuzh/Gobellim/embed"
+	"github.com/KirillYuzh/Gobellim/guard"
+	"github.com/KirillYuzh/Gobellim/internal/cache"
+	"github.com/KirillYuzh/Gobellim/internal/call"
+	"github.com/KirillYuzh/Gobellim/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/id"
+	"github.com/KirillYuzh/Gobellim/internal/ratelimit"
+	"github.com/KirillYuzh/Gobellim/model"
+	"github.com/KirillYuzh/Gobellim/rerank"
+	"github.com/KirillYuzh/Gobellim/store"
+	"github.com/KirillYuzh/Gobellim/trace"
 )
 
 const (
@@ -39,23 +38,18 @@ const (
 	DefaultArgsMaxBytes    = 32 * 1024
 	DefaultTopK            = 10
 
-	// DefaultRerankMultiplier widens the candidate set (TopK × multiplier) before
-	// a reranker narrows it back to TopK, when Config.RerankCandidates is unset.
 	DefaultRerankMultiplier = 4
 )
 
 type EgressPolicy struct {
-	RuleOfTwo bool
+	AllowEgressAfterUntrusted bool
 }
 
-// RateLimit caps operations per tenant. The zero value disables limiting.
 type RateLimit struct {
 	PerSecond float64
 	Burst     int
 }
 
-// SpotlightMode controls marking of untrusted content (tool results, retrieval,
-// memory) before it reaches the model. The zero value enables it.
 type SpotlightMode int
 
 const (
@@ -63,8 +57,6 @@ const (
 	SpotlightOff
 )
 
-// ResponseCache caches model responses. Size is the number of entries; the zero
-// size disables caching. Responses that request tools are never cached.
 type ResponseCache struct {
 	Size int
 	TTL  time.Duration
@@ -95,31 +87,22 @@ func (f ApproverFunc) Approve(ctx context.Context, req ApprovalRequest) (bool, e
 	return f(ctx, req)
 }
 
-// GuardMode selects how the guard pipeline reacts when the ML layer is
-// unavailable. GuardStrict fails closed: any layer error fails the check.
-// GuardDegraded keeps the deterministic layer, skips the failed optional layer
-// and marks the verdict and the observation degraded.
-type GuardMode int
-
-const (
-	GuardStrict GuardMode = iota
-	GuardDegraded
-)
-
 type Config struct {
-	ES               store.ES
-	LLM              model.Client
-	Pricing          model.Pricing
-	Embedder         embed.Embedder
-	Policy           *authz.Policy
-	GuardL2          guard.Detector
-	GuardMode        GuardMode
+	ES         store.ES
+	LLM        model.Client
+	Pricing    model.Pricing
+	Embedder   embed.Embedder
+	EmbedCache embed.CacheConfig
+	Policy     *authz.Policy
+	GuardL2    guard.Detector
+	// GuardFailOpen lists the rails on which an unavailable ML layer is skipped
+	// instead of failing the request; empty (the default) is fail-closed everywhere.
+	// The deterministic L1 layer is always required.
+	GuardFailOpen    []guard.Rail
 	GuardMaxChars    int
 	GuardCacheSize   int
 	GuardWindowChars int
 
-	// GuardOnViolation is called for every non-allow guard verdict. It receives
-	// the verdict without the masked values (`AllowPII`), so raw PII never leaves here.
 	GuardOnViolation func(guard.Verdict)
 	Tokenizer        chunk.Tokenizer
 	ChunkSize        int
@@ -145,8 +128,6 @@ type Config struct {
 	HideOutput bool
 	Sinks      []trace.Sink
 
-	// TraceProcessors run on every observation before it is written and may
-	// redact or drop it (clear Name).
 	TraceProcessors []func(*trace.Observation)
 	MaxTotalTokens  int
 	Egress          EgressPolicy
@@ -170,18 +151,25 @@ type App struct {
 	order      []string
 }
 
-func New(_ context.Context, cfg Config) (*App, error) {
-	if cfg.ES == nil {
-		return nil, fmt.Errorf("kit: Config.ES is required: %w", core.ErrInvalidConfig)
-	}
+func New(ctx context.Context, cfg Config) (*App, error) {
 	if cfg.LLM == nil {
 		return nil, fmt.Errorf("kit: Config.LLM is required: %w", core.ErrInvalidConfig)
 	}
 	if cfg.Policy == nil {
 		return nil, fmt.Errorf("kit: Config.Policy is required: %w", core.ErrInvalidConfig)
 	}
+	if cfg.EmbedCache.Size > 0 && cfg.Embedder != nil {
+		cached, err := embed.NewCached(cfg.Embedder, cfg.EmbedCache)
+		if err != nil {
+			return nil, err
+		}
+		cfg.Embedder = cached
+	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
+	}
+	if cfg.ES == nil {
+		cfg.Logger.Info("kit: no Elasticsearch client configured: ingest, search, memory and trace persistence are disabled; set Config.ES or add a trace.Sink")
 	}
 	if cfg.MaxSteps <= 0 {
 		cfg.MaxSteps = DefaultMaxSteps
@@ -204,14 +192,18 @@ func New(_ context.Context, cfg Config) (*App, error) {
 	if cfg.ChunkOverlap <= 0 {
 		cfg.ChunkOverlap = chunk.DefaultOverlap
 	}
-	if cfg.Tokenizer == nil {
-		cfg.Tokenizer = chunk.WhitespaceTokenizer{}
+	if cfg.Tokenizer == nil && cfg.Embedder != nil {
+		cfg.Logger.Warn("kit: no Config.Tokenizer configured: ingest is disabled; set a chunk.Tokenizer (e.g. chunk.WhitespaceTokenizer{}) to enable it")
 	}
 	if cfg.TraceText.IsRaw() {
 		cfg.Logger.Warn("kit: trace text policy is FULL: unmasked input and output are written to Elasticsearch")
 	}
-	if cfg.GuardMode == GuardDegraded {
-		cfg.Logger.Warn("kit: guard mode is DEGRADED: an unavailable ML layer is skipped instead of failing the request")
+	if rails := degradedRailNames(cfg); len(rails) > 0 {
+		cfg.Logger.Warn("kit: guard is fail-open on these rails: an unavailable ML layer is skipped instead of failing the request",
+			"rails", rails)
+	}
+	if piiMaskingRequired(cfg.LLM) {
+		cfg.Logger.Warn("kit: the model client is outside RegionRU: PII masking is mandatory, AllowPII tools only see placeholders")
 	}
 	if cw, ok := cfg.LLM.(model.ContextWindow); ok {
 		effective := cfg.GuardMaxChars
@@ -226,32 +218,32 @@ func New(_ context.Context, cfg Config) (*App, error) {
 
 	hash := policyHash(cfg.Policy)
 
-	layers := []guard.Detector{rules.New()}
-	guardModel := ""
-	if cfg.GuardL2 != nil {
-		layers = append(layers, cfg.GuardL2)
-		guardModel = cfg.GuardL2.Name()
+	layers, guardModel := cfg.guardLayers()
+	byRail, err := optionalByRail(cfg, layers)
+	if err != nil {
+		return nil, err
 	}
 	guardVersion := hash + "/" + layerID(layers)
-	var optional []string
-	if cfg.GuardMode == GuardDegraded && cfg.GuardL2 != nil {
-		optional = []string{cfg.GuardL2.Name()}
-	}
 	pipeline, err := guard.New(guard.Options{
-		Layers:      layers,
-		Optional:    optional,
-		MaxChars:    cfg.GuardMaxChars,
-		CacheSize:   cfg.GuardCacheSize,
-		WindowChars: cfg.GuardWindowChars,
-		Version:     guardVersion,
-		OnViolation: cfg.GuardOnViolation,
+		Layers:         layers,
+		OptionalByRail: byRail,
+		MaxChars:       cfg.GuardMaxChars,
+		CacheSize:      cfg.GuardCacheSize,
+		WindowChars:    cfg.GuardWindowChars,
+		Version:        guardVersion,
+		ArtifactHash:   guardArtifact(layers),
+		OnViolation:    cfg.GuardOnViolation,
+		Logger:         cfg.Logger,
 	})
 	if err != nil {
 		return nil, err
 	}
-	chunker, err := chunk.New(cfg.Tokenizer, cfg.ChunkSize, cfg.ChunkOverlap)
-	if err != nil {
-		return nil, err
+	var chunker *chunk.Chunker
+	if cfg.Tokenizer != nil {
+		chunker, err = chunk.New(cfg.Tokenizer, cfg.ChunkSize, cfg.ChunkOverlap)
+		if err != nil {
+			return nil, err
+		}
 	}
 	writer, err := trace.NewWriter(trace.Options{
 		ES:         cfg.ES,
@@ -295,6 +287,9 @@ func New(_ context.Context, cfg Config) (*App, error) {
 }
 
 func (a *App) Setup(ctx context.Context) error {
+	if a.cfg.ES == nil {
+		return nil
+	}
 	return store.EnsureSchema(ctx, a.cfg.ES, a.embeddingDims())
 }
 
@@ -315,13 +310,10 @@ func (a *App) GuardVersion() string { return a.guard.Version() }
 
 func (a *App) PolicyHash() string { return a.policyHash }
 
-// HealthStatus and HealthChecker are aliases of internal/core; an injected
-// component implements HealthChecker to expose its state to App.Health.
 type HealthStatus = core.HealthStatus
 
 type HealthChecker = core.HealthChecker
 
-// ComponentHealth is one injected component's health inside Health.
 type ComponentHealth struct {
 	Name     string
 	OK       bool
@@ -330,27 +322,45 @@ type ComponentHealth struct {
 	Capacity int
 }
 
-// Health is a point-in-time snapshot of the runtime: the guard policy, the
-// trace writer queue and every injected component that implements
-// HealthChecker. Healthy is false when any component reports OK=false.
-// Degraded mirrors the configured guard mode, not a live verdict.
 type Health struct {
 	Healthy       bool
 	Degraded      bool
-	GuardMode     GuardMode
+	GuardFailOpen []string
 	GuardVersion  string
+	GuardStats    guard.Stats
 	TraceQueue    int
 	TraceQueueCap int
 	TraceDropped  int64
 	Components    []ComponentHealth
 }
 
+// Metrics is the counter surface a dashboard reads: guard verdicts and their
+// latency histogram, plus the trace-writer queue. It carries no dependency on a
+// metrics library — export it wherever you already scrape.
+type Metrics struct {
+	Guard         guard.Stats
+	TraceQueue    int
+	TraceQueueCap int
+	TraceDropped  int64
+}
+
+func (a *App) Metrics() Metrics {
+	return Metrics{
+		Guard:         a.guard.Stats(),
+		TraceQueue:    a.writer.QueueDepth(),
+		TraceQueueCap: a.writer.QueueCapacity(),
+		TraceDropped:  a.writer.Dropped(),
+	}
+}
+
 func (a *App) Health() Health {
+	rails := degradedRailNames(a.cfg)
 	h := Health{
 		Healthy:       true,
-		Degraded:      a.cfg.GuardMode == GuardDegraded,
-		GuardMode:     a.cfg.GuardMode,
+		Degraded:      len(rails) > 0,
+		GuardFailOpen: rails,
 		GuardVersion:  a.guard.Version(),
+		GuardStats:    a.guard.Stats(),
 		TraceQueue:    a.writer.QueueDepth(),
 		TraceQueueCap: a.writer.QueueCapacity(),
 		TraceDropped:  a.writer.Dropped(),
@@ -438,8 +448,6 @@ func (a *App) responseCacheKey(req model.Request) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// cached returns a response for a key. Cached responses never carry cost: the
-// tokens are replayed, but nothing was spent on this call.
 func (a *App) cached(key string) (model.Response, bool) {
 	if a.cache == nil || key == "" {
 		return model.Response{}, false
@@ -451,8 +459,6 @@ func (a *App) cached(key string) (model.Response, bool) {
 	return r, ok
 }
 
-// remember stores a response unless it requested tools: replaying a tool call
-// would re-run its side effects.
 func (a *App) remember(key string, r model.Response) {
 	if a.cache == nil || key == "" || len(r.Message.ToolCalls) > 0 {
 		return
@@ -484,11 +490,11 @@ func principalScoped(ctx context.Context) (core.Principal, error) {
 }
 
 func layerID(layers []guard.Detector) string {
-	names := make([]string, 0, len(layers))
+	parts := make([]string, 0, len(layers))
 	for _, l := range layers {
-		names = append(names, l.Name())
+		parts = append(parts, l.Name())
 	}
-	return strings.Join(names, "+")
+	return strings.Join(parts, "+")
 }
 
 func policyHash(p *authz.Policy) string {
@@ -557,6 +563,7 @@ type ChatRequest struct {
 }
 
 type turn struct {
+	mu           sync.Mutex
 	traceID      string
 	principal    core.Principal
 	callsPerTool map[string]int
@@ -566,17 +573,92 @@ type turn struct {
 	subs         []guard.Substitution
 }
 
-func (a *App) Chat(ctx context.Context, req ChatRequest) (out model.Message, err error) {
+func (t *turn) takeCall(name string) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.callsPerTool[name]++
+	return t.callsPerTool[name]
+}
+
+func (t *turn) takeInvalidTry(name string) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.invalidTries[name]++
+	return t.invalidTries[name]
+}
+
+func (t *turn) markUntrusted() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.untrusted = true
+}
+
+func (t *turn) isUntrusted() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.untrusted
+}
+
+// reserveApproval claims the fingerprint for this turn; false means it was
+// already approved (consume-once, BR-53).
+func (t *turn) reserveApproval(fp string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.approved[fp] {
+		return false
+	}
+	if t.approved == nil {
+		t.approved = make(map[string]bool)
+	}
+	t.approved[fp] = true
+	return true
+}
+
+func (t *turn) releaseApproval(fp string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.approved, fp)
+}
+
+func (t *turn) observeInput(v guard.Verdict) {
+	if v.Action != guard.Allow || v.Truncated {
+		t.markUntrusted()
+	}
+	t.subs = append(t.subs, v.Substitutions...)
+}
+
+// Response is the result of Chat: the answer plus the audit trail the caller
+// needs — token usage, the trace ID that correlates it with the trace store, and
+// the policy decision behind the turn.
+type Response struct {
+	Message  model.Message
+	Usage    model.Usage
+	TraceID  string
+	Decision DecisionReport
+}
+
+// DecisionReport is the auditable part of a turn: which guard and policy version
+// produced the verdicts, and whether the turn became untrusted. Per-step detail
+// (each guard verdict, each tool decision) lives in the trace, not here.
+type DecisionReport struct {
+	GuardVersion string
+	PolicyHash   string
+	Untrusted    bool
+}
+
+func (a *App) Chat(ctx context.Context, req ChatRequest) (res Response, err error) {
 	pr, err := principal(ctx)
 	if err != nil {
-		return model.Message{}, err
+		return res, err
 	}
 	if err := a.rateLimit(pr); err != nil {
-		return model.Message{}, err
+		return res, err
 	}
 	traceID := id.New()
 	started := time.Now()
 	var total model.Usage
+	var out model.Message
+	var t *turn
 
 	tr := a.guardTrace(pr, traceID, "chat", req.Tags, started)
 	tr.SessionID = req.SessionID
@@ -590,13 +672,24 @@ func (a *App) Chat(ctx context.Context, req ChatRequest) (out model.Message, err
 			Cost:             total.Cost,
 		}
 		a.writer.Enqueue(tr)
+
+		res.Message = out
+		res.Usage = total
+		res.TraceID = traceID
+		res.Decision = DecisionReport{
+			GuardVersion: a.guard.Version(),
+			PolicyHash:   a.policyHash,
+		}
+		if t != nil {
+			res.Decision.Untrusted = t.untrusted
+		}
 	}()
 
 	client := sanitizeMessages(req.Messages)
 	if len(client) == 0 {
-		return model.Message{}, fmt.Errorf("kit: chat: no user or assistant messages: %w", core.ErrInvalidArgs)
+		return res, fmt.Errorf("kit: chat: no user or assistant messages: %w", core.ErrInvalidArgs)
 	}
-	t := &turn{
+	t = &turn{
 		traceID:      traceID,
 		principal:    pr,
 		callsPerTool: make(map[string]int),
@@ -606,12 +699,9 @@ func (a *App) Chat(ctx context.Context, req ChatRequest) (out model.Message, err
 	for i := range client {
 		v, gerr := a.guardTextVerdict(ctx, guard.RailInput, "guard:input", client[i].Content, traceID)
 		if gerr != nil {
-			return model.Message{}, gerr
+			return res, gerr
 		}
-		if v.Action != guard.Allow {
-			t.untrusted = true
-		}
-		t.subs = append(t.subs, v.Substitutions...)
+		t.observeInput(v)
 		client[i].Content = v.Text
 	}
 
@@ -623,10 +713,10 @@ func (a *App) Chat(ctx context.Context, req ChatRequest) (out model.Message, err
 	if req.ThreadID != "" {
 		history, historyUntrusted, herr := a.memoryLoad(ctx, pr, req.ThreadID, a.memoryLimit(), traceID)
 		if herr != nil {
-			return model.Message{}, herr
+			return res, herr
 		}
 		if historyUntrusted {
-			t.untrusted = true
+			t.markUntrusted()
 		}
 		if a.memoryRecall() > 0 && a.cfg.Embedder != nil {
 			hits, rerr := a.memoryRecallHits(ctx, pr, client[len(client)-1].Content, a.memoryRecall(), traceID)
@@ -638,7 +728,7 @@ func (a *App) Chat(ctx context.Context, req ChatRequest) (out model.Message, err
 				}
 				for _, h := range hits {
 					if h.Untrusted {
-						t.untrusted = true
+						t.markUntrusted()
 					}
 				}
 			}
@@ -701,21 +791,21 @@ func (a *App) Chat(ctx context.Context, req ChatRequest) (out model.Message, err
 			return r, rerr
 		})
 		if cerr != nil {
-			return model.Message{}, cerr
+			return res, cerr
 		}
 		total.PromptTokens += resp.Usage.PromptTokens
 		total.CompletionTokens += resp.Usage.CompletionTokens
 		total.TotalTokens += resp.Usage.TotalTokens
 		total.Cost += resp.Usage.Cost
 		if a.cfg.MaxTotalTokens > 0 && total.TotalTokens > a.cfg.MaxTotalTokens {
-			return model.Message{}, fmt.Errorf("kit: chat: token budget %d exceeded (%d): %w",
+			return res, fmt.Errorf("kit: chat: token budget %d exceeded (%d): %w",
 				a.cfg.MaxTotalTokens, total.TotalTokens, core.ErrBudget)
 		}
 
 		if len(resp.Message.ToolCalls) == 0 {
 			text, _, gerr := a.guardText(ctx, guard.RailOutput, "guard:output", resp.Message.Content, traceID)
 			if gerr != nil {
-				return model.Message{}, gerr
+				return res, gerr
 			}
 			final := resp.Message
 			final.Content = text
@@ -723,31 +813,102 @@ func (a *App) Chat(ctx context.Context, req ChatRequest) (out model.Message, err
 				turnMsgs := make([]model.Message, 0, len(client)+1)
 				turnMsgs = append(turnMsgs, client...)
 				turnMsgs = append(turnMsgs, final)
-				if aerr := a.memoryAppend(ctx, pr, req.ThreadID, turnMsgs, t.untrusted, traceID); aerr != nil {
+				if aerr := a.memoryAppend(ctx, pr, req.ThreadID, turnMsgs, t.isUntrusted(), traceID); aerr != nil {
 					a.logger().Warn("kit: chat: memory append failed", "err", aerr)
 				}
 			}
-			return final, nil
+			out = final
+			return res, nil
 		}
 
 		msgs = append(msgs, resp.Message)
-		for _, tc := range resp.Message.ToolCalls {
-			result, terr := a.execTool(ctx, tc, t)
-			if terr != nil {
-				return model.Message{}, terr
-			}
-			msgs = append(msgs, model.Message{
-				Role:       model.RoleTool,
-				ToolCallID: tc.ID,
-				Name:       tc.Name,
-				Content:    result,
-			})
+		results, terr := a.runToolCalls(ctx, resp.Message.ToolCalls, t)
+		if terr != nil {
+			return res, terr
 		}
+		msgs = append(msgs, results...)
 	}
-	return model.Message{}, fmt.Errorf("kit: chat: reached max_steps=%d: %w", a.cfg.MaxSteps, core.ErrMaxSteps)
+	return res, fmt.Errorf("kit: chat: reached max_steps=%d: %w", a.cfg.MaxSteps, core.ErrMaxSteps)
 }
 
 var urlHostRe = regexp.MustCompile(`(?i)\b(?:https?|ftp)://[^\s/?#"'\\]*`)
+
+const maxToolConcurrency = 8
+
+// runToolCalls runs the model's tool calls and returns their results in the
+// model's order. A batch that is entirely read-only runs concurrently: read tools
+// cannot observe each other, so their order carries no meaning. A batch with any
+// effectful or approval-gated call runs sequentially, so writes, egress and
+// approvals keep the model's order and are never interleaved (BR-108).
+func (a *App) runToolCalls(ctx context.Context, calls []model.ToolCall, t *turn) ([]model.Message, error) {
+	results := make([]model.Message, len(calls))
+	record := func(i int, content string) {
+		results[i] = model.Message{Role: model.RoleTool, ToolCallID: calls[i].ID, Name: calls[i].Name, Content: content}
+	}
+
+	if !a.allReadOnly(calls) {
+		for i, tc := range calls {
+			result, err := a.execTool(ctx, tc, t)
+			if err != nil {
+				return nil, err
+			}
+			t.markUntrusted()
+			record(i, result)
+		}
+		return results, nil
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	sem := make(chan struct{}, maxToolConcurrency)
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		firstErr error
+	)
+	for i, tc := range calls {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			result, err := a.execTool(ctx, tc, t)
+			if err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+				cancel()
+				return
+			}
+			t.markUntrusted()
+			record(i, result)
+		}()
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return results, nil
+}
+
+// allReadOnly reports whether every call is a read-only tool that needs no
+// approval — the only batch safe to run out of the model's order.
+func (a *App) allReadOnly(calls []model.ToolCall) bool {
+	if len(calls) < 2 {
+		return false
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for _, tc := range calls {
+		def := a.tools[tc.Name]
+		if def == nil || def.effect != EffectRead || def.requireApproval {
+			return false
+		}
+	}
+	return true
+}
 
 func (a *App) execTool(ctx context.Context, tc model.ToolCall, t *turn) (string, error) {
 	a.mu.RLock()
@@ -758,18 +919,18 @@ func (a *App) execTool(ctx context.Context, tc model.ToolCall, t *turn) (string,
 	}
 
 	if err := a.policy.Authorize(t.principal, def.permission); err != nil {
+		a.securityEvent("tool_denied_rbac", t, def.name, err)
 		return "", err
 	}
-	t.callsPerTool[tc.Name]++
-	if t.callsPerTool[tc.Name] > a.cfg.MaxCallsPerTool {
+	callIndex := t.takeCall(tc.Name)
+	if callIndex > a.cfg.MaxCallsPerTool {
 		return errorResult(fmt.Sprintf("tool %s exceeded its call limit", tc.Name)), nil
 	}
 	if len(tc.Args) > a.cfg.ArgsMaxBytes {
 		return errorResult("arguments too large"), nil
 	}
 	if err := def.validate(tc.Args); err != nil {
-		t.invalidTries[tc.Name]++
-		if t.invalidTries[tc.Name] > 1 {
+		if t.takeInvalidTry(tc.Name) > 1 {
 			return "", err
 		}
 		return errorResult(err.Error()), nil
@@ -790,7 +951,7 @@ func (a *App) execTool(ctx context.Context, tc model.ToolCall, t *turn) (string,
 		Args:        tc.Args,
 		Fingerprint: def.Fingerprint(tc.Args),
 		Effect:      def.effect,
-		CallIndex:   t.callsPerTool[tc.Name],
+		CallIndex:   callIndex,
 	}
 
 	execute := func() (string, error) {
@@ -801,15 +962,15 @@ func (a *App) execTool(ctx context.Context, tc model.ToolCall, t *turn) (string,
 			TraceID:    t.traceID,
 			Tags:       []string{"effect:" + def.effect.String()},
 		}, func(ctx context.Context, span *call.Span) (string, error) {
-			tctx, cancel := context.WithTimeout(ctx, a.cfg.ToolTimeout)
+			tctx, cancel := context.WithTimeout(withIdempotencyKey(ctx, info.Fingerprint), a.cfg.ToolTimeout)
 			defer cancel()
-			args, rehydrated := rehydrateArgs(tc.Args, def.allowPII, t.subs)
+			args, rehydrated := rehydrateArgs(tc.Args, def.allowPII && !a.piiMaskingRequired(), t.subs)
 			res, ierr := def.invoke(tctx, args)
 			if rehydrated {
 				res = maskValues(res, t.subs)
 			}
 			span.Output = res
-			return res, ierr
+			return res, asToolError(tc.Name, ierr)
 		})
 	}
 
@@ -839,7 +1000,7 @@ func (a *App) execTool(ctx context.Context, tc model.ToolCall, t *turn) (string,
 		if isFatalExecErr(execErr) {
 			return "", execErr
 		}
-		return errorResult(execErr.Error()), nil
+		return errorResult(unmarkedErrorText(execErr)), nil
 	}
 
 	v, gerr := call.Guard(ctx, a.calls, call.Req{
@@ -848,19 +1009,19 @@ func (a *App) execTool(ctx context.Context, tc model.ToolCall, t *turn) (string,
 	})
 	if gerr != nil {
 		if errors.Is(gerr, core.ErrGuardReject) {
-			t.untrusted = true
+			t.markUntrusted()
 			return errorResult("result blocked by guard"), nil
 		}
 		return "", gerr
 	}
-	if v.Action != guard.Allow {
-		t.untrusted = true
+	if v.Action != guard.Allow || v.Truncated {
+		t.markUntrusted()
 	}
 
 	final := v.Text
 	if def.validateOutput {
 		if verr := def.validateResult(final); verr != nil {
-			t.untrusted = true
+			t.markUntrusted()
 			return errorResult(verr.Error()), nil
 		}
 	}
@@ -892,16 +1053,24 @@ func isFatalExecErr(err error) bool {
 		errors.Is(err, context.DeadlineExceeded)
 }
 
+func asToolError(name string, err error) error {
+	if err == nil || isFatalExecErr(err) {
+		return err
+	}
+	return fmt.Errorf("kit: tool %s: %w: %w", name, err, core.ErrTool)
+}
+
+func unmarkedErrorText(err error) string {
+	return strings.TrimSuffix(err.Error(), core.ErrTool.Error())
+}
+
 func (a *App) approve(ctx context.Context, def *ToolDef, args string, t *turn) error {
 	if a.cfg.Approver == nil {
 		return fmt.Errorf("kit: tool %s requires approval but no Approver is configured: %w",
 			def.name, core.ErrApprovalRequired)
 	}
 	fingerprint := def.Fingerprint(args)
-	if t.approved == nil {
-		t.approved = make(map[string]bool)
-	}
-	if t.approved[fingerprint] {
+	if !t.reserveApproval(fingerprint) {
 		return fmt.Errorf("kit: tool %s: approval %s was already consumed in this turn: %w",
 			def.name, fingerprint, core.ErrApprovalRequired)
 	}
@@ -914,32 +1083,53 @@ func (a *App) approve(ctx context.Context, def *ToolDef, args string, t *turn) e
 		Effect:      def.effect,
 	})
 	if err != nil {
+		t.releaseApproval(fingerprint)
 		return err
 	}
 	if !ok {
+		t.releaseApproval(fingerprint)
 		return fmt.Errorf("kit: tool %s: approval denied: %w", def.name, core.ErrApprovalRequired)
 	}
-	t.approved[fingerprint] = true
 	return nil
+}
+
+// securityEvent records a denial the caller should treat as a security event: an
+// operation refused by policy, not a transient failure (BR-107). Such denials
+// abort the turn (I-11); the trace carries the failing span, and this is the
+// operator-facing signal.
+func (a *App) securityEvent(event string, t *turn, tool string, err error) {
+	a.logger().Warn("kit: security event",
+		"event", event,
+		"tool", tool,
+		"user_id", t.principal.UserID,
+		"tenant", t.principal.Tenant,
+		"err", err.Error(),
+	)
 }
 
 func (a *App) checkEgress(def *ToolDef, args string, t *turn) error {
 	if !def.effect.IsEgress() {
 		return nil
 	}
-	if a.cfg.Egress.RuleOfTwo && t.untrusted {
-		return fmt.Errorf("kit: tool %s: egress blocked after untrusted input in this turn: %w",
+	if !a.cfg.Egress.AllowEgressAfterUntrusted && t.isUntrusted() {
+		err := fmt.Errorf("kit: tool %s: egress blocked after untrusted input in this turn: %w",
 			def.name, core.ErrUnauthorized)
+		a.securityEvent("egress_after_untrusted", t, def.name, err)
+		return err
 	}
 	if def.egressAny {
 		return nil
 	}
 	if len(def.egressHosts) == 0 {
-		return fmt.Errorf("kit: tool %s: egress tool has no host allowlist; add EgressHosts or EgressAny: %w", def.name, core.ErrUnauthorized)
+		err := fmt.Errorf("kit: tool %s: egress tool has no host allowlist; add EgressHosts or EgressAny: %w", def.name, core.ErrUnauthorized)
+		a.securityEvent("egress_without_allowlist", t, def.name, err)
+		return err
 	}
 	for _, host := range urlHosts(args) {
 		if !hostAllowed(host, def.egressHosts) {
-			return fmt.Errorf("kit: tool %s: host %q is not allowed: %w", def.name, host, core.ErrUnauthorized)
+			err := fmt.Errorf("kit: tool %s: host %q is not allowed: %w", def.name, host, core.ErrUnauthorized)
+			a.securityEvent("egress_host_not_allowed", t, def.name, err)
+			return err
 		}
 	}
 	return nil
@@ -1034,6 +1224,9 @@ func (a *App) Ingest(ctx context.Context, doc Doc) (err error) {
 	}
 	if a.cfg.Embedder == nil {
 		return fmt.Errorf("kit: ingest requires an Embedder: %w", core.ErrInvalidConfig)
+	}
+	if a.chunker == nil {
+		return fmt.Errorf("kit: ingest requires Config.Tokenizer (e.g. chunk.WhitespaceTokenizer{}): %w", core.ErrInvalidConfig)
 	}
 
 	traceID := id.New()
@@ -1130,8 +1323,6 @@ type SearchRequest struct {
 	Query  string
 	TopK   int
 	Filter store.Filter
-	// Rerank reorders the candidates with Config.Reranker before truncating to
-	// TopK; it fails with ErrInvalidConfig when no Reranker is configured.
 	Rerank bool
 }
 
@@ -1235,8 +1426,6 @@ func (a *App) Search(ctx context.Context, req SearchRequest) ([]SearchHit, error
 	return hits, nil
 }
 
-// candidateCount is how many candidates to retrieve before truncation. With a
-// reranker the set is widened, because recall and precision are different jobs.
 func (a *App) candidateCount(topK int, rerankRequested bool) int {
 	if !rerankRequested {
 		return topK
@@ -1533,7 +1722,36 @@ func (a *App) structure(ctx context.Context, sm model.Client, schema json.RawMes
 	})
 }
 
+// piiMaskingRequired reports whether a client declares a region outside
+// RegionRU. Then PII masking is mandatory (BR-106): the AllowPII relaxation is
+// refused and tools only ever see placeholders. A client without Regional counts
+// as unspecified, so the rule is opt-in and backward compatible.
+func piiMaskingRequired(c model.Client) bool {
+	regional, ok := c.(model.Regional)
+	if !ok {
+		return false
+	}
+	region := regional.Region()
+	return region != "" && region != model.RegionRU
+}
+
+func (a *App) piiMaskingRequired() bool { return piiMaskingRequired(a.cfg.LLM) }
+
+// requireES guards every operation that needs the store. Config.ES is optional:
+// without it Chat, ChatStream, CallTool, Generate and Score still work, while
+// operations that read or write the store fail with ErrInvalidConfig instead of
+// panicking on a nil client.
+func (a *App) requireES() error {
+	if a.cfg.ES == nil {
+		return fmt.Errorf("kit: this operation requires a store, but Config.ES is nil: %w", core.ErrInvalidConfig)
+	}
+	return nil
+}
+
 func (a *App) esDo(ctx context.Context, req call.Req, esReq store.Request) ([]byte, error) {
+	if err := a.requireES(); err != nil {
+		return nil, err
+	}
 	return call.Do(ctx, a.calls, req, func(ctx context.Context, span *call.Span) ([]byte, error) {
 		status, resp, err := a.cfg.ES.Do(ctx, esReq)
 		if err != nil {

@@ -1,0 +1,34 @@
+@import "tailwindcss";
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+
+:root {
+    --font-sans:
+        ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+    --font-mono:
+        ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+        "Liberation Mono", monospace;
+}
+
+body {
+    font-family: var(--font-sans);
+}
+
+/* The wordmark is a fixed-fill SVG, so the theme picks the file. */
+.brand-logo {
+    height: 1.75rem;
+    width: auto;
+}
+
+.brand-logo-dark {
+    display: none;
+}
+
+.dark .brand-logo-dark {
+    display: block;
+}
+
+.dark .brand-logo-light {
+    display: none;
+}

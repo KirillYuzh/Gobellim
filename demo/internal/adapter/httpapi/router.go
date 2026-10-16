@@ -4,16 +4,18 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/gobellim/kit/demo/internal/domain"
-	"github.com/gobellim/kit/demo/internal/usecase"
+	"github.com/KirillYuzh/Gobellim/demo/internal/domain"
+	"github.com/KirillYuzh/Gobellim/demo/internal/usecase"
 )
 
-func New(auth *usecase.Auth, bot *usecase.Bot, kb *usecase.Knowledge, log *slog.Logger) http.Handler {
+func New(auth *usecase.Auth, bot *usecase.Bot, kb *usecase.Knowledge, audit usecase.Auditor, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealth)
 	mux.HandleFunc("POST /auth/login", handleLogin(auth, log))
 	mux.HandleFunc("GET /auth/me", requireAuth(auth, log, handleMe(log)))
 	mux.HandleFunc("POST /bot/ask", requireAuth(auth, log, handleAsk(bot, log)))
+	mux.HandleFunc("POST /bot/triage", requireAuth(auth, log, handleTriage(bot, log)))
+	mux.HandleFunc("GET /stats", requireAuth(auth, log, handleStats(audit, log)))
 
 	mux.HandleFunc("POST /kb", requireAuth(auth, log, handleKbCreate(kb, log)))
 	mux.HandleFunc("GET /kb", requireAuth(auth, log, handleKbList(kb, log)))

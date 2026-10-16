@@ -4,13 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/gobellim/kit/guard"
+	"github.com/KirillYuzh/Gobellim/guard"
 )
 
-// Canonicalisation drops zero-width and bidi runes, so a detector matches in a
-// shorter canonical stream than the text that gets masked. The mask must cover
-// all of the original match: stopping short of it leaks the tail of a value that
-// was already detected.
 func TestMaskCoversCanonicalShiftedSpans(t *testing.T) {
 	p, err := guard.New(guard.Options{Layers: []guard.Detector{New()}})
 	if err != nil {
@@ -22,9 +18,11 @@ func TestMaskCoversCanonicalShiftedSpans(t *testing.T) {
 		{"почта: " + zwsp + "ivan.petrov@example.com", "почта: " + zwsp + "[PII:EMAIL]"},
 		{"почта: " + zwsp + zwsp + zwsp + "ivan.petrov@example.com", "почта: " + zwsp + zwsp + zwsp + "[PII:EMAIL]"},
 		{"почта: \u202eivan.petrov@example.com\u202c", "почта: \u202e[PII:EMAIL]\u202c"},
-		{"инн 7707083893", "инн [PII:PASSPORT,INN]"},
-		{"инн " + zwsp + "7707083893", "инн " + zwsp + "[PII:PASSPORT,INN]"},
-		{"инн 7707" + zwsp + "083893", "инн [PII:PASSPORT,INN]"},
+		{"инн 7707083893", "инн [PII:INN]"},
+		{"инн " + zwsp + "7707083893", "инн " + zwsp + "[PII:INN]"},
+		{"инн 7707" + zwsp + "083893", "инн [PII:INN]"},
+		{"паспорт " + zwsp + "4509 123456", "паспорт " + zwsp + "[PII:PASSPORT]"},
+		{"паспорт 4509" + zwsp + " 123456", "паспорт [PII:PASSPORT]"},
 	}
 	for _, tc := range cases {
 		v, err := p.Check(context.Background(), guard.RailInput, tc.in)

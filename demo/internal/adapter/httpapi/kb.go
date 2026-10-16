@@ -4,8 +4,8 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/gobellim/kit/demo/internal/domain"
-	"github.com/gobellim/kit/demo/internal/usecase"
+	"github.com/KirillYuzh/Gobellim/demo/internal/domain"
+	"github.com/KirillYuzh/Gobellim/demo/internal/usecase"
 )
 
 type kbWriteRequest struct {

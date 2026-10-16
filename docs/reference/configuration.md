@@ -8,17 +8,18 @@
 | ------------------ | ---------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `ES`               | `store.ES`                   | — (обязательно)                        | Клиент Elasticsearch пишет пользователь.                                                 |
 | `LLM`              | `model.Client`               | — (обязательно)                        | Клиент чата.                                                                             |
-| `Pricing`          | `model.Pricing`              | нулевое (стоимость `0`)                | Цена за 1M токенов; framework считает `usage.cost` и `cost`.                             |
+| `Pricing`          | `model.Pricing`              | нулевое (стоимость `0`)                | Цена за 1M токенов; библиотека считает `usage.cost` и `cost`.                             |
 | `Embedder`         | `embed.Embedder`             | `nil`                                  | Нужен только для `Ingest` и `Search`.                                                    |
 | `Policy`           | `*authz.Policy`              | — (обязательно)                        | Разобранный `policy.yaml`.                                                               |
-| `GuardL2`          | `guard.Detector`             | `nil`                                  | ML-слой guard; при `nil` остаётся только детерминированный L1.                           |
-| `GuardMode`        | `kit.GuardMode`              | `kit.GuardStrict`                      | `GuardStrict` — fail-closed; `GuardDegraded` — упавший ML-слой не роняет запрос.         |
+| `GuardL2`          | `guard.Detector`             | `nil`                                  | ML-слой guard (плагин L2, не входит в сборку по умолчанию); при `nil` остаётся только детерминированный L1. |
+<!-- derived: BR-26 -->
+| `GuardFailOpen`    | `[]guard.Rail`               | `nil` (fail-closed везде)              | Рельсы, где упавший ML-слой не роняет запрос (BR-06, D73).                         |
 | `GuardMaxChars`    | `int`                        | `8000` (`guard.DefaultMaxChars`)       | Лимит текста для guard.                                                                  |
 | `GuardCacheSize`   | `int`                        | `4096` (`guard.DefaultCacheSize`)      | Размер LRU-кэша вердиктов guard.                                                         |
 | `GuardWindowChars` | `int`                        | `1024` (`guard.DefaultWindowChars`)    | Окно детекции: текст длиннее идёт перекрывающимися окнами, чтобы L2 видел хвост.         |
 | `GuardOnViolation` | `func(guard.Verdict)`        | `nil`                                  | Колбэк на каждый вердикт, кроме allow; вердикт приходит без сырых значений (`AllowPII`). |
-| `Tokenizer`        | `chunk.Tokenizer`            | `chunk.WhitespaceTokenizer{}`          | Токенайзер чанкера; ORT-токенайзера в сборке нет.                                        |
-| `ChunkSize`        | `int`                        | `400` (`chunk.DefaultSize`)            | Единиц токенайзера в чанке; у дефолтного `WhitespaceTokenizer` — слов.                   |
+| `Tokenizer`        | `chunk.Tokenizer`            | `nil`                                  | Токенайзер чанкера; без него `Ingest` — `ErrInvalidConfig` (BR-104).               |
+| `ChunkSize`        | `int`                        | `400` (`chunk.DefaultSize`)            | Единиц токенайзера в чанке; у `WhitespaceTokenizer` — слов, а не токенов.          |
 | `ChunkOverlap`     | `int`                        | `80` (`chunk.DefaultOverlap`)          | Перекрытие в тех же единицах, `< ChunkSize`.                                             |
 | `MaxSteps`         | `int`                        | `8` (`DefaultMaxSteps`)                | Лимит цикла «модель → инструменты → модель».                                             |
 | `MaxCallsPerTool`  | `int`                        | `3` (`DefaultMaxCallsPerTool`)         | Лимит вызовов одного инструмента.                                                        |
@@ -32,7 +33,8 @@
 | `HideOutput`       | `bool`                       | `false`                                | Обнулять поле `output` во всех документах.                                               |
 | `Sinks`            | `[]trace.Sink`               | `nil`                                  | Дополнительные приёмники документов (например, `trace.NewRecorder`).                     |
 | `MaxTotalTokens`   | `int`                        | `0` (без лимита)                       | Бюджет токенов хода; при превышении — `ErrBudget`.                                       |
-| `Egress`           | `EgressPolicy`               | нулевое (правило выключено)            | Правила эгресса инструментов (`RuleOfTwo`).                                              |
+| `Egress`           | `EgressPolicy`               | нулевое (Rule of Two **включён**)     | Правила эгресса инструментов (`AllowEgressAfterUntrusted`).                             |
+<!-- derived: BR-51 -->
 | `Approver`         | `Approver`                   | `nil`                                  | Кто решает по инструментам с `RequireApproval`; без него — `ErrApprovalRequired`.        |
 | `BeforeToolCall`   | `BeforeToolHook`             | `nil`                                  | App-level before-хук; хук инструмента заменяет его.                                      |
 | `AfterToolCall`    | `AfterToolHook`              | `nil`                                  | App-level after-хук; хук инструмента заменяет его.                                       |
@@ -45,6 +47,36 @@
 | `TraceProcessors`  | `[]func(*trace.Observation)` | `nil`                                  | Обработчики наблюдений перед записью: правят или отбрасывают (`Name = ""`).              |
 
 `DefaultMaxSteps`, `DefaultMaxCallsPerTool`, `DefaultToolTimeout`, `DefaultArgsMaxBytes` и `DefaultTopK` — константы пакета `kit`. `GuardMaxChars`, `GuardCacheSize`, `ChunkSize` и `ChunkOverlap` добираются конструкторами `guard.New` и `chunk.New` из констант `guard.*` и `chunk.*`.
+
+### Лимит операций (`RateLimit`)
+
+```go
+type RateLimit struct {
+    PerSecond float64
+    Burst     int
+}
+```
+
+| Поле        | Тип      | Назначение                                                        |
+| ----------- | -------- | ----------------------------------------------------------------- |
+| `PerSecond` | `float64` | Норма пополнения token bucket; `0` (нулевое значение) — лимитирование выключено. |
+| `Burst`     | `int`     | Ёмкость бакета; при `PerSecond > 0` задаёт размер начального запаса. |
+
+При исчерпании бакета операция возвращает `ErrRateLimited` **до любого I/O** — до обращения
+к провайдеру, хранилищу и guard, поэтому отказ не стоит ни одного внешнего запроса. Ключ
+бакета — `Principal.Tenant`.
+
+> Производное от BR-86 (`docs/internals/business-rules.md`).
+
+### Слои guard: L1 в сборке по умолчанию, L2 — плагин
+
+Детерминированный **L1** (фразы, regex, `Canonicalize`, `DecodedVariants`) входит в
+сборку по умолчанию и работает всегда. **L2** — ML-слой (`Config.GuardL2`) — не часть
+ядра: это опциональные плагины `guard-onnx` / `guard-remote`, которые требуют либо
+`-tags ort` (нативный ONNX Runtime), либо удалённого сервиса. При `GuardL2 == nil`
+остаётся только L1.
+
+> Производное от BR-27 (`docs/internals/business-rules.md`) и I-13.
 
 ### Политика текста трейса
 
@@ -73,14 +105,14 @@
 
 ## Переменные окружения
 
-Переменные, которые читает сам фреймворк:
+Переменные, которые читает сама библиотека:
 
 | Переменная       | По умолчанию                                | Назначение                                                         |
 | ---------------- | ------------------------------------------- | ------------------------------------------------------------------ |
 | `KIT_MODELS_DIR` | `./models`                                  | Каталог моделей: `<dir>/<org>__<name>/` (guard L2 и эмбеддер).     |
 | `KIT_ORT_LIB`    | `.ort/lib/libonnxruntime.dylib` (или `.so`) | Путь к разделяемой библиотеке ONNX Runtime; читается в ORT-сборке. |
 
-Переменные примера `demo` (не фреймворка):
+Переменные примера `demo` (не библиотеки):
 
 | Переменная             | По умолчанию                                                                | Назначение                         |
 | ---------------------- | --------------------------------------------------------------------------- | ---------------------------------- |
@@ -121,7 +153,8 @@
 | `memory.limit` (`MemoryLimit`)                                    | `20` (`DefaultMemoryLimit`)                                                                              | `App.Chat`              |
 | `memory.recall` (`MemoryRecall`)                                  | `0` (выключено; нужен `Embedder`)                                                                        | `App.Chat`              |
 | `chat.spotlight` (`Spotlight`)                                    | `on` (`SpotlightOn`, по умолчанию) / `off` (`SpotlightOff`)                                              | `App.Chat`              |
-| `rate_limit.per_second` / `rate_limit.burst` (`RateLimit`)        | `0` / `0` (лимит выключен); `>0` — token bucket на тенанта                                               | все операции фасада     |
+| `rate_limit.per_second` / `rate_limit.burst` (`RateLimit`)        | `0` / `0` — лимит выключен; `PerSecond > 0` — token bucket на тенанта; отказ `ErrRateLimited` до I/O | все операции фасада     |
+<!-- derived: BR-86 -->
 | `response_cache.size` / `response_cache.ttl` (`ResponseCache`)    | `0` / `0` (кэш выключен); кэшируются только ответы без tools                                             | `App.Chat`              |
 | `stream.window` / `stream.holdback`                               | `400` / `96` рун (константы пакета `kit`)                                                                | `App.ChatStream`        |
 | `search.rerank` (`Reranker`, `SearchRequest.Rerank`)              | выключено; при `Rerank=true` без `Reranker` — `ErrInvalidConfig`                                         | `App.Search`            |
@@ -132,7 +165,8 @@
 | `tools.timeout`                                                   | `30s`                                                                                                    | вызов инструмента       |
 | `tools.retries_on_invalid_args`                                   | `1`                                                                                                      | исполнение инструмента  |
 | `tools.effects` / `tools.egress_hosts` / `tools.require_approval` | опции инструмента                                                                                        | исполнение инструмента  |
-| `egress.rule_of_two` (`Egress.RuleOfTwo`)                         | `false`                                                                                                  | рантайм tools           |
+| `egress.allow_after_untrusted` (`Egress.AllowEgressAfterUntrusted`) | `false` — то есть Rule of Two включён по умолчанию                            | рантайм tools           |
+<!-- derived: BR-51 -->
 | `embed.max_len`                                                   | `512`                                                                                                    | локальный энкодер       |
 | `embed.batch_size`                                                | `32`                                                                                                     | локальный энкодер       |
 | `embed.sessions` (`LocalConfig.Sessions`)                         | `2`                                                                                                      | пул локального энкодера |

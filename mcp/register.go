@@ -5,27 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/gobellim/kit"
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
-// ToolPrefix is the namespace kit tools from an MCP server live under. A tool
-// called "read_file" on a server called "fs" becomes "mcp:fs:read_file", and its
-// permission is therefore "tool:mcp:fs:read_file".
 func ToolPrefix(server, tool string) string {
 	return "mcp:" + server + ":" + tool
 }
 
-// Register lists the server's tools and registers each one with the app. Every
-// tool gets the Egress effect plus EgressAny (an MCP server is an arbitrary
-// outbound dependency, so the Rule of Two and an explicit "any host" opt-in still
-// apply); the caller-supplied options are applied on top, so the caller can
-// narrow the host policy with EgressHosts, replace the description, require
-// approval or narrow the effect.
-//
-// The input schema is taken from the server verbatim; a schema the JSON Schema
-// compiler rejects fails registration with ErrInvalidConfig rather than being
-// silently dropped.
 func Register(ctx context.Context, app *kit.App, c *Client, opts ...kit.ToolOption) ([]*kit.ToolDef, error) {
 	if app == nil {
 		return nil, fmt.Errorf("mcp: app is required: %w", core.ErrInvalidConfig)
@@ -57,9 +44,6 @@ func Register(ctx context.Context, app *kit.App, c *Client, opts ...kit.ToolOpti
 	return defs, nil
 }
 
-// callHandler adapts one MCP tool to a kit tool handler. A server-reported
-// error becomes a Go error, which kit hands back to the model as data (I-11)
-// instead of failing the turn.
 func callHandler(c *Client, tool string) func(context.Context, json.RawMessage) (string, error) {
 	return func(ctx context.Context, args json.RawMessage) (string, error) {
 		res, err := c.CallTool(ctx, tool, args)

@@ -11,19 +11,16 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/gobellim/kit"
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
-// JSON-RPC 2.0 error codes used by the server.
 const (
 	codeParse          = -32700
 	codeInvalidParams  = -32602
 	codeMethodNotFound = -32601
 )
 
-// ServerTool is one tool an MCP server exposes. InputSchema is sent to the
-// client verbatim; an empty schema becomes a bare object.
 type ServerTool struct {
 	Name        string
 	Description string
@@ -31,9 +28,6 @@ type ServerTool struct {
 	Handler     func(ctx context.Context, args json.RawMessage) (string, error)
 }
 
-// FromTool adapts a kit tool: name, description and schema are the tool's own,
-// and the handler calls it through App.CallTool, so the permission, argument
-// validation, approval, egress and guard rules still apply.
 func FromTool(app *kit.App, def *kit.ToolDef) ServerTool {
 	return ServerTool{
 		Name:        def.Name(),
@@ -45,10 +39,6 @@ func FromTool(app *kit.App, def *kit.ToolDef) ServerTool {
 	}
 }
 
-// ServerConfig configures an MCP server. AllowedOrigins is the Origin allowlist
-// for the HTTP transport: an empty list rejects every request that carries an
-// Origin header (browser callers), which is the safe default against DNS
-// rebinding; non-browser clients send no Origin and are unaffected.
 type ServerConfig struct {
 	Name           string
 	Version        string
@@ -57,9 +47,6 @@ type ServerConfig struct {
 	Logger         *slog.Logger
 }
 
-// Server answers MCP JSON-RPC over stdio or streamable HTTP. It is stateless:
-// it assigns no session id and has no server-to-client notifications, so the
-// HTTP transport answers POST only.
 type Server struct {
 	cfg  ServerConfig
 	byID map[string]ServerTool
@@ -91,11 +78,8 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	return &Server{cfg: cfg, byID: byID, list: append([]ServerTool(nil), cfg.Tools...), log: log}, nil
 }
 
-// Name is the server name reported during initialize.
 func (s *Server) Name() string { return s.cfg.Name }
 
-// ServeStdio serves newline-delimited JSON-RPC from in, writing each reply to
-// out. It returns when in ends or ctx is done.
 func (s *Server) ServeStdio(ctx context.Context, in io.Reader, out io.Writer) error {
 	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 0, 64*1024), maxMessageBytes)
@@ -126,7 +110,6 @@ func (s *Server) ServeStdio(ctx context.Context, in io.Reader, out io.Writer) er
 	return sc.Err()
 }
 
-// Handler returns the streamable-HTTP handler.
 func (s *Server) Handler() http.Handler { return http.HandlerFunc(s.serveHTTP) }
 
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
@@ -171,8 +154,6 @@ func (s *Server) originAllowed(r *http.Request) bool {
 	return false
 }
 
-// srvRequest is an incoming JSON-RPC message. ID keeps the raw form so any id
-// type (number or string) is echoed back unchanged.
 type srvRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id,omitempty"`
@@ -192,8 +173,6 @@ type srvError struct {
 	Message string `json:"message"`
 }
 
-// handle processes one message; a nil result means the message was a
-// notification and needs no reply.
 func (s *Server) handle(ctx context.Context, raw []byte) *srvResponse {
 	var req srvRequest
 	if err := json.Unmarshal(raw, &req); err != nil {

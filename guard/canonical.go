@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -16,30 +17,72 @@ func isInvisible(r rune) bool {
 	switch {
 	case r >= 0x200B && r <= 0x200F,
 		r >= 0x202A && r <= 0x202E,
+		r == 0x00AD,
+		r == 0x034F,
+		r == 0x061C,
+		r == 0x180E,
 		r == 0x2060,
 		r == 0xFEFF:
+		return true
+	case r >= 0x2061 && r <= 0x2064:
 		return true
 	}
 	return false
 }
 
-var homoglyphs = map[rune]rune{
-	'А': 'a', 'В': 'b', 'Е': 'e', 'К': 'k', 'М': 'm', 'Н': 'h',
-	'О': 'o', 'Р': 'p', 'С': 'c', 'Т': 't', 'У': 'y', 'Х': 'x',
-	'а': 'a', 'е': 'e', 'о': 'o', 'р': 'p', 'с': 'c', 'у': 'y', 'х': 'x',
+var confusables = map[rune][]rune{
+	'a': {'а', 'α'},
+	'b': {'в'},
+	'c': {'с'},
+	'd': {'ԁ'},
+	'e': {'е', 'ε'},
+	'g': {'ɡ'},
+	'h': {'н', 'һ'},
+	'i': {'і', 'ї', 'ι', 'ı'},
+	'j': {'ј'},
+	'k': {'к', 'κ'},
+	'l': {'ӏ'},
+	'm': {'м'},
+	'n': {'Ν', 'ν'},
+	'o': {'о', 'ο', 'օ'},
+	'p': {'р', 'ρ'},
+	's': {'ѕ', 'σ', 'ς'},
+	't': {'т', 'τ', 'տ'},
+	'u': {'μ', 'υ'},
+	'x': {'х', 'χ'},
+	'y': {'у'},
+	'z': {'ζ'},
 }
 
-// Canonicalize folds text to a comparable form: NFKC, then case folding with
-// invisible/homoglyph/full-width normalisation, then NFKC again — the second
-// pass composes sequences that the case folding made composable.
+var homoglyphs = buildHomoglyphs()
+
+func buildHomoglyphs() map[rune]rune {
+	latins := make([]rune, 0, len(confusables))
+	for latin := range confusables {
+		latins = append(latins, latin)
+	}
+	sort.Slice(latins, func(i, j int) bool { return latins[i] < latins[j] })
+
+	out := make(map[rune]rune, 64)
+	for _, latin := range latins {
+		for _, r := range confusables[latin] {
+			out[r] = latin
+			if lo := unicode.ToLower(r); lo != r {
+				out[lo] = latin
+			}
+			if up := unicode.ToUpper(r); up != r && unicode.ToLower(up) == r {
+				out[up] = latin
+			}
+		}
+	}
+	return out
+}
+
 func Canonicalize(text string) string {
 	out, _ := canonicalizeMap(text)
 	return out
 }
 
-// runeSpans maps every rune of a derived string to the half-open range of runes
-// in the source string that produced it. Ranges are ordered and never empty, so a
-// derived span [a,b) covers source [start[a], end[b-1]).
 type runeSpans struct {
 	start []int
 	end   []int
@@ -47,11 +90,6 @@ type runeSpans struct {
 
 func (s runeSpans) len() int { return len(s.start) }
 
-// canonicalizeMap returns Canonicalize(text) together with the source range of
-// every rune of the result, indexing []rune(text). Offsets from a detector are in
-// canonical space, but text is masked in the original space: canonicalisation can
-// drop runes (zero-width, bidi) or join them, so findings must be mapped back or a
-// mask would cover the wrong characters and leak the tail of a span.
 func canonicalizeMap(text string) (string, runeSpans) {
 	san, sp1 := sanitizeSpans(text)
 	nfc1, sp2 := nfkcSpans(san)
@@ -60,9 +98,6 @@ func canonicalizeMap(text string) (string, runeSpans) {
 	return out, composeSpans(composeSpans(composeSpans(sp4, sp3), sp2), sp1)
 }
 
-// sanitizeSpans mirrors strings.ToValidUTF8(text, "\uFFFD"): each maximal run of
-// invalid bytes collapses to a single U+FFFD. Spans index []rune(text), where
-// []rune counts every invalid byte as its own rune.
 func sanitizeSpans(text string) (string, runeSpans) {
 	var b strings.Builder
 	b.Grow(len(text))
@@ -91,10 +126,6 @@ func sanitizeSpans(text string) (string, runeSpans) {
 	return b.String(), sp
 }
 
-// nfkcSpans applies NFKC one normalisation segment at a time, so it can report
-// which source runes produced each output rune. Splitting at NFKC boundaries
-// keeps the concatenation of the per-segment results equal to normalising the
-// whole string.
 func nfkcSpans(s string) (string, runeSpans) {
 	var b strings.Builder
 	b.Grow(len(s))
@@ -117,8 +148,6 @@ func nfkcSpans(s string) (string, runeSpans) {
 	return b.String(), sp
 }
 
-// foldSpans is the case/invisible/homoglyph/digit fold, rune for rune. An
-// invisible rune emits nothing, so it owns no canonical rune.
 func foldSpans(s string) (string, runeSpans) {
 	var b strings.Builder
 	b.Grow(len(s))
@@ -145,8 +174,6 @@ func foldSpans(s string) (string, runeSpans) {
 	return b.String(), sp
 }
 
-// composeSpans folds two hops into one: a maps a derived string to an
-// intermediate one, b maps that intermediate to the original.
 func composeSpans(a, b runeSpans) runeSpans {
 	out := runeSpans{start: make([]int, len(a.start)), end: make([]int, len(a.start))}
 	for i := range a.start {
@@ -163,7 +190,8 @@ var (
 )
 
 const (
-	maxDecodedVariants = 8
+	maxDecodedVariants = 24
+	maxDecodeRounds    = 2
 	maxDecodedLen      = 4096
 )
 
@@ -173,20 +201,67 @@ func DecodedVariants(text string) []string {
 		return out
 	}
 	seen := make(map[string]bool)
+	var first string
+	var printable, binary []string
 	add := func(s string) {
-		if len(out) >= maxDecodedVariants || s == "" {
+		if s == "" || len(s) > maxDecodedLen {
 			return
-		}
-		if len(s) > maxDecodedLen {
-			s = s[:maxDecodedLen]
 		}
 		if seen[s] {
 			return
 		}
 		seen[s] = true
-		out = append(out, s)
+		switch {
+		case first == "":
+			first = s
+		case readableText(s):
+			printable = append(printable, s)
+		default:
+			binary = append(binary, s)
+		}
 	}
 
+	decode(text, add)
+	for round := 1; round < maxDecodeRounds; round++ {
+		before := len(printable) + len(binary)
+		for _, s := range append(append([]string{}, printable...), binary...) {
+			decode(s, add)
+		}
+		if first != "" {
+			decode(first, add)
+		}
+		if len(printable)+len(binary) == before {
+			break
+		}
+	}
+	if first != "" {
+		out = append(out, first)
+	}
+	for _, s := range append(printable, binary...) {
+		if len(out) >= maxDecodedVariants {
+			break
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+func readableText(s string) bool {
+	for _, r := range s {
+		switch {
+		case r == ' ', r == '\t', r == '\n', r == '\r':
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r >= 0x0370 && r <= 0x03FF,
+			r >= 0x0400 && r <= 0x04FF:
+		case strings.ContainsRune(".,;:!?-_/()[]{}\"'`+=*:@#$%&<>~^|\\_", r):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func decode(text string, add func(string)) {
 	for _, m := range base64Re.FindAllString(text, -1) {
 		tryBase64(m, add)
 	}
@@ -195,12 +270,61 @@ func DecodedVariants(text string) []string {
 			add(string(d))
 		}
 	}
-	for _, m := range percentRe.FindAllString(text, -1) {
-		if d, err := url.PathUnescape(m); err == nil {
+	for _, loc := range percentRe.FindAllStringIndex(text, -1) {
+		if d, err := url.PathUnescape(text[loc[0]:loc[1]]); err == nil {
+			add(d)
+		}
+		if d, err := url.PathUnescape(percentToken(text, loc[0], loc[1])); err == nil {
 			add(d)
 		}
 	}
+	for _, token := range formTokens(text) {
+		if !strings.ContainsAny(token, "+%") {
+			continue
+		}
+		if d, err := url.QueryUnescape(token); err == nil {
+			add(d)
+		}
+	}
+}
+
+func formTokens(text string) []string {
+	var out []string
+	start := -1
+	for i := range len(text) {
+		if percentDelim(text[i]) {
+			if start >= 0 {
+				out = append(out, text[start:i])
+				start = -1
+			}
+			continue
+		}
+		if start < 0 {
+			start = i
+		}
+	}
+	if start >= 0 {
+		out = append(out, text[start:])
+	}
 	return out
+}
+
+func percentToken(text string, start, end int) string {
+	for start > 0 && !percentDelim(text[start-1]) {
+		start--
+	}
+	for end < len(text) && !percentDelim(text[end]) {
+		end++
+	}
+	return text[start:end]
+}
+
+func percentDelim(b byte) bool {
+	switch b {
+	case ' ', '\t', '\n', '\r', '\f', '\v', '"', '\'', '<', '>', '`':
+		return true
+	}
+	return false
 }
 
 func tryBase64(s string, add func(string)) {

@@ -22,16 +22,16 @@
 | `ErrBudget`           | превышен `Config.MaxTotalTokens` за ход                                                                 | цикл              |
 | `ErrRateLimited`      | исчерпан лимит на тенанта (`Config.RateLimit`, `BR-86`)                                                 | примитив / ops    |
 | `ErrApprovalRequired` | инструмент с `RequireApproval` без `Approver`, отказ или повтор fingerprint                             | approval          |
-| `ErrToolNotFound`     | **зарезервирован** (сейчас неизвестный инструмент → результат-ошибка)                                   | —                 |
-| `ErrTool`             | **зарезервирован** (сейчас сбой инструмента → результат-ошибка)                                         | —                 |
-| `ErrNotFound`         | **зарезервирован** для приложения и адаптеров                                                           | —                 |
+| `ErrToolNotFound`     | `App.CallTool` для неизвестного инструмента (в `Chat` — результат-ошибка модели)                        | CallTool          |
+| `ErrTool`             | сбой, помеченный как падение внутри инструмента: ошибка хука или сбой MCP-инструмента                   | инструмент        |
+| `ErrNotFound`         | в `eval` — трейс, который рекордер не получил                                                           | eval              |
 
 > [!NOTE]
-> Три зарезервированных sentinel’а (`ErrToolNotFound`, `ErrTool`, `ErrNotFound`)
-> объявлены и размечаются (`error_kind`), но операции фасада их сейчас не
-> возвращают. `ErrRateLimited` — действующий: его возвращает лимит на тенанта
-> (`Config.RateLimit`); 429 провайдера обрабатывает HTTP-слой (`Retry-After`), а
-> после исчерпания ретраев он приходит как `ErrProvider`.
+> Эти три sentinel’а объявлены и размечаются (`error_kind`), и все три имеют
+> реальные сайты возврата, но **операции фасада их не возвращают**: `ErrToolNotFound`
+> приходит из `CallTool` (не из `Chat`), `ErrTool` — из обёртки сбоя инструмента, а
+> `ErrNotFound` — из пакета `eval`. На них нельзя опираться в коде, который ждёт их
+> от `App.Chat`/`App.Generate`.
 
 ## `errors.Is` против `errors.As`
 
@@ -98,7 +98,7 @@ if errors.As(err, &reject) {
 | Фатально (ход прерывается, ошибка наружу)         | Возвращается модели как `{"error": …}`                    |
 | ------------------------------------------------- | --------------------------------------------------------- |
 | RBAC-отказ (нет права на инструмент)              | неизвестный инструмент                                    |
-| эгресс-отказ (`RuleOfTwo`/host-allowlist)         | превышен `max_calls` по инструменту                       |
+| эгресс-отказ (Rule of Two / host-allowlist)       | превышен `max_calls` по инструменту                       |
 | ошибка провайдера (`ErrProvider`)                 | аргументы больше `ArgsMaxBytes`                           |
 | отмена/дедлайн контекста                          | **первый** невалидный набор args (BR-23)                  |
 | отсутствие подтверждения (`ErrApprovalRequired`)  | сбой внутри инструмента                                   |
@@ -251,29 +251,32 @@ func isInfra(err error) bool {
 уместен только для хода без побочных эффектов (только `EffectRead`-инструменты):
 
 ```go
-func chatReadOnly(ctx context.Context, app *kit.App, req kit.ChatRequest) (model.Message, error) {
+func chatReadOnly(ctx context.Context, app *kit.App, req kit.ChatRequest) (kit.Response, error) {
 	backoff := 200 * time.Millisecond
 	for attempt := 0; attempt < 3; attempt++ {
-		msg, err := app.Chat(ctx, req)
+		res, err := app.Chat(ctx, req)
 		if err == nil {
-			return msg, nil
+			return res, nil
 		}
 		if !model.Retryable(err) { // см. model/http.go
-			return model.Message{}, err
+			return res, err // res всё равно несёт TraceID и Decision
 		}
 		select {
 		case <-ctx.Done():
-			return model.Message{}, ctx.Err()
+			return res, ctx.Err()
 		case <-time.After(backoff):
 		}
 		backoff *= 2
 	}
-	return model.Message{}, fmt.Errorf("chat: retries exhausted")
+	return kit.Response{}, fmt.Errorf("chat: retries exhausted")
 }
 ```
 
 Транспортные ретраи и `Retry-After` уже встроены в клиент провайдера — этот цикл
 добавляется поверх, и только когда повтор безопасен.
+Для effectful-инструментов дедуп делается на стороне эффекта: инструмент читает
+стабильный ключ вызова через `kit.IdempotencyKey(ctx)` (`BR-105`) и передаёт его
+downstream.
 
 ### Показать ошибку инструмента, не раскрывая внутренности
 
@@ -314,8 +317,9 @@ func userFacingToolError(err error) string {
 
 ## Ограничения
 
-- Три зарезервированных sentinel’а (`ErrToolNotFound`, `ErrTool`, `ErrNotFound`)
-  операции фасада не возвращают; на них нельзя опираться в вызывающем коде.
+- `ErrToolNotFound`, `ErrTool` и `ErrNotFound` имеют реальные сайты возврата
+  (`App.CallTool`, обёртка сбоя инструмента, `eval`), но операции фасада их не
+  возвращают: опирайтесь на `errors.Is` только на границах, где эти вызовы есть.
 - Повтор (ретрай) есть только на уровне HTTP-транспорта провайдера; идемпотентности
   операций фасада `kit` не гарантирует.
 - Нет отдельных sentinel’ов для «частичного успеха» `_bulk`/`_delete_by_query`:

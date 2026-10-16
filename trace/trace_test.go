@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gobellim/kit/internal/id"
-	"github.com/gobellim/kit/store"
+	"github.com/KirillYuzh/Gobellim/internal/id"
+	"github.com/KirillYuzh/Gobellim/store"
 )
 
 type captured struct {

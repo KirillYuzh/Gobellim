@@ -3,11 +3,9 @@ package gliner
 import (
 	"testing"
 
-	"github.com/gobellim/kit/guard"
+	"github.com/KirillYuzh/Gobellim/guard"
 )
 
-// The label→category mapping decides whether a turn is rejected, so it is pure
-// and covered without the native runtime.
 func TestCategoryForClassHonoursGroupTask(t *testing.T) {
 	cm := map[string]string{
 		"unsafe":      "UNSAFE",
@@ -39,7 +37,6 @@ func TestCategoryForClassHonoursGroupTask(t *testing.T) {
 	}
 }
 
-// Entity labels default to PII, and category_map still decides.
 func TestCategoryForLabelDefaults(t *testing.T) {
 	cm := map[string]string{"not_a_secret": "SAFE", "token": "SECRET"}
 	if cat, ok := categoryForLabel(cm, "person", guard.CatPII); !ok || cat != guard.CatPII {
@@ -53,8 +50,6 @@ func TestCategoryForLabelDefaults(t *testing.T) {
 	}
 }
 
-// The export writes its threshold as cls_threshold; the go side used to ignore it
-// and silently fall back to the built-in default.
 func TestThresholdPrecedence(t *testing.T) {
 	if got := thresholdFor(0.7, 0, nil, "x"); got != 0.7 {
 		t.Fatalf("cls_threshold ignored: got %v, want 0.7", got)

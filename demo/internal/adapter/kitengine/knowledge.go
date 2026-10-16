@@ -8,9 +8,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gobellim/kit"
-	"github.com/gobellim/kit/demo/internal/domain"
-	"github.com/gobellim/kit/store"
+	"github.com/KirillYuzh/Gobellim"
+	"github.com/KirillYuzh/Gobellim/demo/internal/domain"
+	"github.com/KirillYuzh/Gobellim/store"
 )
 
 const maxListedDocs = 1000

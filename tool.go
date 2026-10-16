@@ -6,10 +6,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 
-	"github.com/gobellim/kit/authz"
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/authz"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 	invopop "github.com/invopop/jsonschema"
 	stjs "github.com/santhosh-tekuri/jsonschema/v6"
 )
@@ -38,13 +39,33 @@ func (e Effect) String() string {
 func (e Effect) IsEgress() bool { return e == EffectEgress }
 
 type ToolCallInfo struct {
-	UserID      string
-	Tenant      string
-	Tool        string
-	Args        string
+	UserID string
+	Tenant string
+	Tool   string
+	Args   string
+	// Fingerprint is the stable key of this call: sha256 of the tool name and its
+	// canonical arguments — the same value kit.IdempotencyKey exposes to the tool.
 	Fingerprint string
 	Effect      Effect
 	CallIndex   int
+}
+
+type idempotencyKeyCtxKey struct{}
+
+// withIdempotencyKey carries the call's idempotency key to the tool function.
+func withIdempotencyKey(ctx context.Context, key string) context.Context {
+	return context.WithValue(ctx, idempotencyKeyCtxKey{}, key)
+}
+
+// IdempotencyKey returns the stable key of the current tool call: sha256 of the
+// tool name and its canonical arguments (the same value as
+// ToolCallInfo.Fingerprint). It is stable across repeats of the same call, so an
+// effectful tool can forward it downstream (e.g. as an "Idempotency-Key" header)
+// and let the effect deduplicate instead of applying twice. It returns "" outside
+// a kit.Tool call.
+func IdempotencyKey(ctx context.Context) string {
+	key, _ := ctx.Value(idempotencyKeyCtxKey{}).(string)
+	return key
 }
 
 type BeforeToolHook func(ctx context.Context, info ToolCallInfo) (proceed bool, output string, err error)
@@ -174,14 +195,10 @@ func EgressHosts(hosts ...string) ToolOption {
 
 func EgressAny() ToolOption { return func(o *toolOptions) { o.egressAny = true } }
 
-// AllowPII lets the runtime put the values the input guard masked back into this
-// tool's arguments, but only when each placeholder stands for exactly one value.
 func AllowPII(b bool) ToolOption { return func(o *toolOptions) { o.allowPII = b } }
 
 func RequireApproval(b bool) ToolOption { return func(o *toolOptions) { o.requireApproval = b } }
 
-// ValidateOutput makes the runtime check the result against the Out schema and,
-// on a mismatch, hand the model an error result instead of the data.
 func ValidateOutput(b bool) ToolOption { return func(o *toolOptions) { o.validateOutput = b } }
 
 func ModelView(f func(string) string) ToolOption {
@@ -273,10 +290,6 @@ func Tool[In, Out any](app *App, name string, fn func(ctx context.Context, in In
 	return def, nil
 }
 
-// RawTool registers a tool whose JSON Schema is supplied verbatim instead of
-// being derived from a Go type. It exists for tools whose schema comes from
-// outside the program (an MCP server). args is the raw JSON argument object;
-// fn returns the result the model sees. An empty schema becomes a bare object.
 func RawTool(app *App, name string, schema json.RawMessage, fn func(ctx context.Context, args json.RawMessage) (string, error), opts ...ToolOption) (*ToolDef, error) {
 	if app == nil {
 		return nil, fmt.Errorf("kit: app is required: %w", core.ErrInvalidConfig)
@@ -339,10 +352,16 @@ func (a *App) register(def *ToolDef) {
 
 func schemaFor[T any]() (json.RawMessage, error) {
 	var v T
+	if !reflect.ValueOf(v).IsValid() {
+		return json.RawMessage(`{}`), nil
+	}
 	return reflectSchema(v)
 }
 
 func reflectSchema(v any) (json.RawMessage, error) {
+	if !reflect.ValueOf(v).IsValid() {
+		return json.RawMessage(`{}`), nil
+	}
 	r := &invopop.Reflector{DoNotReference: true, ExpandedStruct: true}
 	raw, err := json.Marshal(r.Reflect(v))
 	if err != nil {
@@ -378,9 +397,6 @@ func compileSchema(name string, raw json.RawMessage) (*stjs.Schema, error) {
 	return comp, nil
 }
 
-// decodeAnswer unmarshals text into dst only if it is JSON that matches the
-// schema sent to the model. json.Unmarshal alone accepts a document with missing
-// or extra fields, which would yield a silently wrong value.
 func decodeAnswer[T any](text string, compiled *stjs.Schema, dst *T) error {
 	trimmed := strings.TrimSpace(text)
 	var raw any

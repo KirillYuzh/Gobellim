@@ -132,7 +132,7 @@ func RawRequest(method, path string, body []byte, contentType string) Request
 | `usage.prompt_tokens`     | `integer`                   | Токены промпта.                                                                 |
 | `usage.completion_tokens` | `integer`                   | Токены ответа.                                                                  |
 | `usage.total_tokens`      | `integer`                   | Всего токенов.                                                                  |
-| `usage.cost`              | `double`                    | Стоимость; framework считает её по `Config.Pricing` (`0`, если цена не задана). |
+| `usage.cost`              | `double`                    | Стоимость; библиотека считает её по `Config.Pricing` (`0`, если цена не задана). |
 
 Score пишется сюда же: `kind: SCORE`, `trace_id`, `name`, `score`, `comment`.
 

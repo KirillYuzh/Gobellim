@@ -14,8 +14,6 @@ func hitsFromIDs(ids []string) []Hit {
 	return out
 }
 
-// RRF must emit each id once, ordered by non-increasing score with the id as the
-// tie-break, capped by topK, and be deterministic regardless of map iteration.
 func FuzzRRF(f *testing.F) {
 	f.Add("a\nb\nc", "b\na", 60, 10)
 	f.Add("a\na\nb", "", 0, 0)

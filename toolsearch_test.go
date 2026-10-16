@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/gobellim/kit/model"
+	"github.com/KirillYuzh/Gobellim/model"
 )
 
 const toolSearchPolicy = `
@@ -128,7 +128,6 @@ func names(specs []model.ToolSpec) []string {
 	return out
 }
 
-// exposed is the tool set of the most recent model request.
 func exposed(llm *scripted) []model.ToolSpec {
 	if len(llm.got) == 0 {
 		return nil

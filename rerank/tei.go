@@ -6,13 +6,10 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/gobellim/kit/internal/core"
-	"github.com/gobellim/kit/internal/httpjson"
+	"github.com/KirillYuzh/Gobellim/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/httpjson"
 )
 
-// TEIConfig configures a reranker that speaks the text-embeddings-inference
-// /rerank contract (also served, with a different envelope, by Cohere-compatible
-// endpoints).
 type TEIConfig struct {
 	BaseURL    string
 	Model      string
@@ -21,7 +18,6 @@ type TEIConfig struct {
 	HTTPClient *http.Client
 }
 
-// TEIClient is a reranker backed by an HTTP cross-encoder server.
 type TEIClient struct {
 	cfg TEIConfig
 	hc  *http.Client
@@ -65,8 +61,6 @@ func (c *TEIClient) Rerank(ctx context.Context, query string, documents []string
 	return ranks, nil
 }
 
-// item accepts both the TEI envelope ({index, score}) and the Cohere-compatible
-// one ({index, relevance_score}).
 type item struct {
 	Index          int     `json:"index"`
 	Score          float64 `json:"score"`

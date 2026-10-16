@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/gobellim/kit/demo/internal/domain"
+	"github.com/KirillYuzh/Gobellim/demo/internal/domain"
 )
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

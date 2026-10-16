@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gobellim/kit/demo/internal/domain"
-	"github.com/gobellim/kit/demo/internal/usecase"
+	"github.com/KirillYuzh/Gobellim/demo/internal/domain"
+	"github.com/KirillYuzh/Gobellim/demo/internal/usecase"
 )
 
 const maxBodyBytes = 1 << 20
@@ -96,6 +96,58 @@ func handleAsk(bot *usecase.Bot, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, askResponse{Answer: answer.Content})
+	}
+}
+
+type triageRequest struct {
+	Text string `json:"text"`
+}
+
+type triageResponse struct {
+	Severity int    `json:"severity"`
+	Summary  string `json:"summary"`
+}
+
+func handleTriage(bot *usecase.Bot, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := domain.PrincipalFrom(r.Context())
+		if !ok {
+			fail(w, log, domain.ErrUnauthorized)
+			return
+		}
+		var req triageRequest
+		if err := decode(w, r, &req); err != nil {
+			fail(w, log, err)
+			return
+		}
+		ticket, err := bot.Triage(r.Context(), principal, req.Text)
+		if err != nil {
+			fail(w, log, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, triageResponse{Severity: ticket.Severity, Summary: ticket.Summary})
+	}
+}
+
+// handleStats reads the mock second store. It is admin-only: the demo enforces
+// its own RBAC here, the same way a real service would.
+func handleStats(audit usecase.Auditor, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := domain.PrincipalFrom(r.Context())
+		if !ok {
+			fail(w, log, domain.ErrUnauthorized)
+			return
+		}
+		if principal.Role != domain.RoleAdmin {
+			fail(w, log, domain.ErrForbidden)
+			return
+		}
+		stats, err := audit.Stats(r.Context())
+		if err != nil {
+			fail(w, log, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, stats)
 	}
 }
 

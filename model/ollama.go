@@ -6,13 +6,15 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 type OllamaConfig struct {
 	BaseURL    string
 	Model      string
 	HTTPClient *http.Client
+
+	ContextTokens int
 }
 
 type OllamaClient struct {
@@ -26,6 +28,9 @@ func NewOllama(cfg OllamaConfig) (*OllamaClient, error) {
 	}
 	if cfg.Model == "" {
 		return nil, fmt.Errorf("model: ollama: Model is required: %w", core.ErrInvalidConfig)
+	}
+	if cfg.ContextTokens < 0 {
+		return nil, fmt.Errorf("model: ollama: ContextTokens must not be negative, got %d: %w", cfg.ContextTokens, core.ErrInvalidConfig)
 	}
 	return &OllamaClient{cfg: cfg, hc: httpClient(cfg.HTTPClient)}, nil
 }

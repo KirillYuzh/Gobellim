@@ -13,20 +13,21 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gobellim/kit/authz"
-	"github.com/gobellim/kit/demo/internal/adapter/elastic"
-	"github.com/gobellim/kit/demo/internal/adapter/guardrail"
-	"github.com/gobellim/kit/demo/internal/adapter/httpapi"
-	"github.com/gobellim/kit/demo/internal/adapter/kitengine"
-	"github.com/gobellim/kit/demo/internal/adapter/memory"
-	"github.com/gobellim/kit/demo/internal/adapter/weather"
-	"github.com/gobellim/kit/demo/internal/config"
-	"github.com/gobellim/kit/demo/internal/domain"
-	"github.com/gobellim/kit/demo/internal/seed"
-	"github.com/gobellim/kit/demo/internal/usecase"
-	"github.com/gobellim/kit/embed"
-	"github.com/gobellim/kit/model"
-	"github.com/gobellim/kit/trace"
+	"github.com/KirillYuzh/Gobellim/authz"
+	"github.com/KirillYuzh/Gobellim/demo/internal/adapter/audit"
+	"github.com/KirillYuzh/Gobellim/demo/internal/adapter/elastic"
+	"github.com/KirillYuzh/Gobellim/demo/internal/adapter/guardrail"
+	"github.com/KirillYuzh/Gobellim/demo/internal/adapter/httpapi"
+	"github.com/KirillYuzh/Gobellim/demo/internal/adapter/kitengine"
+	"github.com/KirillYuzh/Gobellim/demo/internal/adapter/memory"
+	"github.com/KirillYuzh/Gobellim/demo/internal/adapter/weather"
+	"github.com/KirillYuzh/Gobellim/demo/internal/config"
+	"github.com/KirillYuzh/Gobellim/demo/internal/domain"
+	"github.com/KirillYuzh/Gobellim/demo/internal/seed"
+	"github.com/KirillYuzh/Gobellim/demo/internal/usecase"
+	"github.com/KirillYuzh/Gobellim/embed"
+	"github.com/KirillYuzh/Gobellim/model"
+	"github.com/KirillYuzh/Gobellim/trace"
 )
 
 func main() {
@@ -100,7 +101,8 @@ func run() error {
 		{ID: "u-root", Login: "root", Role: domain.RoleAdmin},
 	})
 	auth := usecase.NewAuth(directory, memory.NewTokens(), cfg.TokenTTL)
-	bot := usecase.NewBot(engine)
+	auditor := audit.NewMemory()
+	bot := usecase.NewBot(engine, auditor)
 	kb := usecase.NewKnowledge(engine)
 
 	if cfg.SeedKB {
@@ -118,7 +120,7 @@ func run() error {
 
 	server := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(auth, bot, kb, log),
+		Handler:           httpapi.New(auth, bot, kb, auditor, log),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 const (
@@ -48,9 +48,7 @@ type SearchQuery struct {
 	TopK          int
 	NumCandidates int
 	Filter        Filter
-	// EmbedModel restricts the search to chunks produced by this embedder.
-	// Empty disables the restriction.
-	EmbedModel string
+	EmbedModel    string
 
 	filterQuery map[string]any
 }

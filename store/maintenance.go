@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 func DeleteByDocBody(docID, tenant string) ([]byte, error) {
@@ -29,10 +29,6 @@ func DeleteByDocBody(docID, tenant string) ([]byte, error) {
 	return json.Marshal(body)
 }
 
-// DeleteByDocVersionBody removes every chunk of a document except the chunks of
-// keepVersion. Ingest writes the new version first and then calls this, so a
-// failure between the two leaves duplicated (self-healing) chunks instead of
-// losing the document.
 func DeleteByDocVersionBody(docID, tenant string, keepVersion int64) ([]byte, error) {
 	if strings.TrimSpace(docID) == "" {
 		return nil, fmt.Errorf("store: delete by doc requires a doc id: %w", core.ErrInvalidArgs)

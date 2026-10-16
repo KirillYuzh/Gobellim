@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gobellim/kit/authz"
-	"github.com/gobellim/kit/guard"
-	"github.com/gobellim/kit/internal/call"
-	"github.com/gobellim/kit/model"
+	"github.com/KirillYuzh/Gobellim/authz"
+	"github.com/KirillYuzh/Gobellim/guard"
+	"github.com/KirillYuzh/Gobellim/internal/call"
+	"github.com/KirillYuzh/Gobellim/model"
 )
 
 type passthroughGuard struct{}
@@ -23,8 +23,6 @@ type phoneIn struct {
 	Phone string `json:"phone"`
 }
 
-// piiTool builds a tool whose handler records the phone it received and echoes it
-// back, so a test can see both directions.
 func piiTool(t *testing.T, name string, allowPII bool, got *string) *ToolDef {
 	t.Helper()
 	schema, err := schemaFor[phoneIn]()

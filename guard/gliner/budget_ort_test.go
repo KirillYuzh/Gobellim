@@ -9,13 +9,9 @@ import (
 
 	"github.com/daulet/tokenizers"
 
-	"github.com/gobellim/kit/guard"
+	"github.com/KirillYuzh/Gobellim/guard"
 )
 
-// The detection window must fit inside the model's token budget. If it did not,
-// prepare() would drop the tail of every window, and the next window's step — the
-// window minus the overlap — could skip straight past the dropped runes, leaving a
-// stretch of text no layer ever sees.
 func TestWindowFitsTokenBudget(t *testing.T) {
 	tk, err := tokenizers.FromFile(filepath.Join("..", "..", "models", DefaultModel, "tokenizer.json"))
 	if err != nil {
@@ -23,7 +19,6 @@ func TestWindowFitsTokenBudget(t *testing.T) {
 	}
 	defer func() { _ = tk.Close() }()
 
-	// Russian at the shipped window size, the densest script the framework targets.
 	base := "Сотрудник отдела логистики подготовил квартальный отчёт и передал его в бухгалтерию для сверки. "
 	text := ""
 	for len([]rune(text)) < guard.DefaultWindowChars {
@@ -37,7 +32,6 @@ func TestWindowFitsTokenBudget(t *testing.T) {
 	}
 	t.Logf("window %d runes -> %d tokens (budget %d)", guard.DefaultWindowChars, len(ids), DefaultMaxTokens)
 
-	// English control, to show the margin is not a property of one script.
 	en := strings.Repeat("The quick brown fox jumps over the lazy dog. ", 40)
 	idsEN, _ := tk.Encode(string([]rune(en)[:guard.DefaultWindowChars]), false)
 	if len(idsEN) > DefaultMaxTokens {

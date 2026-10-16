@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 func decodeBody(t *testing.T, r *http.Request) map[string]any {

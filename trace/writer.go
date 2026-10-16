@@ -12,8 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gobellim/kit/internal/core"
-	"github.com/gobellim/kit/store"
+	"github.com/KirillYuzh/Gobellim/internal/core"
+	"github.com/KirillYuzh/Gobellim/store"
 )
 
 const (
@@ -79,9 +79,6 @@ type Writer struct {
 }
 
 func NewWriter(opts Options) (*Writer, error) {
-	if opts.ES == nil {
-		return nil, fmt.Errorf("trace: ES client is required: %w", core.ErrInvalidConfig)
-	}
 	if opts.QueueSize <= 0 {
 		opts.QueueSize = DefaultQueueSize
 	}
@@ -138,8 +135,12 @@ func NewWriter(opts Options) (*Writer, error) {
 		}
 	}
 
-	w.wg.Add(1)
-	go w.run()
+	// Without a store there is nothing to flush to: the writer keeps forwarding to
+	// the configured Sinks, but no ES goroutine is started.
+	if w.opts.ES != nil {
+		w.wg.Add(1)
+		go w.run()
+	}
 	return w, nil
 }
 
@@ -232,6 +233,9 @@ func estimateSize(raw []byte, stream, id string) int {
 }
 
 func (w *Writer) enqueue(it item) {
+	if w.opts.ES == nil {
+		return
+	}
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	select {
@@ -255,10 +259,8 @@ func (w *Writer) countDropped(reason string) {
 
 func (w *Writer) Dropped() int64 { return w.dropped.Load() }
 
-// QueueDepth is the number of documents waiting in the writer queue.
 func (w *Writer) QueueDepth() int { return len(w.ch) }
 
-// QueueCapacity is the writer queue's capacity.
 func (w *Writer) QueueCapacity() int { return cap(w.ch) }
 
 func (w *Writer) Close(ctx context.Context) error {

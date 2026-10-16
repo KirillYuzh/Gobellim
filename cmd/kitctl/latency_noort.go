@@ -5,7 +5,7 @@ package main
 import (
 	"errors"
 
-	"github.com/gobellim/kit/guard"
+	"github.com/KirillYuzh/Gobellim/guard"
 )
 
 func newL2Detector(string, string) (guard.Detector, error) {

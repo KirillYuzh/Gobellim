@@ -39,5 +39,9 @@ models/
 # .idea/
 # .vscode/
 
-# Temporary working notes
-REFACTOR-PLAN.md
+# Built tool binaries
+/docslint
+/guardqual
+
+# Turbopack cache at the repository root, written by site/next.config.mjs
+/.next/

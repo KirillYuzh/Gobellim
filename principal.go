@@ -3,7 +3,7 @@ package kit
 import (
 	"context"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 type Principal = core.Principal

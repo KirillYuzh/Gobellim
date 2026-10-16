@@ -5,20 +5,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
-)
 
-type Rail string
-
-const (
-	RailInput      Rail = "input"
-	RailRetrieval  Rail = "retrieval"
-	RailExecution  Rail = "execution"
-	RailOutput     Rail = "output"
-	RailToolResult Rail = "tool_result"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 type Action int
@@ -77,28 +71,31 @@ type Verdict struct {
 	Tripwire *Tripwire
 	Version  string
 
-	// Substitutions carries the values the mask replaced, so a caller can
-	// rehydrate them for a tool that opted in. It is set only when Action is
-	// Mask. Values are raw user data: never trace or log them.
 	Substitutions []Substitution
 
-	// Degraded is true when an optional layer failed and the verdict was
-	// produced by the remaining layers. DegradedReason holds the layer errors.
 	Degraded       bool
 	DegradedReason string
+
+	Truncated      bool
+	InspectedRunes int
 }
 
-// Substitution is one masked span: the placeholder written into the text and the
-// value it replaced. The value is tagged out of JSON so it cannot leave through
-// a serialised verdict.
+func (v Verdict) ObservationMetadata() map[string]any {
+	if !v.Truncated {
+		return nil
+	}
+	return map[string]any{
+		"truncated":       true,
+		"inspected_chars": v.InspectedRunes,
+	}
+}
+
 type Substitution struct {
 	Placeholder string
 	Category    Category
 	Value       string `json:"-"`
 }
 
-// withoutSubstitutions drops the raw values, for the paths where the verdict
-// leaves the pipeline through a callback.
 func (v Verdict) withoutSubstitutions() Verdict {
 	if len(v.Substitutions) == 0 {
 		return v
@@ -112,11 +109,6 @@ type Detector interface {
 	Name() string
 }
 
-// NaturalText is an optional Detector capability. A detector that reports true is
-// handed the text as written instead of the canonical form. Canonicalisation
-// transliterates (case folding, Cyrillic→Latin homoglyph folding), which is out of
-// distribution for a model trained on natural text, so the ML layer opts out while
-// the deterministic layer keeps the canonical form (I-21).
 type NaturalText interface {
 	Detector
 	UsesNaturalText() bool
@@ -128,41 +120,37 @@ func usesNaturalText(d Detector) bool {
 }
 
 const (
-	DefaultMaxChars  = 8000
-	DefaultCacheSize = 4096
-	// DefaultWindowChars is the largest input a single detection pass inspects.
-	// Longer text is scanned in overlapping windows of this size, so the ML layer
-	// is not blind to the tail. Sized for the default L2 budget (512 tokens) at a
-	// conservative ~2 characters per token.
+	DefaultMaxChars    = 8000
+	DefaultCacheSize   = 4096
 	DefaultWindowChars = 1024
 )
 
 type Options struct {
-	Layers []Detector
-	// Optional lists layer names whose failure does not fail the check. An
-	// optional layer that errors is skipped and the verdict is marked
-	// Degraded; a required layer that errors fails the check. Empty means
-	// every layer is required (fail-closed).
-	Optional  []string
-	MaxChars  int
-	CacheSize int
-	// WindowChars is the detection window. Text longer than it is scanned in
-	// overlapping windows so the tail is not skipped; zero means DefaultWindowChars.
-	WindowChars int
-	Version     string
-	// OnViolation, if set, is called for every non-allow verdict. The verdict it
-	// receives carries no Substitutions, so masked values never leave here.
-	OnViolation func(Verdict)
+	Layers               []Detector
+	Ensembles            []Ensemble
+	OptionalByRail       map[Rail][]string
+	MaxChars             int
+	CacheSize            int
+	WindowChars          int
+	Version              string
+	ArtifactHash         string
+	OnViolation          func(Verdict)
+	Logger               *slog.Logger
+	DegradedWarnInterval time.Duration
+
+	now func() time.Time
 }
 
 type Pipeline struct {
-	layers      []Detector
-	optional    map[string]bool
+	layers      []layer
+	degradation degradationPolicy
 	maxChars    int
 	windowChars int
 	cache       *lru
 	version     string
 	onViolation func(Verdict)
+	warner      *warner
+	counters    counters
 }
 
 func New(opts Options) (*Pipeline, error) {
@@ -175,35 +163,63 @@ func New(opts Options) (*Pipeline, error) {
 	if opts.WindowChars <= 0 {
 		opts.WindowChars = DefaultWindowChars
 	}
-	optional := make(map[string]bool, len(opts.Optional))
-	for _, name := range opts.Optional {
-		optional[name] = true
+	layers, err := buildLayers(opts.Layers, opts.Ensembles)
+	if err != nil {
+		return nil, err
+	}
+	degradation, err := newDegradationPolicy(opts.OptionalByRail)
+	if err != nil {
+		return nil, err
+	}
+	if opts.DegradedWarnInterval <= 0 {
+		opts.DegradedWarnInterval = DefaultDegradedWarnInterval
+	}
+	artifact := opts.ArtifactHash
+	if artifact == "" {
+		detectors := make([]Detector, 0, len(layers))
+		for _, l := range layers {
+			detectors = append(detectors, l.detectors...)
+		}
+		artifact = ArtifactHashes(detectors)
 	}
 	return &Pipeline{
-		layers:      opts.Layers,
-		optional:    optional,
+		layers:      layers,
+		degradation: degradation,
 		maxChars:    opts.MaxChars,
 		windowChars: opts.WindowChars,
 		cache:       newLRU(opts.CacheSize),
-		version:     opts.Version,
+		version:     computeVersion(opts, layers, artifact),
 		onViolation: opts.OnViolation,
+		warner:      newWarner(opts.Logger, opts.DegradedWarnInterval, opts.now),
 	}, nil
+}
+
+func (p *Pipeline) optionalOn(rail Rail, l layer, d Detector) bool {
+	return p.degradation.allows(rail, l.name, d.Name())
 }
 
 func (p *Pipeline) Version() string { return p.version }
 
 func (p *Pipeline) Check(ctx context.Context, rail Rail, text string) (Verdict, error) {
-	if text == "" {
-		return Verdict{Action: Allow, Rail: rail, Text: text, Version: p.version}, nil
+	if !ValidRail(rail) {
+		return Verdict{}, fmt.Errorf("guard: unknown rail %q: %w", string(rail), core.ErrInvalidConfig)
 	}
-	inspected := truncateRunes(text, p.maxChars)
-	canonical, spans := canonicalizeMap(inspected)
-	key := p.cacheKey(inspected)
+	started := time.Now()
+	total := utf8.RuneCountInString(text)
+	if text == "" {
+		v := p.finish(rail, text, nil, nil, 0, total)
+		p.observeLatency(time.Since(started))
+		return v, nil
+	}
+	inspectedText := truncateRunes(text, p.maxChars)
+	inspected := utf8.RuneCountInString(inspectedText)
+	canonical, spans := canonicalizeMap(inspectedText)
+	key := p.cacheKey(inspectedText)
 
 	findings, ok := p.cache.get(key)
 	var degraded []string
 	if !ok {
-		fs, deg, err := p.detect(ctx, inspected, canonical, spans, utf8.RuneCountInString(text))
+		fs, deg, err := p.detect(ctx, rail, inspectedText, canonical, spans, total)
 		if err != nil {
 			return Verdict{}, err
 		}
@@ -214,22 +230,28 @@ func (p *Pipeline) Check(ctx context.Context, rail Rail, text string) (Verdict, 
 		}
 	}
 
+	v := p.finish(rail, text, findings, degraded, inspected, total)
+	p.observeLatency(time.Since(started))
+	return v, nil
+}
+
+func (p *Pipeline) finish(rail Rail, text string, findings []Finding, degraded []string, inspected, total int) Verdict {
 	v := decide(rail, text, findings)
 	v.Version = p.version
 	v.Degraded = len(degraded) > 0
 	v.DegradedReason = strings.Join(degraded, "; ")
+	v.Truncated = inspected < total
+	v.InspectedRunes = inspected
+	p.count(rail, v)
+	if v.Degraded {
+		p.warner.warn(rail, v.Version, v.DegradedReason)
+	}
 	if v.Action != Allow && p.onViolation != nil {
 		p.onViolation(v.withoutSubstitutions())
 	}
-	return v, nil
+	return v
 }
 
-// cacheKey keys a verdict on the guard version and the text as inspected. A
-// finding carries offsets into the original text, so a verdict is a function of
-// the inspected text, not of the canonical form alone: two texts that canonicalise
-// alike but differ in layout — a zero-width rune, a combining sequence — must not
-// share findings, or a mask would cover the wrong runes and leak a span's tail
-// (D66).
 func (p *Pipeline) cacheKey(inspected string) string {
 	h := sha256.New()
 	h.Write([]byte(p.version))
@@ -248,74 +270,76 @@ func truncateRunes(text string, max int) string {
 	return text
 }
 
-func (p *Pipeline) detect(ctx context.Context, inspected, canonical string, spans runeSpans, total int) ([]Finding, []string, error) {
+func (p *Pipeline) detect(ctx context.Context, r Rail, inspected, canonical string, spans runeSpans, total int) ([]Finding, []string, error) {
 	var findings []Finding
 	var degraded []string
 
-	// One stream per layer: the deterministic layer reads the canonical text so
-	// homoglyph and zero-width evasion cannot slip past a pattern, the ML layer
-	// reads the text as written because transliteration is out of distribution for
-	// it. Canonical findings are mapped back to the original rune space, so every
-	// finding is expressed in the offsets of the text that is masked (I-21).
-	for _, layer := range p.layers {
-		raw := usesNaturalText(layer)
-		stream := canonical
-		if raw {
-			stream = inspected
-		}
-		for _, w := range p.windows(stream) {
-			fs, err := layer.Detect(ctx, w.text)
-			if err != nil {
-				if p.optional[layer.Name()] {
-					degraded = append(degraded, layer.Name()+": "+err.Error())
-					break
-				}
-				return nil, nil, fmt.Errorf("guard: layer %s: %w", layer.Name(), err)
+	for _, l := range p.layers {
+		for _, d := range l.detectors {
+			raw := usesNaturalText(d)
+			stream := canonical
+			if raw {
+				stream = inspected
 			}
-			for _, f := range fs {
-				if raw {
-					f.Start += w.offset
-					f.End += w.offset
-				} else {
-					f.Start, f.End = remapSpan(spans, f.Start+w.offset, f.End+w.offset, total)
+			for _, w := range p.windows(stream) {
+				fs, err := d.Detect(ctx, w.text)
+				if err != nil {
+					if p.optionalOn(r, l, d) {
+						degraded = append(degraded, degradedLabel(l, d)+": "+err.Error())
+						break
+					}
+					return nil, nil, fmt.Errorf("guard: layer %s: %w", degradedLabel(l, d), err)
 				}
-				findings = append(findings, f)
-			}
-			if rejectCapable(fs) {
-				return dedupe(findings), degraded, nil
+				for _, f := range fs {
+					if raw {
+						f.Start += w.offset
+						f.End += w.offset
+					} else {
+						f.Start, f.End = remapSpan(spans, f.Start+w.offset, f.End+w.offset, total)
+					}
+					findings = append(findings, f)
+				}
+				if rejectCapable(fs) {
+					return dedupe(findings), degraded, nil
+				}
 			}
 		}
 	}
 
 	for _, variant := range DecodedVariants(inspected) {
 		decoded := Canonicalize(variant)
-		for _, layer := range p.layers {
-			if layer.Name() != "L1" {
+		for _, l := range p.layers {
+			if l.name != rulesLayer {
 				continue
 			}
-			fs, err := layer.Detect(ctx, decoded)
-			if err != nil {
-				if p.optional[layer.Name()] {
-					degraded = append(degraded, layer.Name()+" (decoded): "+err.Error())
-					continue
+			for _, d := range l.detectors {
+				fs, err := d.Detect(ctx, decoded)
+				if err != nil {
+					if p.optionalOn(r, l, d) {
+						degraded = append(degraded, degradedLabel(l, d)+" (decoded): "+err.Error())
+						continue
+					}
+					return nil, nil, fmt.Errorf("guard: layer %s (decoded): %w", degradedLabel(l, d), err)
 				}
-				return nil, nil, fmt.Errorf("guard: layer %s (decoded): %w", layer.Name(), err)
-			}
-			for _, f := range fs {
-				f.Start = 0
-				f.End = total
-				f.Layer = "L1+decode"
-				findings = append(findings, f)
+				for _, f := range fs {
+					f.Start = 0
+					f.End = total
+					f.Layer = rulesLayer + "+decode"
+					findings = append(findings, f)
+				}
 			}
 		}
 	}
 	return dedupe(findings), degraded, nil
 }
 
-// remapSpan maps a canonical span back to the original rune space. It returns the
-// full source range of the matched canonical runes, so a rune that
-// canonicalisation moved or dropped is inside the span rather than just outside it
-// and a mask cannot leak the tail of a match.
+func degradedLabel(l layer, d Detector) string {
+	if l.name == d.Name() || len(l.detectors) == 1 {
+		return l.name
+	}
+	return l.name + "/" + d.Name()
+}
+
 func remapSpan(sp runeSpans, start, end, total int) (int, int) {
 	if start < 0 {
 		start = 0
@@ -337,12 +361,9 @@ func remapSpan(sp runeSpans, start, end, total int) (int, int) {
 
 type window struct {
 	text   string
-	offset int // rune offset of the window in the canonical text
+	offset int
 }
 
-// windows splits the canonical text into overlapping windows, so a long input is
-// scanned end to end instead of being cut off after the first window. Overlap
-// covers a span that would otherwise be split across a boundary.
 func (p *Pipeline) windows(canonical string) []window {
 	runes := []rune(canonical)
 	if p.windowChars <= 0 || len(runes) <= p.windowChars {
@@ -363,23 +384,6 @@ func (p *Pipeline) windows(canonical string) []window {
 			break
 		}
 		start = end - overlap
-	}
-	return out
-}
-
-// dedupe drops findings repeated across overlapping windows.
-func dedupe(findings []Finding) []Finding {
-	if len(findings) < 2 {
-		return findings
-	}
-	seen := make(map[Finding]struct{}, len(findings))
-	out := findings[:0]
-	for _, f := range findings {
-		if _, ok := seen[f]; ok {
-			continue
-		}
-		seen[f] = struct{}{}
-		out = append(out, f)
 	}
 	return out
 }

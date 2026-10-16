@@ -4,10 +4,16 @@ This repository is **kit**. The specification lives in `docs/` only: read it bef
 Code comments are not a contract — do not infer behaviour from them, and never let a comment
 override the specification.
 
+Two tiers of code: the **core** is the default `go build ./...` — stdlib only, no
+native libraries, no ONNX runtime. Plugins are opt-in and live behind their own
+entry point: `guard/gliner` is L2 detection behind `//go:build ort`, and the
+optional `guard-onnx` / `guard-remote` plugins need `-tags ort` or a remote
+service.
+
 ## Read order
 
 1. `docs/README.md` — index and "where to look".
-2. `docs/internals/design.md` — the frozen contracts: invariants `I-01`…`I-20`, package contracts, decisions `D21`…`D30`, and §5, the API changelist.
+2. `docs/internals/design.md` — the frozen contracts: invariants `I-01`…`I-22`, package contracts, decisions `D21`…`D30`, and §5, the API changelist.
 3. `docs/internals/architecture.md` — package layout and dependency rules; do not violate them.
 4. `docs/internals/business-rules.md` — the BR-xx rules your change must keep true.
 5. `docs/internals/plan.md` — current stage and Definition of Done.
@@ -26,19 +32,21 @@ override the specification.
 
 ## Layout
 
-| Path                                                           | What                                                                                                                                                    |
-| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `docs/`                                                        | the specification: `getting-started/`, `concepts/` (explanation), `reference/`, `guides/` (how-to), `internals/`                                        |
-| `*.go` (root)                                                  | the `kit` facade: `New`, `Chat`, `ChatStream`, `Health`, `Ingest`, `Search`, `Delete`, `Score`, `Prune`, `Generate`, `Tool`, `RawTool`, `RetrievalTool` |
-| `internal/`                                                    | call primitive, core types, ORT pool, shared helpers                                                                                                    |
-| `internal/importrules/`                                        | stdlib-only test enforcing the package dependency rules (I-13)                                                                                          |
-| `authz/` `guard/` `model/` `embed/` `chunk/` `store/` `trace/` | the subsystems                                                                                                                                          |
-| `guard/guardtest/`                                             | `AllowAll` test detector (I-15)                                                                                                                         |
-| `eval/`                                                        | deterministic checks over recorded traces (stdlib only; imports `trace`)                                                                                |
-| `flow/`                                                        | one typed `Step[In,Out]` with schema validation and suspend/resume (no Pipeline/builder-DSL, D47)                                                       |
-| `rerank/`                                                      | cross-encoder reranking behind `rerank.Reranker` (TEI/Cohere adapter) plus a deterministic `Reorder`                                                    |
-| `mcp/`                                                         | Model Context Protocol client (stdio and streamable HTTP); `Register` exposes tools as `mcp:<server>:<tool>`                                            |
-| `webfetch/`                                                    | SSRF-hardened outbound HTTP fetch tool; the built-in `EffectEgress` tool                                                                                |
-| `cmd/kitctl/`, `demo/`, `deploy/`                              | CLI (`model pull`, `policy check`, `verify …`), integration example, local stack                                                                        |
-| `tools/gliner/`                                                | L2 model export (`export.py`) + pipeline/graph spec; generates `models/` (gitignored)                                                                   |
-| `.github/workflows/ci.yml`, `.golangci.yml`, `Makefile`        | the CI harness (build, test, race, ort-vet, lint, fumpt) and the local `make check` gate                                                                |
+| Path                                                           | What                                                                                                                                                                                                                                                                |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `docs/`                                                        | the specification: `getting-started/`, `concepts/` (explanation), `reference/`, `guides/` (how-to), `internals/`                                                                                                                                                    |
+| `*.go` (root)                                                  | the `kit` facade: `New`, `Chat`, `ChatStream`, `Health`, `Ingest`, `Search`, `Delete`, `Score`, `Prune`, `Generate`, `Tool`, `RawTool`, `RetrievalTool`                                                                                                             |
+| `internal/`                                                    | call primitive, core types, ORT pool, shared helpers                                                                                                                                                                                                                |
+| `internal/importrules/`                                        | stdlib-only test enforcing the package dependency rules (I-13)                                                                                                                                                                                                      |
+| `authz/` `guard/` `model/` `embed/` `chunk/` `store/` `trace/` | the subsystems                                                                                                                                                                                                                                                      |
+| `guard/guardtest/`                                             | `AllowAll` test detector (I-15)                                                                                                                                                                                                                                     |
+| `kittest/`                                                     | test kit: fake `model.Client` (`Scripted`), scripted `guard.Detector`, and the conformance tests for plugins (`DetectorContract`, `SinkContract`, `ScopeIsolation`)                                                                                                 |
+| `eval/`                                                        | deterministic checks over recorded traces (stdlib only; imports `trace`)                                                                                                                                                                                            |
+| `flow/`                                                        | one typed `Step[In,Out]` with schema validation and suspend/resume (no Pipeline/builder-DSL, D47)                                                                                                                                                                   |
+| `rerank/`                                                      | cross-encoder reranking behind `rerank.Reranker` (TEI/Cohere adapter) plus a deterministic `Reorder`                                                                                                                                                                |
+| `mcp/`                                                         | Model Context Protocol client (stdio and streamable HTTP); `Register` exposes tools as `mcp:<server>:<tool>`                                                                                                                                                        |
+| `webfetch/`                                                    | SSRF-hardened outbound HTTP fetch tool; the built-in `EffectEgress` tool                                                                                                                                                                                            |
+| `cmd/kitctl/`, `demo/`                                         | CLI (`model pull`, `policy check`, `verify …`), integration example; the local stack (`docker-compose.yml`, Grafana) lives in `demo/deploy/`                                                                                                                        |
+| `site/`                                                        | docs site (Next.js + Fumadocs) rendering `docs/` as it lies: `lib/sidebar.ts` holds the sidebar order and folder labels, each folder's `README.md` is its index. `npm install && npm run dev` in `site/`, static export to `site/out`; not part of `go build ./...` |
+| `tools/gliner/`                                                | L2 model export (`export.py`) + pipeline/graph spec; generates `models/` (gitignored)                                                                                                                                                                               |
+| `.github/workflows/ci.yml`, `.golangci.yml`, `Makefile`        | the CI harness (build, test, race, ort-vet, lint, fumpt) and the local `make check` gate                                                                                                                                                                            |

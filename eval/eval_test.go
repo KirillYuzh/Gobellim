@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gobellim/kit/trace"
+	"github.com/KirillYuzh/Gobellim/trace"
 )
 
 func tr(id, out string, obs ...trace.Observation) Trace {

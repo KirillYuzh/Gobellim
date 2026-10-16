@@ -107,7 +107,7 @@ type ToolCallInfo struct {
 	Tenant      string
 	Tool        string
 	Args        string
-	Fingerprint string // хэш tool + канонических аргументов
+	Fingerprint string // стабильный ключ вызова: sha256(tool + канонические аргументы)
 	Effect      Effect
 	CallIndex   int // 1-based счётчик вызовов этого инструмента в ходе
 }
@@ -115,6 +115,15 @@ type ToolCallInfo struct {
 type BeforeToolHook func(ctx context.Context, info ToolCallInfo) (proceed bool, output string, err error)
 type AfterToolHook  func(ctx context.Context, info ToolCallInfo, result string, err error) (string, error)
 ```
+
+### Идемпотентность вызова
+
+`Chat` с инструментом, у которого есть побочный эффект, сам по себе не идемпотентен:
+повтор хода повторит и эффект. Инструмент получает стабильный ключ вызова через
+`kit.IdempotencyKey(ctx)` — это тот же `sha256` имени инструмента и канонических
+аргументов, что и `Fingerprint`, и он одинаков для повторов одного вызова. Передайте
+его downstream (например, заголовком `Idempotency-Key`), чтобы дедуплицировал эффект,
+а не ядро (BR-105).
 
 Порядок в `execTool`:
 
@@ -175,14 +184,16 @@ if _, err := kit.Tool(app, "close_ticket", closeTicket,
 - `ValidateOutput(true)` — результат проверяется по JSON Schema типа `Out`; при несовпадении модель получает error-result вместо данных, а ход помечается недоверенным.
 - `ModelView(fn)` — что видит модель вместо результата; приложению уходит исходная строка.
 
-`Config.Egress` включает правило «Rule of Two»: эффектный эгресс блокируется, если на ходу уже был недоверенный ввод (маска или находка guard на любом рельсе, а также недоверенная строка истории треда).
+<!-- derived: BR-51 -->
+
+`Config.Egress` по умолчанию включает правило «Rule of Two»: эффектный эгресс блокируется, если на ходу уже был недоверенный ввод (маска или находка guard на любом рельсе, а также недоверенная строка истории треда). Поле `AllowEgressAfterUntrusted` — opt-out, который снимает этот запрет.
 
 ```go
 app, err := kit.New(ctx, kit.Config{
 	ES:     es,
 	LLM:    llm,
 	Policy: policy,
-	Egress: kit.EgressPolicy{RuleOfTwo: true},
+	Egress: kit.EgressPolicy{}, // нулевое значение: Rule of Two включён
 	Approver: kit.ApproverFunc(func(ctx context.Context, req kit.ApprovalRequest) (bool, error) {
 		// req.Fingerprint привязан к инструменту и каноническим аргументам,
 		// поэтому одобрение нельзя переиграть на другой набор аргументов.
@@ -203,8 +214,8 @@ app, err := kit.New(ctx, kit.Config{
 
 ```go
 import (
-	"github.com/gobellim/kit"
-	"github.com/gobellim/kit/webfetch"
+	"github.com/KirillYuzh/Gobellim"
+	"github.com/KirillYuzh/Gobellim/webfetch"
 )
 
 if _, err := webfetch.New(app, "web_fetch", webfetch.Config{
@@ -313,6 +324,6 @@ if _, err := kit.RetrievalTool(app, "search_knowledge"); err != nil {
 
 - [Справочник kit](../reference/kit.md) — `kit.Tool`, `Desc`, `Perm`, `Effects`, `BeforeToolCall`, `AfterToolCall`, `RetrievalTool`
 - [Как вызывать инструменты](../guides/tool-calling.md) — пошаговая настройка и разбор сбоев
-- [Безопасность](../guides/security.md) — эгресс, RBAC/ACL и пределы фреймворка
+- [Безопасность](../guides/security.md) — эгресс, RBAC/ACL и пределы библиотеки
 - [Бизнес-правила](../internals/business-rules.md) — `BR-15`…`BR-23`, `BR-51`, `BR-53`, `BR-61`, `BR-62`
 - [demo](../../demo/README.ru.md) — реальный инструмент погоды

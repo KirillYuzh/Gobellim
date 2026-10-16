@@ -3,7 +3,7 @@ package guardtest
 import (
 	"context"
 
-	"github.com/gobellim/kit/guard"
+	"github.com/KirillYuzh/Gobellim/guard"
 )
 
 type allowAll struct{}

@@ -12,11 +12,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
-// rpcRequest is an outgoing JSON-RPC 2.0 request (ID set) or notification (ID
-// zero, omitted).
 type rpcRequest struct {
 	JSONRPC string `json:"jsonrpc"`
 	ID      int64  `json:"id,omitempty"`
@@ -24,7 +22,6 @@ type rpcRequest struct {
 	Params  any    `json:"params,omitempty"`
 }
 
-// rpcResponse is an incoming JSON-RPC 2.0 response to one of our requests.
 type rpcResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      int64           `json:"id"`

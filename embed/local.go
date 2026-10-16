@@ -5,7 +5,7 @@ package embed
 import (
 	"fmt"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 func NewLocal(cfg LocalConfig) (Embedder, error) {

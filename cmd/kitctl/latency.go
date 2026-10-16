@@ -16,8 +16,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/gobellim/kit/guard"
-	"github.com/gobellim/kit/guard/rules"
+	"github.com/KirillYuzh/Gobellim/guard"
+	"github.com/KirillYuzh/Gobellim/guard/rules"
 )
 
 type latencyItem struct {

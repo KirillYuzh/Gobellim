@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gobellim/kit/trace"
+	"github.com/KirillYuzh/Gobellim/trace"
 )
 
 type Config struct {

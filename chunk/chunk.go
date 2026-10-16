@@ -1,11 +1,10 @@
-// Package chunk splits documents into overlapping token windows.
 package chunk
 
 import (
 	"fmt"
 	"unicode"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 const (
@@ -19,8 +18,6 @@ type Token struct {
 	End   int
 }
 
-// Tokenizer yields tokens with rune offsets, so chunks preserve the source
-// text.
 type Tokenizer interface {
 	Tokens(text string) []Token
 }

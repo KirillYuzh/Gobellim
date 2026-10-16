@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/gobellim/kit/guard"
+	"github.com/KirillYuzh/Gobellim/guard"
 )
 
 func TestAllowAll(t *testing.T) {

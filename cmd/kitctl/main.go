@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/gobellim/kit/authz"
-	"github.com/gobellim/kit/embed"
+	"github.com/KirillYuzh/Gobellim/authz"
+	"github.com/KirillYuzh/Gobellim/embed"
 )
 
 func main() {

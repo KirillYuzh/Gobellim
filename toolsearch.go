@@ -5,28 +5,17 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/gobellim/kit/model"
+	"github.com/KirillYuzh/Gobellim/model"
 )
 
-// DefaultToolSearchThreshold is the allowed-tool count above which tool search
-// kicks in.
 const DefaultToolSearchThreshold = 20
 
-// DefaultToolSearchTopK is how many tools tool search exposes when TopK is 0.
 const DefaultToolSearchTopK = 8
 
-// ToolSearch narrows the tool set exposed to the model when a role may use many
-// tools. Only tools the principal already holds are considered, so search can
-// never widen access — it only hides tools the model would otherwise have to
-// read through.
-//
-// Ranking is lexical and deterministic (no embedding call, no ML), which keeps
-// it cheap and reproducible. When nothing matches the user's message the full
-// set is exposed, so an uninformative query never hides a tool by accident.
 type ToolSearch struct {
 	Enabled   bool
-	Threshold int // 0 → DefaultToolSearchThreshold
-	TopK      int // 0 → DefaultToolSearchTopK
+	Threshold int
+	TopK      int
 }
 
 func (a *App) toolSearch(specs []model.ToolSpec, query string) []model.ToolSpec {
@@ -47,8 +36,6 @@ func (a *App) toolSearch(specs []model.ToolSpec, query string) []model.ToolSpec 
 	return rankTools(specs, query, topK)
 }
 
-// rankTools returns the topK best-matching tools in best-first order. It
-// returns specs unchanged when no tool matches the query.
 func rankTools(specs []model.ToolSpec, query string, topK int) []model.ToolSpec {
 	tokens := searchTokens(query)
 	if len(tokens) == 0 {
@@ -102,8 +89,6 @@ func scoreTool(s model.ToolSpec, tokens []string) int {
 	return score
 }
 
-// searchTokens splits a string into lowercase word tokens of two or more runes,
-// deduplicated. It is unicode-aware, so Cyrillic queries work too.
 func searchTokens(s string) []string {
 	seen := make(map[string]struct{})
 	out := make([]string, 0, 8)

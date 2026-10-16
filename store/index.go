@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/gobellim/kit/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 func ChunksIndexBody(dims int) ([]byte, error) {
@@ -29,8 +29,6 @@ func ChunksIndexBody(dims int) ([]byte, error) {
 				"doc_version": map[string]any{"type": "long"},
 				"quarantined": map[string]any{"type": "boolean"},
 
-				// EmbedModelField records which embedder produced the vector, so a
-				// search can never mix vectors from different models.
 				EmbedModelField: map[string]any{"type": "keyword"},
 			},
 		},
@@ -66,9 +64,6 @@ func MemoryWorkingIndexBody() []byte {
 	})
 }
 
-// textField is the analyzed text mapping. kit targets Russian corpora, so the
-// built-in `russian` analyzer is used (analysis-common, no plugin needed); a
-// mixed or non-Russian corpus must reindex with its own analyzer.
 func textField() map[string]any {
 	return map[string]any{"type": "text", "analyzer": "russian"}
 }

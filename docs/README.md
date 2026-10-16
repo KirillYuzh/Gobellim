@@ -1,6 +1,6 @@
 # Документация kit
 
-kit — Go-фреймворк для LLM-приложений. Он даёт три вещи: поиск по вашим
+kit — Go-библиотека для LLM-приложений. Она даёт три вещи: поиск по вашим
 документам, вызов инструментов моделью и guardrails — и проводит всё это через
 один путь вызова, который проверяет права.
 
@@ -11,7 +11,7 @@ kit не владеет вашим потоком управления. Вы п�
 ## Быстрый старт
 
 ```sh
-go get github.com/gobellim/kit
+go get github.com/KirillYuzh/Gobellim
 ```
 
 Минимальное приложение — [Быстрый старт](./getting-started/quickstart.md).
@@ -26,7 +26,7 @@ go get github.com/gobellim/kit
 | [Гайды (how-to)](./guides/README.md)               | пошаговые рецепты: провайдеры, structured output, инструменты, guardrails, поиск, наблюдаемость, eval, flow, ошибки, деплой, производительность, безопасность |
 | [Справочник](./reference/kit.md)                   | фасад kit, провайдеры, `policy.yaml`, индексы ES, ошибки, конфигурация                                                                                        |
 | [Устройство](./internals/architecture.md)          | архитектура, бизнес-правила, решения, план                                                                                                                    |
-| [Устройство: Дизайн v1](./internals/design.md)     | замороженные контракты, инварианты I-01…I-21, что изменилось в API                                                                                            |
+| [Устройство: Дизайн v1](./internals/design.md)     | замороженные контракты, инварианты I-01…I-22, что изменилось в API                                                                                            |
 
 ## С чего начать
 
@@ -51,8 +51,10 @@ go get github.com/gobellim/kit
 | Задеплоить                             | [Деплой](./guides/deployment.md)                      |
 | Ускорить и посчитать стоимость запроса | [Производительность](./guides/performance.md)         |
 | Защитить прод                          | [Безопасность](./guides/security.md)                  |
+| Оценить модель угроз и non-goals       | [Модель угроз](./concepts/security-model.md)          |
 
 ## Смотрите также
 
 - [README](../README.md) — обзор проекта
+- [Сообщить об уязвимости](https://github.com/KirillYuzh/Gobellim/security/advisories/new) — приватно, через GitHub
 - [demo](../demo/README.ru.md) — сквозной пример на Clean Architecture
