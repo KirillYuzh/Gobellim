@@ -55,7 +55,7 @@ func RawRequest(method, path string, body []byte, contentType string) Request
 | `doc_id`      | `keyword`                                        | Исходный документ.                                                |
 | `tenant`      | `keyword`                                        | Тенант из принципала.                                             |
 | `acl`         | `keyword`                                        | Роли, которым разрешён чанк.                                      |
-| `text`        | `text`                                           | Текст чанка (BM25).                                               |
+| `text`        | `text` `analyzer=russian`                        | Текст чанка (BM25).                                               |
 | `vector`      | `dense_vector` `dims=<Dim>`, `similarity=cosine` | Эмбеддинг; размерность берётся из эмбеддера.                      |
 | `position`    | `integer`                                        | Порядковый номер чанка в документе.                               |
 | `source`      | `keyword`                                        | Источник документа.                                               |
@@ -68,6 +68,14 @@ func RawRequest(method, path string, body []byte, contentType string) Request
 чанк хранится маркером `quarantined: true` **без** `text` и без `vector`
 (BR-31, D19), поэтому его нельзя ни найти, ни использовать.
 
+Текстовые поля (`text`, `content`) создаются с анализатором **`russian`** (модуль
+`analysis-common`, плагин не нужен). Это под русский корпус, и это известная
+плата: **смешанный или англоязычный корпус будет искать хуже** — английские
+слова пойдут под русский стеммер, а лексическая половина гибрида просядет
+(векторная, kNN, продолжит работать). Смена анализатора — это изменение маппинга:
+`EnsureSchema` существующий индекс не пересоздаёт, поэтому свой анализатор
+задавайте до первого `Ingest` или переиндексируйте сами (D62).
+
 ## kit-memory-messages
 
 | Поле          | Тип                                | Назначение                                                 |
@@ -76,7 +84,7 @@ func RawRequest(method, path string, body []byte, contentType string) Request
 | `tenant`      | `keyword`                          | Тенант принципала.                                         |
 | `user_id`     | `keyword`                          | Resource: идентификатор пользователя.                      |
 | `role`        | `keyword`                          | `user` или `assistant`.                                    |
-| `content`     | `text`                             | Текст сообщения (уже прошедший guard).                     |
+| `content`     | `text` `analyzer=russian`          | Текст сообщения (уже прошедший guard).                     |
 | `untrusted`   | `boolean`                          | Ход был недоверенным: восстанавливает Rule of Two (`D59`). |
 | `seq`         | `long`                             | Монотонный ключ порядка (сортировка истории).              |
 | `created_at`  | `date`                             | Время записи.                                              |

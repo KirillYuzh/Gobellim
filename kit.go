@@ -107,15 +107,16 @@ const (
 )
 
 type Config struct {
-	ES             store.ES
-	LLM            model.Client
-	Pricing        model.Pricing
-	Embedder       embed.Embedder
-	Policy         *authz.Policy
-	GuardL2        guard.Detector
-	GuardMode      GuardMode
-	GuardMaxChars  int
-	GuardCacheSize int
+	ES               store.ES
+	LLM              model.Client
+	Pricing          model.Pricing
+	Embedder         embed.Embedder
+	Policy           *authz.Policy
+	GuardL2          guard.Detector
+	GuardMode        GuardMode
+	GuardMaxChars    int
+	GuardCacheSize   int
+	GuardWindowChars int
 
 	// GuardOnViolation is called for every non-allow guard verdict. It receives
 	// the verdict without the masked values (`AllowPII`), so raw PII never leaves here.
@@ -241,6 +242,7 @@ func New(_ context.Context, cfg Config) (*App, error) {
 		Optional:    optional,
 		MaxChars:    cfg.GuardMaxChars,
 		CacheSize:   cfg.GuardCacheSize,
+		WindowChars: cfg.GuardWindowChars,
 		Version:     guardVersion,
 		OnViolation: cfg.GuardOnViolation,
 	})
@@ -858,7 +860,8 @@ func (a *App) execTool(ctx context.Context, tc model.ToolCall, t *turn) (string,
 	final := v.Text
 	if def.validateOutput {
 		if verr := def.validateResult(final); verr != nil {
-			a.logger().Warn("kit: tool output does not match its schema", "tool", def.name, "err", verr)
+			t.untrusted = true
+			return errorResult(verr.Error()), nil
 		}
 	}
 	view := def.ModelView(final)

@@ -24,6 +24,7 @@ fn`). Добавлять middleware или обходить политику н�
 | `GuardMode`        | `kit.GuardMode`              | `kit.GuardStrict`                      | `GuardStrict` — fail-closed; `GuardDegraded` — упавший ML-слой не роняет запрос.   |
 | `GuardMaxChars`    | `int`                        | `8000` (`guard.DefaultMaxChars`)       | Лимит текста для guard.                                                            |
 | `GuardCacheSize`   | `int`                        | `4096` (`guard.DefaultCacheSize`)      | Размер LRU-кэша вердиктов guard.                                                   |
+| `GuardWindowChars` | `int`                        | `1024` (`guard.DefaultWindowChars`)    | Окно детекции: текст длиннее идёт перекрывающимися окнами, чтобы L2 видел хвост.   |
 | `GuardOnViolation` | `func(guard.Verdict)`        | `nil`                                  | Колбэк на каждый вердикт, кроме allow; без сырых значений (`AllowPII`).            |
 | `Tokenizer`        | `chunk.Tokenizer`            | `chunk.WhitespaceTokenizer{}`          | Токенайзер чанкера; ORT-токенайзера в сборке нет.                                  |
 | `ChunkSize`        | `int`                        | `400` (`chunk.DefaultSize`)            | Единиц токенайзера в чанке; у дефолтного `WhitespaceTokenizer` — слов.             |
@@ -637,7 +638,7 @@ func AfterToolCall(h AfterToolHook) ToolOption
 | `kit.EgressAny`       | Явный opt-in «любой хост»; без него пустой allowlist — отказ.                                         |
 | `kit.AllowPII`        | Подставлять реальные значения в аргументы (`BR-04`): только при однозначной заглушке и внутри вызова. |
 | `kit.RequireApproval` | Перед вызовом спрашивать `Config.Approver`.                                                           |
-| `kit.ValidateOutput`  | Проверять результат по JSON Schema выходного типа (несовпадение не фатально).                         |
+| `kit.ValidateOutput`  | Проверять результат по JSON Schema выходного типа; при несовпадении — error-result модели.            |
 | `kit.ModelView`       | Что видит модель вместо результата; на приложение не влияет.                                          |
 | `kit.BeforeToolCall`  | Before-хук этого инструмента; заменяет `Config.BeforeToolCall`.                                       |
 | `kit.AfterToolCall`   | After-хук этого инструмента; заменяет `Config.AfterToolCall`.                                         |

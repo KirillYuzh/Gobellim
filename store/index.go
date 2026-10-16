@@ -21,7 +21,7 @@ func ChunksIndexBody(dims int) ([]byte, error) {
 				"doc_id":      map[string]any{"type": "keyword"},
 				TenantField:   map[string]any{"type": "keyword"},
 				ACLField:      map[string]any{"type": "keyword"},
-				TextField:     map[string]any{"type": "text"},
+				TextField:     textField(),
 				VectorField:   map[string]any{"type": "dense_vector", "dims": dims, "index": true, "similarity": "cosine"},
 				"position":    map[string]any{"type": "integer"},
 				"source":      map[string]any{"type": "keyword"},
@@ -44,7 +44,7 @@ func MemoryMessagesIndexBody(dims int) []byte {
 		TenantField:    map[string]any{"type": "keyword"},
 		UserIDField:    map[string]any{"type": "keyword"},
 		RoleField:      map[string]any{"type": "keyword"},
-		ContentField:   map[string]any{"type": "text"},
+		ContentField:   textField(),
 		UntrustedField: map[string]any{"type": "boolean"},
 		"seq":          map[string]any{"type": "long"},
 		"created_at":   map[string]any{"type": "date"},
@@ -64,6 +64,13 @@ func MemoryWorkingIndexBody() []byte {
 		"data":       map[string]any{"type": "object", "enabled": false},
 		"updated_at": map[string]any{"type": "date"},
 	})
+}
+
+// textField is the analyzed text mapping. kit targets Russian corpora, so the
+// built-in `russian` analyzer is used (analysis-common, no plugin needed); a
+// mixed or non-Russian corpus must reindex with its own analyzer.
+func textField() map[string]any {
+	return map[string]any{"type": "text", "analyzer": "russian"}
 }
 
 func indexBody(properties map[string]any) []byte {

@@ -558,7 +558,7 @@ func EgressHosts(hosts ...string) ToolOption  // allowlist для Egress
 func EgressAny() ToolOption                   // явный отказ от allowlist: любой хост
 func AllowPII(b bool) ToolOption              // подставлять реальные значения (BR-04)
 func RequireApproval(b bool) ToolOption
-func ValidateOutput(b bool) ToolOption        // item 5: валидация выхода
+func ValidateOutput(b bool) ToolOption        // fail-closed проверка выхода (D61)
 func ModelView(f func(string) string) ToolOption // item 4: что видит модель
 func BeforeToolCall(h BeforeToolHook) ToolOption // per-tool hook заменяет Config.BeforeToolCall
 func AfterToolCall(h AfterToolHook) ToolOption   // per-tool hook заменяет Config.AfterToolCall
@@ -680,9 +680,11 @@ README описывают именно это поведение.
 - `AllowAll` переехал в `guard/guardtest` (I-15).
 - На рельсе `output` категории INJECTION/UNSAFE дают `Detect`, а не `Mask`.
 - L2 GLiNER: метки сущностей → `PII`; метки классификации маппятся так: явный `category_map` переопределяет всё; значение-категория (`PII`/`SECRET`/`INJECTION`/`UNSAFE`) задаёт категорию; значение **`SAFE`** подавляет находку для этой метки (`category_map` принимает именно эти пять значений); без маппинга работает эвристика (`unsafe/harmful/...` → `UNSAFE`, `inject/jailbreak/attack/override/exfiltrat/abuse` → `INJECTION`), а встроенный список безопасных имён даёт «ничего не сообщать». Незнакомая, немаппленная метка fail-safe → `UNSAFE` (I-14). Go принимает N групп классификации: у каждой своё имя `output`, `multi_label` + `sigmoid`, пороги на метку/группу (`thresholds`). Поставляемый по умолчанию экспорт компактен (`person/email/phone` + `safe/unsafe`); богатый (32 сущности, 5 групп, 70 меток классификации; адверсариальные метки дают `INJECTION`) собирается `export.py --schema full` (D28, D35).
-- L2 получает не всё окно guard: тензорный вход ограничен `Config.MaxTokens` (`DefaultMaxTokens` = 512, кламп до `max_sequence_length` модели), поэтому хвост длинного входа размечает только L1 (D34).
+- L2 получает окно детекции целиком, но тензорный вход внутри окна ограничен `Config.MaxTokens` (`DefaultMaxTokens` = 512, кламп до `max_sequence_length` модели); текст дальше покрывают следующие окна (D34, D60).
 - `Canonicalize` — фиксированная точка: невалидный UTF-8 санируется, затем NFKC →
   `fold` → снова NFKC (D56).
+- `Options.WindowChars` — окно детекции: текст длиннее сканируется перекрывающимися
+  окнами (D60); `DefaultWindowChars` = 1024.
 
 ### 5.4 `embed`
 
@@ -910,3 +912,13 @@ AllowedOrigins, Logger})`, `mcp.ServerTool`, `mcp.FromTool(app, def)`,
   `kit-memory-messages`); `MemoryHistoryBody` и `MemoryRecallBody` запрашивают поле.
 - `memoryLoad` возвращает признак недоверенности, `memoryAppend` его пишет; `Chat`
   и `ChatStream` помечают ход (`turn.untrusted`), если история или recall недоверенны.
+
+### 5.18 Окно детекции, fail-closed `ValidateOutput`, русский анализатор (D60–D62)
+
+- `guard.Options.WindowChars` (дефолт `DefaultWindowChars` = 1024,
+  `Config.GuardWindowChars`): `Pipeline.windows` режет канонический текст на
+  перекрывающиеся окна, находки смещаются на смещение окна и дедуплицируются.
+- `ValidateOutput(true)` — fail-closed: несовпадение со схемой `Out` даёт модели
+  error-result и помечает ход недоверенным (раньше — только `slog.Warn`).
+- `store.ChunksIndexBody`/`MemoryMessagesIndexBody` создают текстовые поля с
+  анализатором `russian` (`textField()`).

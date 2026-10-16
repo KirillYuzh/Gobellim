@@ -115,6 +115,11 @@ type Detector interface {
 const (
 	DefaultMaxChars  = 8000
 	DefaultCacheSize = 4096
+	// DefaultWindowChars is the largest input a single detection pass inspects.
+	// Longer text is scanned in overlapping windows of this size, so the ML layer
+	// is not blind to the tail. Sized for the default L2 budget (512 tokens) at a
+	// conservative ~2 characters per token.
+	DefaultWindowChars = 1024
 )
 
 type Options struct {
@@ -126,7 +131,10 @@ type Options struct {
 	Optional  []string
 	MaxChars  int
 	CacheSize int
-	Version   string
+	// WindowChars is the detection window. Text longer than it is scanned in
+	// overlapping windows so the tail is not skipped; zero means DefaultWindowChars.
+	WindowChars int
+	Version     string
 	// OnViolation, if set, is called for every non-allow verdict. The verdict it
 	// receives carries no Substitutions, so masked values never leave here.
 	OnViolation func(Verdict)
@@ -136,6 +144,7 @@ type Pipeline struct {
 	layers      []Detector
 	optional    map[string]bool
 	maxChars    int
+	windowChars int
 	cache       *lru
 	version     string
 	onViolation func(Verdict)
@@ -148,6 +157,9 @@ func New(opts Options) (*Pipeline, error) {
 	if opts.CacheSize <= 0 {
 		opts.CacheSize = DefaultCacheSize
 	}
+	if opts.WindowChars <= 0 {
+		opts.WindowChars = DefaultWindowChars
+	}
 	optional := make(map[string]bool, len(opts.Optional))
 	for _, name := range opts.Optional {
 		optional[name] = true
@@ -156,6 +168,7 @@ func New(opts Options) (*Pipeline, error) {
 		layers:      opts.Layers,
 		optional:    optional,
 		maxChars:    opts.MaxChars,
+		windowChars: opts.WindowChars,
 		cache:       newLRU(opts.CacheSize),
 		version:     opts.Version,
 		onViolation: opts.OnViolation,
@@ -218,18 +231,29 @@ func (p *Pipeline) detect(ctx context.Context, inspected string, total int) ([]F
 
 	var findings []Finding
 	var degraded []string
-	for _, layer := range p.layers {
-		fs, err := layer.Detect(ctx, canonical)
-		if err != nil {
-			if p.optional[layer.Name()] {
-				degraded = append(degraded, layer.Name()+": "+err.Error())
+	failed := make(map[string]bool)
+	for _, w := range p.windows(canonical) {
+		for _, layer := range p.layers {
+			if failed[layer.Name()] {
 				continue
 			}
-			return nil, nil, fmt.Errorf("guard: layer %s: %w", layer.Name(), err)
-		}
-		findings = append(findings, fs...)
-		if rejectCapable(fs) {
-			return findings, degraded, nil
+			fs, err := layer.Detect(ctx, w.text)
+			if err != nil {
+				if p.optional[layer.Name()] {
+					failed[layer.Name()] = true
+					degraded = append(degraded, layer.Name()+": "+err.Error())
+					continue
+				}
+				return nil, nil, fmt.Errorf("guard: layer %s: %w", layer.Name(), err)
+			}
+			for _, f := range fs {
+				f.Start += w.offset
+				f.End += w.offset
+				findings = append(findings, f)
+			}
+			if rejectCapable(fs) {
+				return dedupe(findings), degraded, nil
+			}
 		}
 	}
 
@@ -255,7 +279,56 @@ func (p *Pipeline) detect(ctx context.Context, inspected string, total int) ([]F
 			}
 		}
 	}
-	return findings, degraded, nil
+	return dedupe(findings), degraded, nil
+}
+
+type window struct {
+	text   string
+	offset int // rune offset of the window in the canonical text
+}
+
+// windows splits the canonical text into overlapping windows, so a long input is
+// scanned end to end instead of being cut off after the first window. Overlap
+// covers a span that would otherwise be split across a boundary.
+func (p *Pipeline) windows(canonical string) []window {
+	runes := []rune(canonical)
+	if p.windowChars <= 0 || len(runes) <= p.windowChars {
+		return []window{{text: canonical}}
+	}
+	overlap := p.windowChars / 8
+	if overlap < 1 {
+		overlap = 1
+	}
+	var out []window
+	for start := 0; start < len(runes); {
+		end := start + p.windowChars
+		if end > len(runes) {
+			end = len(runes)
+		}
+		out = append(out, window{text: string(runes[start:end]), offset: start})
+		if end >= len(runes) {
+			break
+		}
+		start = end - overlap
+	}
+	return out
+}
+
+// dedupe drops findings repeated across overlapping windows.
+func dedupe(findings []Finding) []Finding {
+	if len(findings) < 2 {
+		return findings
+	}
+	seen := make(map[Finding]struct{}, len(findings))
+	out := findings[:0]
+	for _, f := range findings {
+		if _, ok := seen[f]; ok {
+			continue
+		}
+		seen[f] = struct{}{}
+		out = append(out, f)
+	}
+	return out
 }
 
 func rejectCapable(fs []Finding) bool {

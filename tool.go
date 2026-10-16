@@ -180,6 +180,8 @@ func AllowPII(b bool) ToolOption { return func(o *toolOptions) { o.allowPII = b 
 
 func RequireApproval(b bool) ToolOption { return func(o *toolOptions) { o.requireApproval = b } }
 
+// ValidateOutput makes the runtime check the result against the Out schema and,
+// on a mismatch, hand the model an error result instead of the data.
 func ValidateOutput(b bool) ToolOption { return func(o *toolOptions) { o.validateOutput = b } }
 
 func ModelView(f func(string) string) ToolOption {
