@@ -75,15 +75,16 @@ func run() error {
 	defer stop()
 
 	engine, err := kitengine.New(ctx, kitengine.Config{
-		ES:        elastic.New(cfg.ESURL, client),
-		LLM:       llm,
-		Embedder:  embedder,
-		Policy:    policy,
-		GuardL2:   guardrail.New(cfg.ModelsDir, cfg.GLiNERModel, log),
-		Weather:   weather.New(client, cfg.WeatherBaseURL),
-		TraceText: cfg.TraceText,
-		Sampler:   sampler,
-		Logger:    log,
+		ES:           elastic.New(cfg.ESURL, client),
+		LLM:          llm,
+		Embedder:     embedder,
+		Policy:       policy,
+		GuardL2:      guardrail.New(cfg.ModelsDir, cfg.GLiNERModel, log),
+		Weather:      weather.New(client, cfg.WeatherBaseURL),
+		WeatherHosts: cfg.WeatherHosts,
+		TraceText:    cfg.TraceText,
+		Sampler:      sampler,
+		Logger:       log,
 	})
 	if err != nil {
 		return err

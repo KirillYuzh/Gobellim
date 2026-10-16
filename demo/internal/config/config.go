@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ type Config struct {
 	Addr            string
 	ESURL           string
 	WeatherBaseURL  string
+	WeatherHosts    []string
 	EmbedBaseURL    string
 	EmbedModel      string
 	EmbedDim        int
@@ -61,6 +63,10 @@ func Load() (Config, error) {
 	}
 	if cfg.Credentials == "" {
 		return Config{}, fmt.Errorf("GIGACHAT_CREDENTIALS is required: put the base64 clientID:clientSecret pair in .env")
+	}
+
+	if u, err := url.Parse(cfg.WeatherBaseURL); err == nil && u.Hostname() != "" {
+		cfg.WeatherHosts = []string{u.Hostname()}
 	}
 
 	cfg.TraceSample = env("TRACE_SAMPLE", "always")
