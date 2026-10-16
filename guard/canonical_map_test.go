@@ -2,9 +2,6 @@ package guard
 
 import "testing"
 
-// canonicalizeMap must agree with Canonicalize and describe every canonical rune
-// with a non-empty, ordered source range inside the original text. A range that
-// escapes the text, or an empty one, would let a mask miss a rune.
 func TestCanonicalizeMapInvariants(t *testing.T) {
 	texts := []string{
 		"",
@@ -40,9 +37,6 @@ func TestCanonicalizeMapInvariants(t *testing.T) {
 	}
 }
 
-// A finding expressed in canonical offsets must be mapped back to a span that
-// covers every rune of the original match: canonicalisation drops and joins
-// runes, and a mask that stops short leaks the tail of the value.
 func TestRemapSpanCoversTheMatch(t *testing.T) {
 	text := "почта: \u200bivan.petrov@example.com"
 	_, sp := canonicalizeMap(text)
@@ -53,8 +47,6 @@ func TestRemapSpanCoversTheMatch(t *testing.T) {
 	}
 }
 
-// A span that runs past the canonical text must not panic or produce an
-// out-of-range span; it clamps to the end of the text.
 func TestRemapSpanClamps(t *testing.T) {
 	_, sp := canonicalizeMap("abc")
 	total := 3

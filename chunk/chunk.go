@@ -1,4 +1,3 @@
-// Package chunk splits documents into overlapping token windows.
 package chunk
 
 import (
@@ -19,8 +18,6 @@ type Token struct {
 	End   int
 }
 
-// Tokenizer yields tokens with rune offsets, so chunks preserve the source
-// text.
 type Tokenizer interface {
 	Tokens(text string) []Token
 }

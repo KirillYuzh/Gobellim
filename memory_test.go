@@ -57,8 +57,6 @@ func (f *memES) bulk(body []byte) (int, []byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for i := 0; i+1 < len(lines); i += 2 {
-		// UseNumber keeps int64 sequence numbers exact; float64 would collapse
-		// adjacent values at UnixNano magnitude, which Elasticsearch does not.
 		dec := json.NewDecoder(bytes.NewReader([]byte(lines[i+1])))
 		dec.UseNumber()
 		var doc map[string]any
@@ -489,7 +487,6 @@ func TestChatMarksAppendedMessagesUntrusted(t *testing.T) {
 	app := newMemoryAppWithGuard(t, es, llm, nil, testPolicyMemory, rules.New())
 	defer func() { _ = app.Close(context.Background()) }()
 
-	// A valid SNILS is masked on the input rail, which marks the turn untrusted.
 	if _, err := app.Chat(memoryCtx(), ChatRequest{
 		ThreadID: "th1",
 		Messages: []model.Message{{Role: model.RoleUser, Content: "snils 112-233-445 95"}},
@@ -527,7 +524,6 @@ func TestUntrustedHistoryBlocksEgressInTheNextTurn(t *testing.T) {
 				textResponse("done"),
 			}}
 			app := newMemoryApp(t, es, llm, nil, testPolicyMemory)
-			app.cfg.Egress = EgressPolicy{RuleOfTwo: true}
 			defer func() { _ = app.Close(context.Background()) }()
 
 			type sendIn struct {

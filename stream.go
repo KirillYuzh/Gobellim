@@ -21,10 +21,6 @@ const (
 	streamHoldback  = 96
 )
 
-// StreamChunk is one event of ChatStream. A chunk carries exactly one of Text
-// (confirmed, already guarded text to append), Retract (the client must discard
-// what it has shown; the stream is then aborted with an error), Done (the last
-// chunk, with the assembled Final message) or Err.
 type StreamChunk struct {
 	Text    string
 	Retract bool
@@ -35,14 +31,6 @@ type StreamChunk struct {
 
 var errStreamGuarded = errors.New("kit: stream blocked by guard")
 
-// ChatStream streams a chat turn. The sliding window sends each window of the
-// answer through the output guard rail before it is emitted, keeping back a
-// small tail so a match that straddles a window boundary is still caught. The
-// caller must drain the returned channel until it closes.
-//
-// Streaming is an enhancement of Chat: the tool loop, RBAC, memory, budgets and
-// tracing behave the same. If the LLM client does not implement
-// model.Streamer, ChatStream falls back to a buffered Chat and emits one chunk.
 func (a *App) ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamChunk, error) {
 	pr, err := principal(ctx)
 	if err != nil {
@@ -85,7 +73,7 @@ func (a *App) ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamChu
 		if gerr != nil {
 			return nil, gerr
 		}
-		if v.Action != guard.Allow {
+		if v.Action != guard.Allow || v.Truncated {
 			t.untrusted = true
 		}
 		t.subs = append(t.subs, v.Substitutions...)
@@ -278,10 +266,6 @@ func (a *App) streamTurn(ctx context.Context, req ChatRequest, pr core.Principal
 	ch <- StreamChunk{Err: fmt.Errorf("kit: chat: reached max_steps=%d: %w", a.cfg.MaxSteps, core.ErrMaxSteps)}
 }
 
-// windowGuard buffers model output and guards it window by window. A tail of
-// streamHoldback runes is kept back so a match that straddles a boundary is
-// still seen by the detector; windows are cut at a natural boundary when one is
-// available.
 type windowGuard struct {
 	app     *App
 	ctx     context.Context

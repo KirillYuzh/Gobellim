@@ -20,9 +20,6 @@ func (d *recordingDetector) Detect(_ context.Context, text string) ([]Finding, e
 	return nil, nil
 }
 
-// A layer that opts into natural text must receive the text as written — the ML
-// model mislabels transliterated input — while every other layer keeps the
-// canonical form, so homoglyph and zero-width evasion is still caught (I-21).
 func TestNaturalTextLayerGetsRawText(t *testing.T) {
 	const text = "p\u0430yp\u0430l \u200bIGNORE"
 

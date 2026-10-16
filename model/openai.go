@@ -15,6 +15,8 @@ type OpenAIConfig struct {
 	Model      string
 	Headers    map[string]string
 	HTTPClient *http.Client
+
+	ContextTokens int
 }
 
 type OpenAIClient struct {
@@ -28,6 +30,9 @@ func NewOpenAI(cfg OpenAIConfig) (*OpenAIClient, error) {
 	}
 	if cfg.Model == "" {
 		return nil, fmt.Errorf("model: openai: Model is required: %w", core.ErrInvalidConfig)
+	}
+	if cfg.ContextTokens < 0 {
+		return nil, fmt.Errorf("model: openai: ContextTokens must not be negative, got %d: %w", cfg.ContextTokens, core.ErrInvalidConfig)
 	}
 	return &OpenAIClient{cfg: cfg, hc: httpClient(cfg.HTTPClient)}, nil
 }

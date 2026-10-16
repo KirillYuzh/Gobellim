@@ -183,7 +183,6 @@ func TestOTLPScoreAttachesAsRootEvent(t *testing.T) {
 	}
 	defer func() { _ = exp.Close(context.Background()) }()
 
-	// Score arrives before the trace: it must still attach on the same flush.
 	exp.EnqueueScore(Score{TraceID: "t1", Name: "accuracy", Value: 0.75, Comment: "ok"})
 	exp.Enqueue(Trace{ID: "t1", Name: "chat"})
 	if err := exp.Flush(context.Background()); err != nil {
@@ -215,7 +214,6 @@ func TestOTLPStandaloneScoreSpan(t *testing.T) {
 	}
 	defer func() { _ = exp.Close(context.Background()) }()
 
-	// No matching trace in the batch: the score must become a standalone span.
 	exp.EnqueueScore(Score{TraceID: "missing", Name: "quality", Value: 1})
 	if err := exp.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush: %v", err)

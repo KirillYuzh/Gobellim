@@ -446,8 +446,8 @@ func TestEgressHostAllowlist(t *testing.T) {
 	}
 }
 
-func TestRuleOfTwoBlocksEgressAfterUntrustedInput(t *testing.T) {
-	app := &App{cfg: Config{Egress: EgressPolicy{RuleOfTwo: true}}}
+func TestRuleOfTwoIsOnByDefaultInTheEgressCheck(t *testing.T) {
+	app := &App{cfg: Config{}}
 	def := &ToolDef{name: "send", effect: EffectEgress, egressAny: true}
 
 	if err := app.checkEgress(def, `{}`, &turn{}); err != nil {

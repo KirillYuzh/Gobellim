@@ -202,6 +202,7 @@ func run[T any](ctx context.Context, deps Deps, req Req, span *Span, fn func(ctx
 		}
 		span.Verdict = verdict
 		span.Text = verdict.Text
+		span.Metadata = mergeSpanMetadata(span.Metadata, verdict.ObservationMetadata())
 		if verdict.Action == guard.Reject {
 			return zero, &GuardRejectError{
 				Kind: req.Kind, Name: req.Name, Rail: verdict.Rail,
@@ -218,6 +219,20 @@ func run[T any](ctx context.Context, deps Deps, req Req, span *Span, fn func(ctx
 	}
 
 	return fn(ctx, span)
+}
+
+func mergeSpanMetadata(own, fromGuard map[string]any) map[string]any {
+	if len(fromGuard) == 0 {
+		return own
+	}
+	out := make(map[string]any, len(own)+len(fromGuard))
+	for k, v := range own {
+		out[k] = v
+	}
+	for k, v := range fromGuard {
+		out[k] = v
+	}
+	return out
 }
 
 func errorKindOf(err error) string {

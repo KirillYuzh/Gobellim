@@ -20,7 +20,6 @@ import (
 	"github.com/gobellim/kit/chunk"
 	"github.com/gobellim/kit/embed"
 	"github.com/gobellim/kit/guard"
-	"github.com/gobellim/kit/guard/rules"
 	"github.com/gobellim/kit/internal/cache"
 	"github.com/gobellim/kit/internal/call"
 	"github.com/gobellim/kit/internal/core"
@@ -39,23 +38,18 @@ const (
 	DefaultArgsMaxBytes    = 32 * 1024
 	DefaultTopK            = 10
 
-	// DefaultRerankMultiplier widens the candidate set (TopK × multiplier) before
-	// a reranker narrows it back to TopK, when Config.RerankCandidates is unset.
 	DefaultRerankMultiplier = 4
 )
 
 type EgressPolicy struct {
-	RuleOfTwo bool
+	AllowEgressAfterUntrusted bool
 }
 
-// RateLimit caps operations per tenant. The zero value disables limiting.
 type RateLimit struct {
 	PerSecond float64
 	Burst     int
 }
 
-// SpotlightMode controls marking of untrusted content (tool results, retrieval,
-// memory) before it reaches the model. The zero value enables it.
 type SpotlightMode int
 
 const (
@@ -63,8 +57,6 @@ const (
 	SpotlightOff
 )
 
-// ResponseCache caches model responses. Size is the number of entries; the zero
-// size disables caching. Responses that request tools are never cached.
 type ResponseCache struct {
 	Size int
 	TTL  time.Duration
@@ -95,10 +87,6 @@ func (f ApproverFunc) Approve(ctx context.Context, req ApprovalRequest) (bool, e
 	return f(ctx, req)
 }
 
-// GuardMode selects how the guard pipeline reacts when the ML layer is
-// unavailable. GuardStrict fails closed: any layer error fails the check.
-// GuardDegraded keeps the deterministic layer, skips the failed optional layer
-// and marks the verdict and the observation degraded.
 type GuardMode int
 
 const (
@@ -107,19 +95,21 @@ const (
 )
 
 type Config struct {
-	ES               store.ES
-	LLM              model.Client
-	Pricing          model.Pricing
-	Embedder         embed.Embedder
-	Policy           *authz.Policy
-	GuardL2          guard.Detector
-	GuardMode        GuardMode
-	GuardMaxChars    int
-	GuardCacheSize   int
-	GuardWindowChars int
+	ES                    store.ES
+	LLM                   model.Client
+	Pricing               model.Pricing
+	Embedder              embed.Embedder
+	EmbedCache            embed.CacheConfig
+	Policy                *authz.Policy
+	GuardL2               guard.Detector
+	GuardL2ArtifactSHA256 string
+	GuardEnsembles        []guard.Ensemble
+	GuardDegradedRails    map[string]bool
+	GuardMode             GuardMode
+	GuardMaxChars         int
+	GuardCacheSize        int
+	GuardWindowChars      int
 
-	// GuardOnViolation is called for every non-allow guard verdict. It receives
-	// the verdict without the masked values (`AllowPII`), so raw PII never leaves here.
 	GuardOnViolation func(guard.Verdict)
 	Tokenizer        chunk.Tokenizer
 	ChunkSize        int
@@ -145,8 +135,6 @@ type Config struct {
 	HideOutput bool
 	Sinks      []trace.Sink
 
-	// TraceProcessors run on every observation before it is written and may
-	// redact or drop it (clear Name).
 	TraceProcessors []func(*trace.Observation)
 	MaxTotalTokens  int
 	Egress          EgressPolicy
@@ -179,6 +167,13 @@ func New(_ context.Context, cfg Config) (*App, error) {
 	}
 	if cfg.Policy == nil {
 		return nil, fmt.Errorf("kit: Config.Policy is required: %w", core.ErrInvalidConfig)
+	}
+	if cfg.EmbedCache.Size > 0 && cfg.Embedder != nil {
+		cached, err := embed.NewCached(cfg.Embedder, cfg.EmbedCache)
+		if err != nil {
+			return nil, err
+		}
+		cfg.Embedder = cached
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
@@ -213,6 +208,10 @@ func New(_ context.Context, cfg Config) (*App, error) {
 	if cfg.GuardMode == GuardDegraded {
 		cfg.Logger.Warn("kit: guard mode is DEGRADED: an unavailable ML layer is skipped instead of failing the request")
 	}
+	if rails := degradedRailNames(cfg); len(rails) > 0 {
+		cfg.Logger.Warn("kit: guard degradation is per rail: an unavailable ML layer is skipped on the named rails only",
+			"rails", rails)
+	}
 	if cw, ok := cfg.LLM.(model.ContextWindow); ok {
 		effective := cfg.GuardMaxChars
 		if effective <= 0 {
@@ -226,25 +225,28 @@ func New(_ context.Context, cfg Config) (*App, error) {
 
 	hash := policyHash(cfg.Policy)
 
-	layers := []guard.Detector{rules.New()}
-	guardModel := ""
-	if cfg.GuardL2 != nil {
-		layers = append(layers, cfg.GuardL2)
-		guardModel = cfg.GuardL2.Name()
+	layers, ensembles, guardModel := cfg.guardLayers()
+	artifact, err := guardArtifact(cfg, layers, ensembles)
+	if err != nil {
+		return nil, err
 	}
-	guardVersion := hash + "/" + layerID(layers)
-	var optional []string
-	if cfg.GuardMode == GuardDegraded && cfg.GuardL2 != nil {
-		optional = []string{cfg.GuardL2.Name()}
+	byRail, err := optionalByRail(cfg, layers, ensembles)
+	if err != nil {
+		return nil, err
 	}
+	guardVersion := hash + "/" + layerID(layers, ensembles)
 	pipeline, err := guard.New(guard.Options{
-		Layers:      layers,
-		Optional:    optional,
-		MaxChars:    cfg.GuardMaxChars,
-		CacheSize:   cfg.GuardCacheSize,
-		WindowChars: cfg.GuardWindowChars,
-		Version:     guardVersion,
-		OnViolation: cfg.GuardOnViolation,
+		Layers:         layers,
+		Ensembles:      ensembles,
+		Optional:       optionalEverywhere(cfg, layers, ensembles),
+		OptionalByRail: byRail,
+		MaxChars:       cfg.GuardMaxChars,
+		CacheSize:      cfg.GuardCacheSize,
+		WindowChars:    cfg.GuardWindowChars,
+		Version:        guardVersion,
+		ArtifactHash:   artifact,
+		OnViolation:    cfg.GuardOnViolation,
+		Logger:         cfg.Logger,
 	})
 	if err != nil {
 		return nil, err
@@ -315,13 +317,10 @@ func (a *App) GuardVersion() string { return a.guard.Version() }
 
 func (a *App) PolicyHash() string { return a.policyHash }
 
-// HealthStatus and HealthChecker are aliases of internal/core; an injected
-// component implements HealthChecker to expose its state to App.Health.
 type HealthStatus = core.HealthStatus
 
 type HealthChecker = core.HealthChecker
 
-// ComponentHealth is one injected component's health inside Health.
 type ComponentHealth struct {
 	Name     string
 	OK       bool
@@ -330,27 +329,47 @@ type ComponentHealth struct {
 	Capacity int
 }
 
-// Health is a point-in-time snapshot of the runtime: the guard policy, the
-// trace writer queue and every injected component that implements
-// HealthChecker. Healthy is false when any component reports OK=false.
-// Degraded mirrors the configured guard mode, not a live verdict.
 type Health struct {
 	Healthy       bool
 	Degraded      bool
+	DegradedRails []string
 	GuardMode     GuardMode
 	GuardVersion  string
+	GuardStats    guard.Stats
 	TraceQueue    int
 	TraceQueueCap int
 	TraceDropped  int64
 	Components    []ComponentHealth
 }
 
+// Metrics is the counter surface a dashboard reads: guard verdicts and their
+// latency histogram, plus the trace-writer queue. It carries no dependency on a
+// metrics library — export it wherever you already scrape.
+type Metrics struct {
+	Guard         guard.Stats
+	TraceQueue    int
+	TraceQueueCap int
+	TraceDropped  int64
+}
+
+func (a *App) Metrics() Metrics {
+	return Metrics{
+		Guard:         a.guard.Stats(),
+		TraceQueue:    a.writer.QueueDepth(),
+		TraceQueueCap: a.writer.QueueCapacity(),
+		TraceDropped:  a.writer.Dropped(),
+	}
+}
+
 func (a *App) Health() Health {
+	rails := degradedRailNames(a.cfg)
 	h := Health{
 		Healthy:       true,
-		Degraded:      a.cfg.GuardMode == GuardDegraded,
+		Degraded:      a.cfg.GuardMode == GuardDegraded || len(rails) > 0,
+		DegradedRails: rails,
 		GuardMode:     a.cfg.GuardMode,
 		GuardVersion:  a.guard.Version(),
+		GuardStats:    a.guard.Stats(),
 		TraceQueue:    a.writer.QueueDepth(),
 		TraceQueueCap: a.writer.QueueCapacity(),
 		TraceDropped:  a.writer.Dropped(),
@@ -438,8 +457,6 @@ func (a *App) responseCacheKey(req model.Request) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// cached returns a response for a key. Cached responses never carry cost: the
-// tokens are replayed, but nothing was spent on this call.
 func (a *App) cached(key string) (model.Response, bool) {
 	if a.cache == nil || key == "" {
 		return model.Response{}, false
@@ -451,8 +468,6 @@ func (a *App) cached(key string) (model.Response, bool) {
 	return r, ok
 }
 
-// remember stores a response unless it requested tools: replaying a tool call
-// would re-run its side effects.
 func (a *App) remember(key string, r model.Response) {
 	if a.cache == nil || key == "" || len(r.Message.ToolCalls) > 0 {
 		return
@@ -483,12 +498,15 @@ func principalScoped(ctx context.Context) (core.Principal, error) {
 	return pr, nil
 }
 
-func layerID(layers []guard.Detector) string {
-	names := make([]string, 0, len(layers))
+func layerID(layers []guard.Detector, ensembles []guard.Ensemble) string {
+	parts := make([]string, 0, len(layers)+len(ensembles))
 	for _, l := range layers {
-		names = append(names, l.Name())
+		parts = append(parts, l.Name())
 	}
-	return strings.Join(names, "+")
+	for _, e := range ensembles {
+		parts = append(parts, e.Name+"("+strings.Join(detectorNames(e.Detectors), "+")+")")
+	}
+	return strings.Join(parts, "+")
 }
 
 func policyHash(p *authz.Policy) string {
@@ -566,6 +584,13 @@ type turn struct {
 	subs         []guard.Substitution
 }
 
+func (t *turn) observeInput(v guard.Verdict) {
+	if v.Action != guard.Allow || v.Truncated {
+		t.untrusted = true
+	}
+	t.subs = append(t.subs, v.Substitutions...)
+}
+
 func (a *App) Chat(ctx context.Context, req ChatRequest) (out model.Message, err error) {
 	pr, err := principal(ctx)
 	if err != nil {
@@ -608,10 +633,7 @@ func (a *App) Chat(ctx context.Context, req ChatRequest) (out model.Message, err
 		if gerr != nil {
 			return model.Message{}, gerr
 		}
-		if v.Action != guard.Allow {
-			t.untrusted = true
-		}
-		t.subs = append(t.subs, v.Substitutions...)
+		t.observeInput(v)
 		client[i].Content = v.Text
 	}
 
@@ -809,7 +831,7 @@ func (a *App) execTool(ctx context.Context, tc model.ToolCall, t *turn) (string,
 				res = maskValues(res, t.subs)
 			}
 			span.Output = res
-			return res, ierr
+			return res, asToolError(tc.Name, ierr)
 		})
 	}
 
@@ -839,7 +861,7 @@ func (a *App) execTool(ctx context.Context, tc model.ToolCall, t *turn) (string,
 		if isFatalExecErr(execErr) {
 			return "", execErr
 		}
-		return errorResult(execErr.Error()), nil
+		return errorResult(unmarkedErrorText(execErr)), nil
 	}
 
 	v, gerr := call.Guard(ctx, a.calls, call.Req{
@@ -853,7 +875,7 @@ func (a *App) execTool(ctx context.Context, tc model.ToolCall, t *turn) (string,
 		}
 		return "", gerr
 	}
-	if v.Action != guard.Allow {
+	if v.Action != guard.Allow || v.Truncated {
 		t.untrusted = true
 	}
 
@@ -892,6 +914,17 @@ func isFatalExecErr(err error) bool {
 		errors.Is(err, context.DeadlineExceeded)
 }
 
+func asToolError(name string, err error) error {
+	if err == nil || isFatalExecErr(err) {
+		return err
+	}
+	return fmt.Errorf("kit: tool %s: %w: %w", name, err, core.ErrTool)
+}
+
+func unmarkedErrorText(err error) string {
+	return strings.TrimSuffix(err.Error(), core.ErrTool.Error())
+}
+
 func (a *App) approve(ctx context.Context, def *ToolDef, args string, t *turn) error {
 	if a.cfg.Approver == nil {
 		return fmt.Errorf("kit: tool %s requires approval but no Approver is configured: %w",
@@ -927,7 +960,7 @@ func (a *App) checkEgress(def *ToolDef, args string, t *turn) error {
 	if !def.effect.IsEgress() {
 		return nil
 	}
-	if a.cfg.Egress.RuleOfTwo && t.untrusted {
+	if !a.cfg.Egress.AllowEgressAfterUntrusted && t.untrusted {
 		return fmt.Errorf("kit: tool %s: egress blocked after untrusted input in this turn: %w",
 			def.name, core.ErrUnauthorized)
 	}
@@ -1130,8 +1163,6 @@ type SearchRequest struct {
 	Query  string
 	TopK   int
 	Filter store.Filter
-	// Rerank reorders the candidates with Config.Reranker before truncating to
-	// TopK; it fails with ErrInvalidConfig when no Reranker is configured.
 	Rerank bool
 }
 
@@ -1235,8 +1266,6 @@ func (a *App) Search(ctx context.Context, req SearchRequest) ([]SearchHit, error
 	return hits, nil
 }
 
-// candidateCount is how many candidates to retrieve before truncation. With a
-// reranker the set is widened, because recall and precision are different jobs.
 func (a *App) candidateCount(topK int, rerankRequested bool) int {
 	if !rerankRequested {
 		return topK

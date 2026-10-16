@@ -2,11 +2,11 @@ GO        ?= go
 GOFUMPT   ?= gofumpt
 GOLANGCI  ?= golangci-lint
 
-.PHONY: check require-tools build test lint fmt fmt-check tidy
+.PHONY: check require-tools build test lint fmt fmt-check tidy docs-lint
 
 # Full local gate. Fails fast: require-tools runs first,
-# then fmt-check, then the build/vet/test/lint chain.
-check: require-tools fmt-check
+# then fmt-check, then docs-lint, then the build/vet/test/lint chain.
+check: require-tools fmt-check docs-lint
 	@echo "==> go build ./..."
 	@$(GO) build ./...
 	@echo "==> go vet ./..."
@@ -18,6 +18,12 @@ check: require-tools fmt-check
 	@echo "==> golangci-lint run"
 	@$(GOLANGCI) run
 	@echo "all checks passed"
+
+# Documentation gate: broken relative links, references to undefined I-/BR-/D-
+# ids, closed ranges that freeze the numbering, and duplicate definitions.
+docs-lint:
+	@echo "==> docs-lint"
+	@$(GO) run ./scripts/docslint/
 
 # Fail fast with a helpful hint when a required tool is missing.
 require-tools:

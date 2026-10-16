@@ -422,7 +422,10 @@ func (s Structurer) Structure(ctx context.Context, prose string) (string, error)
 
 ### 3.7 `eval` (новый пакет, item 7)
 
-Только stdlib. Зависит от `trace`; **не** импортирует `kit`.
+Только stdlib. Зависит от `trace`; **не** импортирует `kit`. Внешних модулей нет
+(проверено `go list -deps`, 2026-10-16); правило `eval-trace-and-internal-only` в
+`internal/importrules` запрещает ему подниматься выше `trace` и `internal/**`
+(см. D67).
 
 ```go
 // Trace — записанный трейс с его observation.
@@ -515,7 +518,9 @@ type Config struct {
 }
 
 type EgressPolicy struct {
-	RuleOfTwo bool // запрет эгресса, если на ходу был недоверенный ввод и приватные данные
+	// opt-out: zero value (false) ENFORCES the Rule of Two;
+	// true allows egress in a turn that already saw untrusted input.
+	AllowEgressAfterUntrusted bool
 }
 
 // RateLimit — token bucket на тенанта (ключ — Principal.Tenant).
@@ -636,6 +641,11 @@ type MemoryHit struct {
 - `store.EnsureSchema` создаёт `kit-memory-messages` и `kit-memory-working`.
 
 ## 4. Решения (дополнение к decisions.md)
+
+Это замороженное ядро решений D21…D30. Решения D31…D67 — в журнале
+[decisions.md](./decisions.md); в частности, судьба `flow` и `eval` в ядре
+зафиксирована в **D67** (`eval` — ноль внешних зависимостей, `flow` — две
+jsonschema-библиотеки ради схем `In`/`Out`).
 
 | #   | Решение                                                                                                | Обоснование                                                                                                                                                                                          | Отвергнуто                     |
 | --- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
@@ -765,7 +775,7 @@ README описывают именно это поведение.
 - `kit.WithTraceMetadata(ctx, md)` / `kit.TraceMetadataFrom(ctx)` — request-scoped
   метаданные, которые примешиваются в `metadata` каждой observation (per-call значение
   перекрывает значение из контекста).
-- `Config.MaxTotalTokens` → `ErrBudget`; `Config.Egress.RuleOfTwo`;
+- `Config.MaxTotalTokens` → `ErrBudget`; `Config.Egress.AllowEgressAfterUntrusted`;
   `Config.TraceText`, `Config.Sampler`, `Config.HideInput`, `Config.HideOutput`,
   `Config.Sinks`.
 - `Config.Spotlight` (`SpotlightOn`/`SpotlightOff`) и типы `SpotlightMode`,
@@ -823,7 +833,7 @@ README описывают именно это поведение.
 - `kit.Config.GuardMode` (`GuardStrict`/`GuardDegraded`), `guard.Options.Optional`,
   `guard.Verdict.Degraded`/`DegradedReason`; observation несёт `guard_degraded` (I-16).
 - `kit.Config.Pricing` (`model.Pricing`), `model.Usage.Cost`; `usage.cost`/`cost`
-  заполняются framework'ом (BR-77).
+  заполняются библиотекой (BR-77).
 - Право `chat` на операцию `Chat` (`authz.PermChat`, BR-76).
 - `store.Chunk.EmbedModel` + поле `embed_model` в `kit-chunks`;
   `store.SearchQuery.EmbedModel` фильтрует поиск по текущей модели эмбеддера (BR-79).
@@ -885,8 +895,9 @@ Snapshot, State}`.
 Capacity}` и `HealthChecker`; `kit` их алиасит (`kit.HealthStatus`,
   `kit.HealthChecker`). `trace.Writer.QueueDepth`/`QueueCapacity`, `ort.Pool.Stats`;
   `guard/gliner` и локальный `embed` реализуют `Health()`. `App.Health()`
-  возвращает `Health{Healthy, Degraded, GuardMode, GuardVersion, TraceQueue,
-TraceQueueCap, TraceDropped, Components}`.
+  возвращает `Health{Healthy, Degraded, GuardMode, GuardVersion, GuardStats,
+TraceQueue, TraceQueueCap, TraceDropped, Components}`; `App.Metrics()` отдаёт
+  счётчики guard (вердикты и гистограмма латентности) и очередь trace-писателя.
 - **Реранкинг (D49):** новый пакет `rerank` (`Reranker`, `Rank`, `Reorder`,
   `TEIConfig`/`NewTEI`); `Config.Reranker`, `Config.RerankCandidates`,
   `SearchRequest.Rerank`; `call.KindRerank`; кандидатов `TopK ×

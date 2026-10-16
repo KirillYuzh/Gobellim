@@ -38,9 +38,6 @@ type oaiStreamChunk struct {
 	} `json:"usage"`
 }
 
-// ChatStream streams an OpenAI-compatible chat completion over SSE. Content
-// deltas go to onDelta in order; tool-call fragments are reassembled and
-// returned in the final Response, so streaming is a drop-in for Chat.
 func (c *OpenAIClient) ChatStream(ctx context.Context, req Request, onDelta func(string) error) (Response, error) {
 	payload, headers, err := c.encode(req, true)
 	if err != nil {

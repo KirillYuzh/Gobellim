@@ -101,3 +101,34 @@ jobs:
             echo "run 'gofumpt -w .' to fix"
             exit 1
           fi
+
+  docs-lint:
+    name: docs-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: docs-lint
+        run: go run ./scripts/docslint
+
+  guard-quality:
+    name: guard quality (L1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      # The ONNX weights are deliberately not in git, so this gate measures the
+      # L1 regex layer only. The L2 parity gate needs -tags ort and the runtime.
+      - name: guard quality report
+        run: |
+          set -o pipefail
+          go run ./scripts/guardqual | tee guard-quality.md
+      - name: publish report to the job summary
+        if: always()
+        run: cat guard-quality.md >> "$GITHUB_STEP_SUMMARY"

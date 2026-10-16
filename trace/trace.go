@@ -50,8 +50,6 @@ type Observation struct {
 	PolicyHash   string
 	TextPolicy   TextPolicy
 
-	// GuardDegraded records that an optional guard layer was unavailable and the
-	// verdict was produced by the remaining layers.
 	GuardDegraded bool
 }
 

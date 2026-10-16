@@ -199,7 +199,6 @@ func TestIngestWritesBeforeDeletingOldVersions(t *testing.T) {
 	if err := app.Ingest(ctx, Doc{ID: "d1", Text: "alpha beta gamma", ACL: []string{"admin"}}); err != nil {
 		t.Fatal(err)
 	}
-	// Flush the trace writer so any trace bulk calls are recorded too.
 	if err := app.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -469,8 +468,6 @@ func TestGenerateDecodedFlag(t *testing.T) {
 }
 
 func TestValidateOutputReplacesOffSchemaResult(t *testing.T) {
-	// The Go type cannot enforce an enum, so the marshalled result can fall
-	// outside the schema; the runtime must not hand it to the model.
 	type out struct {
 		Colour string `json:"colour" jsonschema:"enum=red,green"`
 	}

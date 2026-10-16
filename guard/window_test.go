@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// windowDetector mimics a budgeted ML layer: it inspects only the first budget
-// runes of whatever it is given, and records each call. Detection runs on the
-// canonical (lower-cased) text, so the marker is lower-case.
 type windowDetector struct {
 	marker string
 	budget int

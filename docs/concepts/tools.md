@@ -175,14 +175,16 @@ if _, err := kit.Tool(app, "close_ticket", closeTicket,
 - `ValidateOutput(true)` — результат проверяется по JSON Schema типа `Out`; при несовпадении модель получает error-result вместо данных, а ход помечается недоверенным.
 - `ModelView(fn)` — что видит модель вместо результата; приложению уходит исходная строка.
 
-`Config.Egress` включает правило «Rule of Two»: эффектный эгресс блокируется, если на ходу уже был недоверенный ввод (маска или находка guard на любом рельсе, а также недоверенная строка истории треда).
+<!-- derived: BR-51 -->
+
+`Config.Egress` по умолчанию включает правило «Rule of Two»: эффектный эгресс блокируется, если на ходу уже был недоверенный ввод (маска или находка guard на любом рельсе, а также недоверенная строка истории треда). Поле `AllowEgressAfterUntrusted` — opt-out, который снимает этот запрет.
 
 ```go
 app, err := kit.New(ctx, kit.Config{
 	ES:     es,
 	LLM:    llm,
 	Policy: policy,
-	Egress: kit.EgressPolicy{RuleOfTwo: true},
+	Egress: kit.EgressPolicy{}, // нулевое значение: Rule of Two включён
 	Approver: kit.ApproverFunc(func(ctx context.Context, req kit.ApprovalRequest) (bool, error) {
 		// req.Fingerprint привязан к инструменту и каноническим аргументам,
 		// поэтому одобрение нельзя переиграть на другой набор аргументов.
@@ -313,6 +315,6 @@ if _, err := kit.RetrievalTool(app, "search_knowledge"); err != nil {
 
 - [Справочник kit](../reference/kit.md) — `kit.Tool`, `Desc`, `Perm`, `Effects`, `BeforeToolCall`, `AfterToolCall`, `RetrievalTool`
 - [Как вызывать инструменты](../guides/tool-calling.md) — пошаговая настройка и разбор сбоев
-- [Безопасность](../guides/security.md) — эгресс, RBAC/ACL и пределы фреймворка
+- [Безопасность](../guides/security.md) — эгресс, RBAC/ACL и пределы библиотеки
 - [Бизнес-правила](../internals/business-rules.md) — `BR-15`…`BR-23`, `BR-51`, `BR-53`, `BR-61`, `BR-62`
 - [demo](../../demo/README.ru.md) — реальный инструмент погоды

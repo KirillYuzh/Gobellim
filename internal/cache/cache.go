@@ -1,4 +1,3 @@
-// Package cache provides a fixed-size LRU with per-entry TTL.
 package cache
 
 import (
@@ -15,8 +14,6 @@ type entry[V any] struct {
 	expires time.Time
 }
 
-// LRU is a goroutine-safe LRU map with a TTL. The zero TTL means entries never
-// expire on their own; they only leave the map by capacity.
 type LRU[V any] struct {
 	mu    sync.Mutex
 	cap   int

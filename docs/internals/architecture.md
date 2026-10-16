@@ -21,7 +21,7 @@ kit — библиотека, а не сервис. Ей нужен один Go-
 
 ## Контейнеры
 
-Framework — библиотека. Ей нужен один процесс на Go; всё остальное внешнее.
+kit — библиотека. Ей нужен один процесс на Go; всё остальное внешнее.
 
 | Контейнер                   | Образ / владелец                                                                 | Порты                                  | Протокол         | Роль                                                           | Состояние              |
 | --------------------------- | -------------------------------------------------------------------------------- | -------------------------------------- | ---------------- | -------------------------------------------------------------- | ---------------------- |
@@ -66,8 +66,8 @@ kit/
   chunk/                                    токенный чанкер + Tokenizer (по умолчанию WhitespaceTokenizer)
   store/                                    ES interface + Request, index.go (маппинги), chunks.go, search.go, filter.go, bulk.go, memory.go (индексы и запросы памяти), maintenance.go, ensure.go
   trace/                                    модель Langfuse, async writer (writer.go), policy.go (TextPolicy/Sampler), sink.go, otlp.go (Sink OTLP/HTTP)
-  eval/                                     детерминированные проверки трейсов (stdlib; зависит от trace, не от kit)
-  flow/                                     один типизированный шаг `Step[In,Out]` со schema-контрактом и suspend/resume (без Pipeline/builder-DSL, D47)
+  eval/                                     детерминированные проверки трейсов (только stdlib; зависит от trace и internal/core, не от kit) — ноль внешних зависимостей
+  flow/                                     один типизированный шаг `Step[In,Out]` со schema-контрактом и suspend/resume (без Pipeline/builder-DSL, D47); единственное внешнее ребро ядра — валидатор схем (D67)
   rerank/                                   реранкер за интерфейсом Reranker + адаптер TEI/Cohere (/rerank), детерминированный `Reorder`
   mcp/                                      клиент Model Context Protocol (stdio и streamable HTTP) + `Register` — инструменты как `mcp:<server>:<tool>`; сервер `NewServer`/`FromTool` отдаёт инструменты наружу через `App.CallTool`
   webfetch/                                 SSRF-защищённый инструмент исходящего HTTP (эффект egress)
@@ -105,11 +105,33 @@ kit/
    конструкторы и `context.Context`.
 
 Правила `internal/importrules` перечисляют ровно те пакеты, которые им подчинены; на
-остальные (фасад `kit`, `flow`, `rerank`, `mcp`, `webfetch`, `cmd/**`, `demo/**`)
-ограничений нет — они свободно зависят вниз (`flow → internal/core`,
-`rerank → internal/core`, `webfetch → kit`, `mcp → kit`), а цикл исключён тем, что
+остальные (фасад `kit`, `rerank`, `mcp`, `webfetch`, `cmd/**`, `demo/**`)
+ограничений нет — они свободно зависят вниз (`rerank → internal/core`,
+`webfetch → kit`, `mcp → kit`), а цикл исключён тем, что
 ни один файл под `internal/` не импортирует фасад. Импорт фасада из `webfetch` и
 `mcp` — обычная зависимость листа-инструмента от фасада, а не исключение.
+
+`flow` — исключение: по D67 это примитив ядра, поэтому он подчинён правилу
+`flow-internal-leaves-only` и может импортировать только листья `internal/**`.
+Запрещены фасад `kit` (цикл), `internal/call` (он тянет `guard` и `trace`, то есть
+провёл бы в примитив всё семейство ядра), семейство ядра
+(`authz`/`guard`/`model`/`embed`/`chunk`/`store`/`trace`) и соседние пакеты
+(`eval`, `rerank`, `mcp`, `webfetch`). Стандартная библиотека и две
+jsonschema-библиотеки из D67 правилом не охвачены. То же ограничение
+продублировано в `.golangci.yml` (`depguard`), чтобы правило проверялось на двух
+независимых уровнях.
+
+Ограничение на `eval` — единственное правило теста, которое не про семейство ядра:
+`eval-trace-and-internal-only` («`eval` may import only `trace` and `internal/**`,
+and must never import the root kit façade») запрещает ему подниматься выше трейса.
+Правила `core-family` и `leaf-internal-only` на `flow` и `eval` не распространяются:
+первое ограничивает только `authz`/`guard`/`model`/`embed`/`chunk`/`store`/`trace`,
+второе — только листья под `internal/`. Поэтому граница, зафиксированная для `flow`
+и `eval` в D67 («`eval` — ноль внешних зависимостей, `flow` — две jsonschema-библиотеки
+ради схем `In`/`Out`»), сегодня держится на stdlib-тесте `go test ./...` и правилах
+`depguard` в `.golangci.yml`, а не на `internal/importrules`: новое внешнее ребро в
+`flow` этот тест не поймает. Расширение правила на `flow` — открытая работа, а не
+состоявшееся свойство.
 
 ![Пакеты kit и правила зависимостей](../packages.svg)
 
@@ -206,6 +228,15 @@ pin-схемой продолжает работать. Экспорт и parity
 > (`CGO_ENABLED=1 CGO_LDFLAGS="-L.ort/lib" go build -tags ort ./...`) и образом с
 > `libonnxruntime.so`. Под тегом `ort` `guard/gliner` и `embed.NewLocal` —
 > реальные реализации: ONNX-детектор guard и ONNX-энкодер эмбеддера.
+>
+> Что из этого доступно «из коробки»: детерминированный L1 (`guard/rules`) —
+
+<!-- derived: BR-26 -->
+
+> всегда, в сборке по умолчанию. L2 — плагин, а не часть сборки по умолчанию:
+> `guard-onnx` требует `-tags ort`, `guard-remote` — запущенного удалённого
+> сервиса. Fail-closed означает «ошибка guard отклоняет операцию», а не «все
+> слои включены всегда»: без L2 kit маскирует и отклоняет по L1.
 
 ## Путь вызова
 
@@ -320,7 +351,7 @@ JSON-API остаётся запланированным.
 
 Grafana: в `deploy/grafana/` лежат provisioning ES-datasource и дашборды:
 латентность и ошибки по `name`/`kind`, токены по модели и tenant (панель
-стоимости читает `usage.cost`, который framework заполняет по `Config.Pricing`;
+стоимости читает `usage.cost`, который библиотека заполняет по `Config.Pricing`;
 `0`, если цена не задана — см. [Наблюдаемость](../concepts/observability.md)),
 срабатывания guard по категориям и rail, топ tools и отказы авторизации,
 таблица последних trace.
@@ -329,7 +360,7 @@ Grafana: в `deploy/grafana/` лежат provisioning ES-datasource и дашб�
 
 - [Бизнес-правила](./business-rules.md) — правила, которые обязана сохранять
   архитектура
-- [Решения и допущения](./decisions.md) — журнал `D1`…`D35` и допущения
+- [Решения и допущения](./decisions.md) — журнал `D1`…`D67` и допущения
   `A1`…`A9`
 - [План](./plan.md) — этапы, тесты, риски, Definition of Done
 - [Ориентиры](./references.md) — Go-проекты, с которых снимаются идеи

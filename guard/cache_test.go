@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// lastRuneDetector reports the final rune of whatever it is handed, so the span
-// it returns is expressed in the canonical space of its input.
 type lastRuneDetector struct{ calls int }
 
 func (*lastRuneDetector) Name() string { return "L1" }
@@ -20,9 +18,6 @@ func (d *lastRuneDetector) Detect(_ context.Context, text string) ([]Finding, er
 	return []Finding{{Category: CatPII, Label: "LAST", Layer: "L1", Start: n - 1, End: n}}, nil
 }
 
-// Two texts that canonicalise alike but differ in rune layout must not share a
-// cached verdict: the finding carries offsets into the original text, so a hit on
-// the wrong layout would mask the wrong runes (D66).
 func TestCacheDoesNotAliasLayouts(t *testing.T) {
 	d := &lastRuneDetector{}
 	p, err := New(Options{Layers: []Detector{d}, CacheSize: 8, Version: "test"})

@@ -170,10 +170,6 @@ func VerifyDir(dir, model string) error {
 
 func (*Detector) Name() string { return "L2" }
 
-// UsesNaturalText reports that the model must see the text as written: the
-// canonical form case-folds and folds Cyrillic homoglyphs to Latin, and the model
-// mislabels transliterated Russian — a benign sentence scored as unsafe. The
-// deterministic layer still reads the canonical form, so evasion stays covered.
 func (*Detector) UsesNaturalText() bool { return true }
 
 func (d *Detector) Detect(ctx context.Context, text string) ([]guard.Finding, error) {
@@ -413,12 +409,10 @@ func (d *Detector) findings(p *prepared, out *outputs) []guard.Finding {
 	return fs
 }
 
-// categoryFor maps an entity label; entity labels default to PII.
 func (d *Detector) categoryFor(label string, def guard.Category) (guard.Category, bool) {
 	return categoryForLabel(d.cfg.CategoryMap, label, def)
 }
 
-// categoryForClass maps a classification label, honouring the group it came from.
 func (d *Detector) categoryForClass(group int, label string) (guard.Category, bool) {
 	task := ""
 	if group >= 0 && group < len(d.cfg.Schema.Classifications) {

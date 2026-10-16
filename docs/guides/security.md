@@ -2,7 +2,7 @@
 
 Этот гид — про эксплуатацию безопасности `kit`: откуда берётся принципал, что
 проверяет RBAC и ACL, как читать эгресс-контроли и что остаётся за пределами
-фреймворка. «Почему так» — [Доступ](../concepts/access-control.md),
+библиотеки. «Почему так» — [Доступ](../concepts/access-control.md),
 [Guardrails](../concepts/guardrails.md), [Инструменты](../concepts/tools.md); здесь
 — решения, чек-лист и честные пределы.
 
@@ -166,8 +166,13 @@ kit.Tool(app, "get_weather", getWeather,
 | `Effect`              | `Read` / `Write` / `Egress`; рантайм применяет правила, не спрашивая модель            |
 | `EgressHosts(hosts…)` | извлекает хосты URL из аргументов (`urlHosts`) и сверяет с allowlist по границе домена |
 | `EgressAny()`         | явный opt-in «любой хост»; пустой allowlist без него — отказ                           |
-| `Egress.RuleOfTwo`    | запрещает эгресс в ходе, где уже был недоверенный ввод (`untrusted`)                   |
+| `Egress.AllowEgressAfterUntrusted` | opt-out: снимает запрет эгресса в ходе, где уже был недоверенный ввод (`untrusted`); по умолчанию запрет действует |
 | Отказ                 | `ErrUnauthorized`, **фатально для хода**                                               |
+
+<!-- derived: BR-51 -->
+
+Матрица контролей эгресса выше — производная от BR-51; нормативная формулировка
+живёт в `docs/internals/business-rules.md`.
 
 Совпадение хоста — по границе домена: `a==host` или `host` оканчивается на
 `.a`. Глобы и `"*"` **не** работают как wildcard.
@@ -203,6 +208,11 @@ kit.Tool(app, "get_weather", getWeather,
 Guard — это `authz → guard → span → fn` внутри примитива: вход проверяется **до**
 модели, результат инструмента — до возврата в контекст, выход — до ответа.
 Fail-closed: недоступность guard (`ErrGuardUnavailable`) отклоняет операцию.
+
+Fail-closed — это про реакцию на ошибку, а не про состав слоёв. L1
+(детерминированный, regex и контрольные суммы) доступен из коробки; L2 —
+плагин: `guard-onnx` собирается с `-tags ort`, `guard-remote` требует
+запущенного сервиса. Без L2 решения принимает L1.
 
 Честные пределы (см. также [Guardrails](../concepts/guardrails.md)):
 
@@ -289,7 +299,9 @@ flowchart TD
   не нашёл фразы/ID, вредоносная инструкция может повлиять на ответ модели (но не
   на права, аргументы и эгресс — их решает рантайм).
 - **Эксфильтрация через легитимный `Egress`-инструмент**, если он вызывается до
-  появления недоверенного ввода и `RuleOfTwo` не включён.
+  появления недоверенного ввода; если вы сняли защиту явным opt-out
+  (`Config.Egress.AllowEgressAfterUntrusted = true`), недоверенный ввод перестаёт
+  блокировать эгресс вовсе.
 - **Утечка через результат инструмента**, который guard пометил `Detect`
   (неблокирующая категория): находка записана, текст не изменён.
 - **Ответ модели, содержащий unsafe/injection**, помечается на рельсе `output`
@@ -321,7 +333,8 @@ flowchart TD
 | `policy.yaml` — deny-by-default, без лишних `"*"`                | `kitctl policy check ./policy.yaml`                                 |
 | ACL задан для каждого документа                                  | `Doc.ACL` заполнен при `Ingest`; проверить поиском от другой роли   |
 | Инструменты получили `Effects` и политику хостов                 | ни одного `EffectEgress` без `EgressHosts` или `EgressAny`          |
-| `Egress.RuleOfTwo` включён для агентов с внешними данными        | `Config.Egress.RuleOfTwo = true`                                    |
+| Rule of Two не отключён (`AllowEgressAfterUntrusted` = дефолт `false`)    | `Config.Egress` оставлен нулевым; opt-out не делайте без нужды           |
+| `RateLimit` задан на тенанта                                     | `Config.RateLimit{PerSecond, Burst}`; `PerSecond > 0` (`BR-86`)     |
 | `RequireApproval` на необратимых действиях + реальный `Approver` | `kit.RequireApproval(true)`, `Config.Approver`                      |
 | Guard L2 включён и fail-closed                                   | `GuardL2` задан; окно сверено (I-06)                                |
 | Окно guard ≤ окно модели                                         | `kitctl verify window --model-context …`                            |
@@ -332,13 +345,19 @@ flowchart TD
 | ES и Grafana закрыты аутентификацией                             | ваш контур; `deploy/` — только локальный стенд                      |
 | `guardtest.AllowAll` не попал в прод                             | `grep -r AllowAll` по вашему коду — только тесты                    |
 
-## Чего фреймворк не делает
+## Чего библиотека не делает
 
 - **Не делает AuthN** и не проверяет токены/подписи — принципал приходит готовым.
-- **Не делает rate limiting** на запросы и на инструменты (есть только лимиты
-  хода: `MaxSteps`, `MaxCallsPerTool`, `ToolTimeout`).
+- **Не делает rate limiting** на стороне HTTP и на инструменты. Скорость запросов
+  ограничивает сам kit: `Config.RateLimit{PerSecond, Burst}` — token bucket на
+  тенанта, и каждая операция (`Chat`, `ChatStream`, `Ingest`, `Search`, `Delete`,
+  `Score`, `Generate` и memory-операции) сначала спрашивает разрешение у
+  лимитера и получает `ErrRateLimited` до обращения к провайдеру, хранилищу или
+  guard (`BR-86`). Нулевой `PerSecond` отключает лимит; per-call лимиты хода
+  (`MaxSteps`, `MaxCallsPerTool`, `ToolTimeout`) — отдельная история.
+  <!-- derived: BR-86 -->
 - **Не ведёт квоты и бюджет** сверх `Config.MaxTotalTokens` на один ход: нет
-  месячных квот, нет учёта по тенанту на стороне фреймворка.
+  месячных квот, нет учёта по тенанту на стороне библиотеки.
 - **Не деанонимизирует PII**: публичного API деанонимизации нет; маска необратима
   для модели, а реальное значение попадает только в args инструмента с
   `AllowPII(true)` и только внутри вызова (`BR-04`).

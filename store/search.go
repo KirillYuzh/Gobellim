@@ -48,9 +48,7 @@ type SearchQuery struct {
 	TopK          int
 	NumCandidates int
 	Filter        Filter
-	// EmbedModel restricts the search to chunks produced by this embedder.
-	// Empty disables the restriction.
-	EmbedModel string
+	EmbedModel    string
 
 	filterQuery map[string]any
 }

@@ -5,114 +5,39 @@
 ![Go](https://img.shields.io/badge/Go-1.24-00ADD8?logo=go&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-_Secure LLM primitives for Go._ Retrieval, tool calling and guardrails behind one
-authorization-checked call path.
+Native Go primitives for using LLMs safely: retrieval, tool calling and
+guardrails behind one permission-checked call path.
 
 ![Gobellim architecture](docs/architecture.en.svg)
 
-## Why Gobellim?
+## Why Gobellim
 
-**A runtime layer, not an orchestrator.** [Mastra](https://mastra.ai/), [LangChain](https://www.langchain.com/) and [CrewAI](https://www.crewai.com/) own your
-control flow — agents, graphs, workflows. Gobellim does not: you keep your
-handlers and your concurrency, and call it like a library.
+- **A point solution, not a platform.** Drop it into one handler in a service you
+  already have — no runtime, no graph engine, no lifecycle to adopt. You keep your
+  handlers and your concurrency.
+- **It runs on your infrastructure.** Your Elasticsearch, Postgres or Kafka is
+  reached through a port you implement. We never ship, own or copy your data.
+- **A small, immutable core.** The default build is pure Go: no `cgo`, no native
+  libraries, no network, and a dependency budget you can read at a glance.
+- **Everything else is a plugin.** Storage, queues, caches and the heavy ML
+  detector are opt-in; if you don't import a plugin, its dependencies and its
+  start-up cost are not in your binary.
+- **Safety you cannot forget.** Every operation runs the same four steps —
+  authorize, guard, trace, execute — so no check can be skipped.
+- **The model gets no say in access.** Tools the caller may not use are removed
+  from the schema before the model runs, and re-checked when they execute.
 
-**One gate, no bypass.** Chat, ingest, search, delete, score and generate all run
-the same four steps — authorize, guard, trace, execute. There is no second entry
-point, so no check can be forgotten and no middleware has to be written.
+## Install
 
-**The model gets no say in access.** Tools the caller may not use are removed
-from the schema before the request reaches the model, and permission is checked
-again when the tool runs.
-
-**Retrieval cannot leak.** A document's ACL is computed at write time and stored
-in every chunk, so BM25 and kNN search always filter by the caller — never after
-the fact.
-
-**Untrusted content stays untrusted.** Tool results, including retrieved chunks, are
-wrapped in `<untrusted-data>` markers, and the system prompt tells the model to treat
-them as data, not instructions. A per-tenant rate limit and a tool-free response
-cache run inside the same call path.
-
-**Tools from anywhere.** Write a tool as a Go function, pull one from an MCP server
-(`mcp.Register`), or reorder retrieval with a cross-encoder reranker (`rerank`): all
-of them run through the same authorize → guard → trace path. `App.Health()` reports
-the writer queue, the guard and any component that implements a health check.
-
-**Memory lives in your store.** Thread history, semantic recall and working memory
-sit in the same Elasticsearch, scoped by tenant and user, behind the same
-authorization gate as everything else. A caller-supplied thread ID grants nothing
-on its own.
-
-**Safety fails closed.** Two layers run before the model, over inputs, tool
-results and outputs: deterministic rules (patterns and checksums of Russian
-personal IDs) and an ONNX GLiNER guard that masks PII and rejects unsafe
-messages. A guard error rejects the request instead of passing it through.
-
-**Bounded by construction.** Max steps, per-tool limits, tool timeouts and
-argument size are enforced by the runtime, not asked for in a prompt. `Chat`
-returns the whole answer because the output guard needs the full text; streaming
-is a separate `ChatStream` operation that also goes through the guard.
-
-### Operations at a glance
-
-| Operation     | Permission    | Scope                                                       |
-| ------------- | ------------- | ----------------------------------------------------------- |
-| `Chat`        | `chat`        | permissions are checked again on every tool call            |
-| `ChatStream`  | `chat`        | same turn as `Chat`, guarded sliding-window stream          |
-| `CallTool`    | `tool:<name>` | one registered tool through the same call path (MCP server) |
-| `Memory*`     | `memory`      | thread history, semantic recall and working memory          |
-| `Generate[T]` | `generate`    | input and output guard, `ErrorStrategy`                     |
-| `Ingest`      | `ingest`      | needs `Tenant` and an `Embedder`                            |
-| `Search`      | `search`      | needs `Tenant`, an `Embedder`; `SearchRequest.Filter`       |
-| `Delete`      | `delete`      | needs `Tenant`                                              |
-| `Prune`       | `prune`       | deletes traces/observations older than a duration           |
-| `Score`       | `trace`       | records a score on a trace                                  |
-
-`Ingest`, `Search` and `Delete` require a non-empty `Tenant` in the principal, so an
-operation can never widen across tenants. `Prune` is a global, time-based retention
-action: it needs the principal and the `prune` permission, not a tenant.
-
-## In code
-
-Your Elasticsearch client is the only place that knows about transport, headers
-and `refresh`: kit calls `store.ES` with an explicit `store.Request` and never
-infers the content type from the path.
-
-```go
-type httpES struct {
-	base string
-	hc   *http.Client
-}
-
-func (c *httpES) Do(ctx context.Context, req store.Request) (int, []byte, error) {
-	var body io.Reader
-	if len(req.Body) > 0 {
-		body = bytes.NewReader(req.Body)
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, req.Method, c.base+req.EffectivePath(), body)
-	if err != nil {
-		return 0, nil, err
-	}
-	if len(req.Body) > 0 {
-		ct := req.ContentType
-		if ct == "" {
-			ct = "application/json" // the default; kit never infers it from the path
-		}
-		httpReq.Header.Set("Content-Type", ct)
-	}
-	resp, err := c.hc.Do(httpReq)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
-	return resp.StatusCode, data, err
-}
+```sh
+go get github.com/gobellim/kit
 ```
+
+## Quickstart
 
 ```go
 app, err := kit.New(ctx, kit.Config{
-	ES:     es,     // your Elasticsearch client
+	ES:     es,     // your Elasticsearch client (store.ES)
 	LLM:    llm,    // vLLM, Ollama, OpenAI-compatible or GigaChat
 	Policy: policy, // authz.Load("policy.yaml")
 })
@@ -123,94 +48,59 @@ if err := app.Setup(ctx); err != nil { // creates the indexes once
 	return err
 }
 
-// A tool is a typed Go function: its schema and validation come from weatherIn.
-type weatherIn struct {
-	City string `json:"city"`
-}
-
-func getWeather(ctx context.Context, in weatherIn) (domain.Weather, error) {
-	return weather.Current(ctx, in.City)
-}
-
+// A tool is a typed Go function: its schema and validation come from the type.
 if _, err := kit.Tool(app, "get_weather", getWeather, kit.Desc("Current weather for a city.")); err != nil {
 	return err
 }
-```
 
-```go
 // Every call carries the caller's identity.
 ctx = kit.WithPrincipal(ctx, kit.Principal{UserID: "u-1", Roles: []string{"user"}, Tenant: "acme"})
 
-// Chat answers directly, or calls a tool first, in a bounded loop.
 answer, err := app.Chat(ctx, kit.ChatRequest{
 	System:   "You are a support assistant. Answer briefly.",
 	Messages: []model.Message{{Role: model.RoleUser, Content: "Weather in Moscow?"}},
 })
 ```
 
-```go
-// Structured output: the JSON Schema is derived from the Go type.
-type Ticket struct {
-	Severity int    `json:"severity"`
-	Summary  string `json:"summary"`
-}
+## Operations
 
-// Generate is a full call-path operation: it needs a principal, the generate
-// permission and the input/output guard.
-fallback := Ticket{Severity: 3, Summary: "needs triage"}
-ticket, err := kit.Generate[Ticket](ctx, app, kit.GenerateRequest[Ticket]{
-	Prompt:        "Classify: the export job failed for three tenants.",
-	ErrorStrategy: kit.Fallback, // Strict (default) | Warn | Fallback
-	Fallback:      &fallback,
-})
-if ticket.UsedFallback {
-	// the answer did not decode into Ticket or match its schema; the fallback was returned
-}
-_ = ticket.Decoded      // false when ErrorStrategy was Warn or Fallback
-_ = ticket.FinishReason // model.FinishStop, FinishLength, FinishToolCalls, ...
-```
+| Operation     | Permission    | Notes                                              |
+| ------------- | ------------- | -------------------------------------------------- |
+| `Chat`        | `chat`        | bounded tool loop; permissions re-checked per call |
+| `ChatStream`  | `chat`        | guarded sliding-window stream                      |
+| `CallTool`    | `tool:<name>` | one tool through the same call path                |
+| `Memory*`     | `memory`      | thread history, recall and working memory          |
+| `Generate[T]` | `generate`    | typed output, validated against its schema         |
+| `Ingest`      | `ingest`      | chunk, embed and index                             |
+| `Search`      | `search`      | BM25 + kNN under the caller's ACL                  |
+| `Delete`      | `delete`      | remove a document                                  |
+| `Prune`       | `prune`       | retention by age                                   |
+| `Score`       | `trace`       | attach a score to a trace                          |
 
-```go
-// RAG: chunk, embed and index, then search BM25 + kNN under the caller's ACL.
-err = app.Ingest(ctx, kit.Doc{ID: "policy-1", Text: text, ACL: []string{"user"}})
-hits, err := app.Search(ctx, kit.SearchRequest{
-	Query: "refund policy",
-	TopK:  5,
-	// Filter narrows the metadata; it is ANDed with the principal ACL filter.
-	Filter: store.Filter{"doc_id": "policy-1", "position": map[string]any{"$gte": 2}},
-})
+`Ingest`, `Search` and `Delete` require a non-empty `Tenant`, so an operation can
+never widen across tenants.
 
-// Delete, prune and score go through the same gate.
-err = app.Delete(ctx, "policy-1")
-deleted, err := app.Prune(ctx, 30*24*time.Hour) // retention: traces and observations
-err = app.Score(ctx, trace.Score{TraceID: traceID, Name: "helpful", Value: 1})
-```
+## Guardrails
 
-## Try it
+<!-- derived: BR-26 -->
 
-The [demo](./demo) is an authorized support bot with a seeded knowledge base. It
-answers these right after `docker compose up -d`:
+Input, tool results and output all pass the guard. L1 — deterministic rules
+(Russian personal IDs and prompt injection) — is in the core and works out of the
+box. L2 is the optional ML detector: `guard-onnx` (local, built with `-tags ort`)
+or `guard-remote` (a shared service). Without L2, kit masks and rejects on L1 only.
 
-| Ask                                            | Answer                   |
-| ---------------------------------------------- | ------------------------ |
-| "How many days do I have to return an item?"   | 14 calendar days         |
-| "How long does delivery to another city take?" | 2–5 business days, ₽400  |
-| "What is the warranty on electronics?"         | 12 months                |
-| "Can I buy in installments?"                   | yes, "0-0-6" from ₽3,000 |
-| "How can I contact support?"                   | 8 999 888-77-66, 24/7    |
-| "How do I get 5% cashback?"                    | from ₽50,000             |
+## Demo
 
-The seeded sources are Russian, so the bot may answer in Russian. `admin` can
-additionally ask for the weather; `user` never sees that tool: it is removed from
-the schema before the model runs. Ask from the [TUI or curl](./demo), or run the
-[Postman collection](./demo/postman).
+The [demo](./demo) is an authorized support bot on a Clean Architecture skeleton
+with a seeded knowledge base — retrieval, per-role tool removal, typed output and
+guardrails, right after `docker compose up -d`.
 
 ## Learn more
 
-- [Runnable demo →](./demo)
 - [Documentation →](./docs)
-- [How-to guides →](./docs/guides) — task recipes, including provider setup
+- [How-to guides →](./docs/guides)
+- [Runnable demo →](./demo)
 
 ## License
 
-[`MIT`](LICENSE).
+[`MIT`](LICENSE)

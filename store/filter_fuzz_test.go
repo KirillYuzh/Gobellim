@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// CompileFilter either rejects the filter or yields a clause that serialises for
-// Elasticsearch; a non-empty filter must never quietly compile to nothing.
 func FuzzCompileFilter(f *testing.F) {
 	for _, seed := range []string{
 		`{"doc_id":"a"}`,

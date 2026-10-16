@@ -30,7 +30,7 @@ if err != nil {
 
 ### Рельсы
 
-Рельсы — константы пакета `guard`: `RailInput` (`input`), `RailRetrieval` (`retrieval`), `RailExecution` (`execution`), `RailOutput` (`output`), `RailToolResult` (`tool_result`).
+Рельсы — константы пакета `guard`, и их ровно три: `RailInput` (`input`), `RailOutput` (`output`), `RailToolResult` (`tool_result`).
 
 ### Конвейер
 
@@ -198,6 +198,11 @@ flowchart TD
 | `input`       | L0/L1: фразы, regex, контрольные суммы RU PII и секретов. L2: классификация (`safety`/таксономия) и PII-сущности | атаки и unsafe → reject; PII → mask необратимо; иначе allow                                  |
 | `retrieval`   | ACL-фильтр tenant + roles внутри kNN и BM25, deny-by-default; карантин чанков при ingest                         | чанк вне ACL не возвращается; отклонённый чанк — в карантин                                  |
 | `execution`   | RBAC, JSON Schema со `additionalProperties: false`, лимиты args, steps, calls, timeout; ML не используется       | нет прав → `ErrUnauthorized`; невалидные args и лимит → результат-ошибка для модели          |
+
+> [!NOTE]
+> `retrieval` и `execution` — не рельсы guard: таких констант в пакете `guard` нет.
+> Это прямые проверки мимо `guard.Pipeline.Check`, они не пишут `guard:<rail>` и в
+> трейсах не видны.
 | `output`      | правила маскирования секретов и PII; L2 — та же модель; INJECTION/UNSAFE дают `Detect`                           | найдено → mask; инъекция/unsafe → detect; иначе allow                                        |
 | `tool_result` | результаты инструментов проверяются как `input`, fast-fail на инъекциях                                          | reject → результат заменяется на `{"error":"result blocked by guard"}`; PII и секреты → mask |
 

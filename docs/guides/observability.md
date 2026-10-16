@@ -6,7 +6,7 @@ kit пишет трейсы вызовов в Elasticsearch сам: trace соз
 
 Это how-to: что пишется и когда, политика текста, сэмплирование, sink'и,
 ретенция, дашборды и — отдельным разделом — почему **деньги считаете вы, а не
-framework**. Замысел — [Наблюдаемость](../concepts/observability.md); поля
+библиотека**. Замысел — [Наблюдаемость](../concepts/observability.md); поля
 документов — [Индексы Elasticsearch](../reference/elasticsearch.md).
 
 ## Когда использовать
@@ -100,7 +100,7 @@ guarded-промпт.
 
 > [!WARNING]
 > `trace.TextFull` — осознанный отказ от маскирования. Он удобен на стенде и
-> опасен в проде: в ES уйдут сырые PII и секреты. Framework предупредит один раз
+> опасен в проде: в ES уйдут сырые PII и секреты. Библиотека предупредит один раз
 > `slog.Warn` при `kit.New`, и всё.
 
 ## Сэмплирование
@@ -277,13 +277,13 @@ deleted, err := app.Prune(ctx, 30*24*time.Hour)
 | Recent traces          | `kit-traces`           | `*`                                             |
 
 > [!NOTE]
-> Панель **Cost by tenant** суммирует `usage.cost`, который framework
+> Панель **Cost by tenant** суммирует `usage.cost`, который библиотека
 > заполняет по `Config.Pricing` (BR-77). Пока цена не задана, значение — `0` и
 > панель показывает нули.
 
 ## Стоимость: `Config.Pricing`
 
-Framework считает стоимость сам, если задан `Config.Pricing`
+Библиотека считает стоимость сам, если задан `Config.Pricing`
 (`model.Pricing{InputPerMTok, OutputPerMTok}`): `usage.cost` в trace (сумма хода) и
 `cost` в generation-observation заполняются по токенам (BR-77). Нулевая цена
 (значение по умолчанию) означает «цена неизвестна» и даёт `0`.
@@ -312,6 +312,16 @@ app, _ := kit.New(ctx, kit.Config{
 ```go
 h := app.Health()
 writeJSON(w, map[string]any{"ok": h.Healthy, "degraded": h.Degraded, "checks": h.Components})
+```
+
+Для счётчиков есть `App.Metrics()`: вердикты guard (`Scans`, `Blocked`,
+`Truncated`, `Degradations`, гистограмма латентности `Latency`), глубина очереди
+trace-писателя и `TraceDropped`. Ядро не тянет библиотеку метрик: снимок
+отправляйте туда, где уже собираются метрики.
+
+```go
+m := app.Metrics()
+writeJSON(w, map[string]any{"guard_scans": m.Guard.Scans, "guard_blocked": m.Guard.Blocked, "trace_dropped": m.TraceDropped})
 ```
 
 ## Рецепты
@@ -362,7 +372,7 @@ kind:SPAN AND tags:effect:*   → group by name → p95(latency_ms)
 
 Так вы отсечёте вызовы ES (`kit-chunks`) и эмбеддера, которые тоже `SPAN`.
 
-## Чего фреймворк не делает (ограничения)
+## Чего библиотека не делает (ограничения)
 
 - **Нет UI.** `kit-overview` — только провижененный Grafana-дашборд; своего
   интерфейса нет.

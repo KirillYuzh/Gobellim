@@ -23,8 +23,6 @@ type phoneIn struct {
 	Phone string `json:"phone"`
 }
 
-// piiTool builds a tool whose handler records the phone it received and echoes it
-// back, so a test can see both directions.
 func piiTool(t *testing.T, name string, allowPII bool, got *string) *ToolDef {
 	t.Helper()
 	schema, err := schemaFor[phoneIn]()

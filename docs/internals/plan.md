@@ -100,8 +100,13 @@ stdlib-тест `internal/importrules` (в `go test ./...`) и правила `d
   BR-42, BR-44).
 - `errors.go` содержит sentinel `ErrUnauthorized`, `ErrGuardReject`,
   `ErrGuardUnavailable`, `ErrProvider`, `ErrToolNotFound`, `ErrInvalidArgs`,
-  `ErrMaxSteps`, `ErrNotFound`, `ErrInvalidConfig`, а также новые `ErrTool`,
-  `ErrBudget`, `ErrRateLimited`, `ErrApprovalRequired`.
+  `ErrMaxSteps`, `ErrNotFound`, `ErrInvalidConfig`, `ErrTool`, `ErrBudget`,
+  `ErrRateLimited`, `ErrApprovalRequired`.
+- Список sentinel’ов закрыт: `ErrTool` (`kit.go`, обёртка ошибки обработчика
+  инструмента), `ErrToolNotFound` (`calltool.go`, `internal/call`) и `ErrNotFound`
+  (`internal/call`, `store`, `trace`, адаптеры `demo`) больше не числятся
+  зарезервированными — у каждого есть производственный сайт выдачи и запись в
+  `docs/reference/errors.md`. Резервировать новые имена не требуется.
 
 **«Ядро готово»:** фасад, примитив вызова, `authz`, `model`, `embed`, `chunk`,
 `store`-интерфейс и `trace` покрыты unit-тестами и компилируются без нативных
@@ -110,14 +115,12 @@ stdlib-тест `internal/importrules` (в `go test ./...`) и правила `d
 
 ## Этап 2 — guard
 
-Пять рельсов (без dialog), каноникализация и decode-and-rescan перед слоями,
+Три рельса, каноникализация и decode-and-rescan перед слоями,
 детерминированный слой первым (BR-24…BR-33, BR-55, BR-56):
 
 - `input` — L1 (фразы, regex, контрольные суммы RU PII), затем L2 gliner;
   fast-fail на reject.
 - `tool_result` — результаты инструментов проверяются как недоверенный ввод.
-- `execution` — RBAC и JSON Schema аргументов, без ML (BR-03).
-- `retrieval` — ACL-фильтр tenant + roles и `quarantined:false` (BR-12, BR-13).
 - `output` — маскирование секретов и PII; инъекция/unsafe — `Detect`, а не reject.
 
 **Критерии приёмки:** вердикты rail'ов совпадают с матрицей из
@@ -201,7 +204,12 @@ check`. Обвязка зелёная: прогоны на раннере про
 - [x] Все unit-тесты (stdlib) проходят.
 - [ ] Паритет guard на `pii-bench` и `insecure-prompts` — численный порог не
       подтверждён; parity-фикстуры `guard/gliner` проходят 12/12 под `ort`.
-- [x] Guard: рельсы `input`, `retrieval`, `execution`, `output`, `tool_result`;
+      Измеренные числа L1 по публичному корпусу зафиксированы в
+      [Как настроить guardrails](../guides/guardrails.md#качество-l1-измеренные-числа)
+      — с явной оговоркой, что они не доказывают обобщаемость (там же результат
+      пробы на held-out). Остаётся гейт паритета L2: он требует `-tags ort` и
+      веса ONNX, которых нет в git.
+- [x] Guard: рельсы `input`, `output`, `tool_result`;
       каноникализация и decode-and-rescan перед слоями; детерминированный слой
       первым; fail-closed; действие `Detect` на выходе.
 - [x] Tools: вычитание запрещённых из схемы, повторная проверка при исполнении,
@@ -223,6 +231,12 @@ check`. Обвязка зелёная: прогоны на раннере про
       копии `libonnxruntime.so` и `KIT_ORT_LIB`.
 - [x] Пакет `eval`: детерминированные проверки трейсов (stdlib, зависит от
       `trace`, не от `kit`).
+- [x] Судьба `flow` и `eval` зафиксирована: оба остаются в ядре (D67). Измерено
+      `go list -deps`: у `eval` внешних зависимостей нет, у `flow` — две
+      jsonschema-библиотеки ради схем `In`/`Out`, то есть «нулевые зависимости»
+      верны только для `eval`. Ограничение `eval` держит правило
+      `eval-trace-and-internal-only` из `internal/importrules`; для `flow` такого
+      правила нет.
 - [x] Локальный эмбеддер (`embed.NewLocal`) реализован под `ort`: пресеты
       e5/bge-m3, `kit_embedder.json`, батч 32, `LocalConfig.Sessions`.
 - [x] Guard-защита от сверхлинейной стоимости: у L2 есть потолок токенов
@@ -250,7 +264,7 @@ check`. Обвязка зелёная: прогоны на раннере про
       полную таксономию (32 сущности + 5 групп = 70 меток); артефакт генерируется
       локально, дефолтный экспорт остаётся компактным (D35).
 - [x] CLI-ридер трейсов `demo/cmd/traces` (список + `-trace <id>` с observations и scores); JSON-API не реализован.
-- [x] `usage.cost`/`cost` заполняются framework'ом по `Config.Pricing` (`model.Pricing`); нулевая цена даёт `0`.
+- [x] `usage.cost`/`cost` заполняются библиотекой по `Config.Pricing` (`model.Pricing`); нулевая цена даёт `0`.
 - [x] Guard: режим `Config.GuardMode` (`GuardStrict`/`GuardDegraded`), деградация видна в observation (`guard_degraded`) (I-16).
 - [x] Право `chat` на операцию `Chat` (`authz.PermChat`).
 - [x] Идентичность эмбеддера: `embed_model` в чанке, поиск фильтрует по текущей модели (BR-79).
@@ -280,7 +294,7 @@ check`. Обвязка зелёная: прогоны на раннере про
 
 ## Смотрите также
 
-- [Решения и допущения](./decisions.md) — `D1`…`D66`, `A1`…`A9`
+- [Решения и допущения](./decisions.md) — `D1`…`D67`, `A1`…`A9`
 - [Архитектура](./architecture.md) — пакеты и рантайм, на которые опирается
   план
 - [Бизнес-правила](./business-rules.md) — `BR-01`…`BR-100`, проверяемые на
