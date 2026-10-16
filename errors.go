@@ -1,6 +1,9 @@
 package kit
 
-import "github.com/gobellim/kit/internal/core"
+import (
+	"github.com/gobellim/kit/internal/call"
+	"github.com/gobellim/kit/internal/core"
+)
 
 var (
 	ErrInvalidConfig    = core.ErrInvalidConfig
@@ -12,4 +15,10 @@ var (
 	ErrInvalidArgs      = core.ErrInvalidArgs
 	ErrMaxSteps         = core.ErrMaxSteps
 	ErrNotFound         = core.ErrNotFound
+	ErrTool             = core.ErrTool
+	ErrBudget           = core.ErrBudget
+	ErrRateLimited      = core.ErrRateLimited
+	ErrApprovalRequired = core.ErrApprovalRequired
 )
+
+type GuardRejectError = call.GuardRejectError

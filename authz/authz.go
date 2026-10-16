@@ -1,4 +1,3 @@
-// Package authz implements the deny-by-default RBAC policy from policy.yaml.
 package authz
 
 import (
@@ -11,10 +10,12 @@ import (
 )
 
 const (
-	PermSearch = "search"
-	PermIngest = "ingest"
-	PermDelete = "delete"
-	PermTrace  = "trace"
+	PermSearch   = "search"
+	PermIngest   = "ingest"
+	PermDelete   = "delete"
+	PermTrace    = "trace"
+	PermGenerate = "generate"
+	PermPrune    = "prune"
 )
 
 const wildcard = "*"
@@ -25,8 +26,6 @@ type Role struct {
 	Permissions []string `yaml:"permissions"`
 }
 
-// Policy is the parsed policy.yaml: version 1, default deny, roles to
-// permissions.
 type Policy struct {
 	Version int             `yaml:"version"`
 	Default string          `yaml:"default"`

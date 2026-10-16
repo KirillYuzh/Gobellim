@@ -1,5 +1,3 @@
-// Package call is the single call primitive: authz, then the guard rail, then a
-// trace observation, and only then the operation.
 package call
 
 import (
@@ -14,7 +12,6 @@ import (
 	"github.com/gobellim/kit/trace"
 )
 
-// Kind labels a call.
 type Kind string
 
 const (
@@ -23,64 +20,72 @@ const (
 	KindEmbed  Kind = "embed"
 	KindSearch Kind = "search"
 	KindIngest Kind = "ingest"
+	KindDelete Kind = "delete"
 	KindGuard  Kind = "guard"
 )
 
-// Authorizer is satisfied by authz.Policy.
 type Authorizer interface {
 	Authorize(pr core.Principal, permission string) error
 }
 
-// Guarder is satisfied by guard.Pipeline.
 type Guarder interface {
 	Check(ctx context.Context, rail guard.Rail, text string) (guard.Verdict, error)
 }
 
-// Tracer is satisfied by anything whose Observe method matches.
 type Tracer interface {
 	Observe(ctx context.Context, obs trace.Observation)
 }
 
-// Deps are the collaborators of a call.
 type Deps struct {
 	Authz  Authorizer
 	Guard  Guarder
 	Tracer Tracer
+
+	GuardVersion string
+	GuardModel   string
+	PolicyHash   string
+	TextPolicy   trace.TextPolicy
 }
 
-// Req describes one call.
 type Req struct {
-	Kind Kind
-	// Name is the operation name (tool name, model, index).
-	Name string
-	// Permission is the RBAC permission to check; "" skips the check.
+	Kind       Kind
+	Name       string
 	Permission string
-	// Rail, when set, runs the guard over Text before the operation.
-	Rail guard.Rail
-	// Text is the guarded text (message content, chunk text, tool result).
-	Text string
-	// Model is recorded on the observation.
-	Model string
-	// TraceID and ParentID link the observation to its trace.
-	TraceID  string
-	ParentID string
+	Rail       guard.Rail
+	Text       string
+	Model      string
+	TraceID    string
+	ParentID   string
+	Tags       []string
 }
 
-// Span is the mutable context handed to the operation.
 type Span struct {
-	// Verdict is the guard verdict (zero when no rail was applied).
-	Verdict guard.Verdict
-	// Text is the guarded text: masked when the guard masked it.
-	Text string
-	// Kind is the observation kind; set GENERATION for LLM calls.
-	Kind trace.Kind
-	// Output, Usage and Metadata are filled by the operation for tracing.
+	Verdict  guard.Verdict
+	Text     string
+	Kind     trace.Kind
 	Output   string
 	Usage    trace.Usage
 	Metadata map[string]any
 }
 
-// Do runs one operation behind authz, the guard and tracing.
+type GuardRejectError struct {
+	Kind     Kind
+	Name     string
+	Rail     guard.Rail
+	Tripwire *guard.Tripwire
+	Version  string
+}
+
+func (e *GuardRejectError) Error() string {
+	reason := ""
+	if e.Tripwire != nil {
+		reason = e.Tripwire.Reason
+	}
+	return fmt.Sprintf("call: %s %s: guard rejected rail %s (%s)", e.Kind, e.Name, e.Rail, reason)
+}
+
+func (e *GuardRejectError) Unwrap() error { return core.ErrGuardReject }
+
 func Do[T any](ctx context.Context, deps Deps, req Req, fn func(ctx context.Context, span *Span) (T, error)) (T, error) {
 	span := &Span{Text: req.Text}
 	start := time.Now()
@@ -112,7 +117,7 @@ func Do[T any](ctx context.Context, deps Deps, req Req, fn func(ctx context.Cont
 			Level:           level,
 			ErrorKind:       errorKind,
 			Model:           req.Model,
-			Input:           req.Text,
+			Input:           obsInput(deps, req, span),
 			Output:          span.Output,
 			StatusMessage:   status,
 			StartTime:       start,
@@ -121,15 +126,47 @@ func Do[T any](ctx context.Context, deps Deps, req Req, fn func(ctx context.Cont
 			GuardRail:       string(span.Verdict.Rail),
 			GuardAction:     span.Verdict.Action.String(),
 			GuardCategories: categories(span.Verdict.Findings),
-			Metadata:        span.Metadata,
+			Tags:            req.Tags,
+			Metadata:        observationMetadata(ctx, span),
+			GuardVersion:    deps.GuardVersion,
+			GuardModel:      deps.GuardModel,
+			PolicyHash:      deps.PolicyHash,
+			TextPolicy:      deps.TextPolicy,
 		})
 	}
 
 	return out, err
 }
 
-// Guard runs only the guard rail of a call and records the observation, so a
-// rejected request is still visible in the trace.
+func observationMetadata(ctx context.Context, span *Span) map[string]any {
+	base := core.SpanMetadataFrom(ctx)
+	if len(base) == 0 {
+		return span.Metadata
+	}
+	if len(span.Metadata) == 0 {
+		out := make(map[string]any, len(base))
+		for k, v := range base {
+			out[k] = v
+		}
+		return out
+	}
+	out := make(map[string]any, len(base)+len(span.Metadata))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range span.Metadata {
+		out[k] = v
+	}
+	return out
+}
+
+func obsInput(deps Deps, req Req, span *Span) string {
+	if deps.TextPolicy.IsRaw() {
+		return req.Text
+	}
+	return span.Text
+}
+
 func Guard(ctx context.Context, deps Deps, req Req) (guard.Verdict, error) {
 	var verdict guard.Verdict
 	_, err := Do(ctx, deps, req, func(_ context.Context, span *Span) (struct{}, error) {
@@ -163,7 +200,17 @@ func run[T any](ctx context.Context, deps Deps, req Req, span *Span, fn func(ctx
 		span.Verdict = verdict
 		span.Text = verdict.Text
 		if verdict.Action == guard.Reject {
-			return zero, fmt.Errorf("call: %s %s: %w", req.Kind, req.Name, core.ErrGuardReject)
+			return zero, &GuardRejectError{
+				Kind: req.Kind, Name: req.Name, Rail: verdict.Rail,
+				Tripwire: verdict.Tripwire, Version: verdict.Version,
+			}
+		}
+		if verdict.Tripwire != nil {
+			if span.Metadata == nil {
+				span.Metadata = map[string]any{}
+			}
+			span.Metadata["tripwire_rule"] = verdict.Tripwire.RuleID
+			span.Metadata["tripwire_reason"] = verdict.Tripwire.Reason
 		}
 	}
 
@@ -182,8 +229,16 @@ func errorKindOf(err error) string {
 		return "invalid_args"
 	case errors.Is(err, core.ErrToolNotFound):
 		return "tool_not_found"
+	case errors.Is(err, core.ErrTool):
+		return "tool"
 	case errors.Is(err, core.ErrMaxSteps):
 		return "max_steps"
+	case errors.Is(err, core.ErrBudget):
+		return "budget"
+	case errors.Is(err, core.ErrRateLimited):
+		return "rate_limited"
+	case errors.Is(err, core.ErrApprovalRequired):
+		return "approval_required"
 	case errors.Is(err, core.ErrNotFound):
 		return "not_found"
 	case errors.Is(err, core.ErrProvider):
