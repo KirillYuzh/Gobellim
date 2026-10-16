@@ -25,6 +25,7 @@ type MemoryHit struct {
 	Role      model.Role
 	Content   string
 	Score     float64
+	Untrusted bool
 	CreatedAt time.Time
 }
 
@@ -65,12 +66,12 @@ func (a *App) memoryPrincipal(pr core.Principal) error {
 	return a.policy.Authorize(pr, authz.PermMemory)
 }
 
-func (a *App) memoryLoad(ctx context.Context, pr core.Principal, threadID string, limit int, traceID string) ([]model.Message, error) {
+func (a *App) memoryLoad(ctx context.Context, pr core.Principal, threadID string, limit int, traceID string) ([]model.Message, bool, error) {
 	if err := a.memoryPrincipal(pr); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if threadID == "" {
-		return nil, fmt.Errorf("kit: memory load: thread ID is required: %w", core.ErrInvalidConfig)
+		return nil, false, fmt.Errorf("kit: memory load: thread ID is required: %w", core.ErrInvalidConfig)
 	}
 	if limit <= 0 {
 		limit = a.memoryLimit()
@@ -80,24 +81,26 @@ func (a *App) memoryLoad(ctx context.Context, pr core.Principal, threadID string
 		Kind: call.KindMemory, Name: store.IndexMemoryMessages, Permission: authz.PermMemory, TraceID: traceID,
 	}, store.RawRequest(http.MethodPost, "/"+store.IndexMemoryMessages+"/_search", body, "application/json"))
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	hits, err := store.ParseMemorySearch(resp)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	msgs := make([]model.Message, 0, len(hits))
+	untrusted := false
 	for i := len(hits) - 1; i >= 0; i-- {
 		role := model.Role(hits[i].Role)
 		if role != model.RoleUser && role != model.RoleAssistant {
 			continue
 		}
 		msgs = append(msgs, model.Message{Role: role, Content: hits[i].Content})
+		untrusted = untrusted || hits[i].Untrusted
 	}
-	return msgs, nil
+	return msgs, untrusted, nil
 }
 
-func (a *App) memoryAppend(ctx context.Context, pr core.Principal, threadID string, msgs []model.Message, traceID string) error {
+func (a *App) memoryAppend(ctx context.Context, pr core.Principal, threadID string, msgs []model.Message, untrusted bool, traceID string) error {
 	if err := a.memoryPrincipal(pr); err != nil {
 		return err
 	}
@@ -144,7 +147,7 @@ func (a *App) memoryAppend(ctx context.Context, pr core.Principal, threadID stri
 		rec := store.MemoryMessage{
 			ThreadID: threadID, Tenant: pr.Tenant, UserID: pr.UserID,
 			Role: string(m.Role), Content: m.Content, EmbedModel: embedModel,
-			Seq: seqBase + int64(i), CreatedAt: now.Add(time.Duration(i) * time.Nanosecond),
+			Seq: seqBase + int64(i), Untrusted: untrusted, CreatedAt: now.Add(time.Duration(i) * time.Nanosecond),
 		}
 		if len(vectors) == len(filtered) {
 			rec.Vector = vectors[i]
@@ -218,7 +221,8 @@ func (a *App) memoryRecallHits(ctx context.Context, pr core.Principal, query str
 	out := make([]MemoryHit, 0, len(hits))
 	for _, h := range hits {
 		out = append(out, MemoryHit{
-			Role: model.Role(h.Role), Content: h.Content, Score: h.Score, CreatedAt: h.CreatedAt,
+			Role: model.Role(h.Role), Content: h.Content, Score: h.Score,
+			Untrusted: h.Untrusted, CreatedAt: h.CreatedAt,
 		})
 	}
 	return out, nil
@@ -323,7 +327,8 @@ func (a *App) MemoryLoad(ctx context.Context, threadID string, limit int) ([]mod
 		return nil, err
 	}
 	defer done()
-	return a.memoryLoad(ctx, pr, threadID, limit, traceID)
+	msgs, _, err := a.memoryLoad(ctx, pr, threadID, limit, traceID)
+	return msgs, err
 }
 
 func (a *App) MemoryAppend(ctx context.Context, threadID string, msgs ...model.Message) error {
@@ -332,7 +337,7 @@ func (a *App) MemoryAppend(ctx context.Context, threadID string, msgs ...model.M
 		return err
 	}
 	defer done()
-	return a.memoryAppend(ctx, pr, threadID, msgs, traceID)
+	return a.memoryAppend(ctx, pr, threadID, msgs, false, traceID)
 }
 
 func (a *App) MemoryRecall(ctx context.Context, query string, topK int) ([]MemoryHit, error) {

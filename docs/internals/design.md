@@ -603,11 +603,13 @@ type MemoryHit struct {
 	Role      model.Role
 	Content   string
 	Score     float64
+	Untrusted bool
 	CreatedAt time.Time
 }
 ```
 
 - `Chat` с `ThreadID`: `MemoryLoad` (последние `MemoryLimit` сообщений) перед новым ходом, `MemoryAppend` (сообщения хода + ответ) после успеха; при `MemoryRecall > 0` и наличии эмбеддера в системное сообщение добавляется блок recall.
+- Перенос taint между ходами (D59): сообщение хранит признак `untrusted`; недоверенная строка истории или recall снова помечает ход для Rule of Two.
 - Право `memory` (`authz.PermMemory`); `internal/call` получает `KindMemory`; каждый публичный memory-вызов создаёт trace (`name = "memory"`, `metadata.op`).
 - `store.EnsureSchema` создаёт `kit-memory-messages` и `kit-memory-working`.
 
@@ -901,3 +903,10 @@ AllowedOrigins, Logger})`, `mcp.ServerTool`, `mcp.FromTool(app, def)`,
   в `T`: `json.Unmarshal` один принимал документ с отсутствующим или лишним полем.
 - `Generated[T].Decoded` — `true`, если ответ совпал со схемой; при `Warn`/`Fallback`
   остаётся `false`.
+
+### 5.17 Перенос taint между ходами (D59)
+
+- `store.MemoryMessage`/`MemoryHit` несут `Untrusted bool` (`untrusted` в
+  `kit-memory-messages`); `MemoryHistoryBody` и `MemoryRecallBody` запрашивают поле.
+- `memoryLoad` возвращает признак недоверенности, `memoryAppend` его пишет; `Chat`
+  и `ChatStream` помечают ход (`turn.untrusted`), если история или recall недоверенны.

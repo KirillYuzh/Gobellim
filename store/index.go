@@ -40,13 +40,14 @@ func ChunksIndexBody(dims int) ([]byte, error) {
 
 func MemoryMessagesIndexBody(dims int) []byte {
 	props := map[string]any{
-		ThreadField:  map[string]any{"type": "keyword"},
-		TenantField:  map[string]any{"type": "keyword"},
-		UserIDField:  map[string]any{"type": "keyword"},
-		RoleField:    map[string]any{"type": "keyword"},
-		ContentField: map[string]any{"type": "text"},
-		"seq":        map[string]any{"type": "long"},
-		"created_at": map[string]any{"type": "date"},
+		ThreadField:    map[string]any{"type": "keyword"},
+		TenantField:    map[string]any{"type": "keyword"},
+		UserIDField:    map[string]any{"type": "keyword"},
+		RoleField:      map[string]any{"type": "keyword"},
+		ContentField:   map[string]any{"type": "text"},
+		UntrustedField: map[string]any{"type": "boolean"},
+		"seq":          map[string]any{"type": "long"},
+		"created_at":   map[string]any{"type": "date"},
 	}
 	if dims > 0 {
 		props[VectorField] = map[string]any{"type": "dense_vector", "dims": dims, "index": true, "similarity": "cosine"}

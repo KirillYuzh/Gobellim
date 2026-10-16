@@ -78,4 +78,5 @@ const (
 	UserIDField     = "user_id"
 	RoleField       = "role"
 	ContentField    = "content"
+	UntrustedField  = "untrusted"
 )

@@ -70,17 +70,18 @@ func RawRequest(method, path string, body []byte, contentType string) Request
 
 ## kit-memory-messages
 
-| Поле          | Тип                                | Назначение                                          |
-| ------------- | ---------------------------------- | --------------------------------------------------- |
-| `thread_id`   | `keyword`                          | Тред, заданный вызывающим (`ChatRequest.ThreadID`). |
-| `tenant`      | `keyword`                          | Тенант принципала.                                  |
-| `user_id`     | `keyword`                          | Resource: идентификатор пользователя.               |
-| `role`        | `keyword`                          | `user` или `assistant`.                             |
-| `content`     | `text`                             | Текст сообщения (уже прошедший guard).              |
-| `seq`         | `long`                             | Монотонный ключ порядка (сортировка истории).       |
-| `created_at`  | `date`                             | Время записи.                                       |
-| `vector`      | `dense_vector` `similarity=cosine` | Только при известной размерности; для recall.       |
-| `embed_model` | `keyword`                          | Модель эмбеддера вектора сообщения.                 |
+| Поле          | Тип                                | Назначение                                                 |
+| ------------- | ---------------------------------- | ---------------------------------------------------------- |
+| `thread_id`   | `keyword`                          | Тред, заданный вызывающим (`ChatRequest.ThreadID`).        |
+| `tenant`      | `keyword`                          | Тенант принципала.                                         |
+| `user_id`     | `keyword`                          | Resource: идентификатор пользователя.                      |
+| `role`        | `keyword`                          | `user` или `assistant`.                                    |
+| `content`     | `text`                             | Текст сообщения (уже прошедший guard).                     |
+| `untrusted`   | `boolean`                          | Ход был недоверенным: восстанавливает Rule of Two (`D59`). |
+| `seq`         | `long`                             | Монотонный ключ порядка (сортировка истории).              |
+| `created_at`  | `date`                             | Время записи.                                              |
+| `vector`      | `dense_vector` `similarity=cosine` | Только при известной размерности; для recall.              |
+| `embed_model` | `keyword`                          | Модель эмбеддера вектора сообщения.                        |
 
 Все запросы памяти фильтруют `tenant` + `user_id`; `thread_id` добавляется для
 истории и очистки. `created_at` — только для отображения: порядок истории идёт

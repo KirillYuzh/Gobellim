@@ -123,17 +123,27 @@ func (a *App) streamTurn(ctx context.Context, req ChatRequest, pr core.Principal
 	}
 	msgs := make([]model.Message, 0, len(client)+2)
 	if req.ThreadID != "" {
-		history, herr := a.memoryLoad(ctx, pr, req.ThreadID, a.memoryLimit(), traceID)
+		history, historyUntrusted, herr := a.memoryLoad(ctx, pr, req.ThreadID, a.memoryLimit(), traceID)
 		if herr != nil {
 			ch <- StreamChunk{Err: herr}
 			return
+		}
+		if historyUntrusted {
+			t.untrusted = true
 		}
 		if a.memoryRecall() > 0 && a.cfg.Embedder != nil {
 			hits, rerr := a.memoryRecallHits(ctx, pr, client[len(client)-1].Content, a.memoryRecall(), traceID)
 			if rerr != nil {
 				a.logger().Warn("kit: chat: memory recall failed", "err", rerr)
-			} else if block := memoryRecallBlock(hits); block != "" {
-				system = joinSystem(system, block)
+			} else {
+				if block := memoryRecallBlock(hits); block != "" {
+					system = joinSystem(system, block)
+				}
+				for _, h := range hits {
+					if h.Untrusted {
+						t.untrusted = true
+					}
+				}
 			}
 		}
 		if system != "" {
@@ -242,7 +252,7 @@ func (a *App) streamTurn(ctx context.Context, req ChatRequest, pr core.Principal
 				turnMsgs := make([]model.Message, 0, len(client)+1)
 				turnMsgs = append(turnMsgs, client...)
 				turnMsgs = append(turnMsgs, out)
-				if aerr := a.memoryAppend(ctx, pr, req.ThreadID, turnMsgs, traceID); aerr != nil {
+				if aerr := a.memoryAppend(ctx, pr, req.ThreadID, turnMsgs, t.untrusted, traceID); aerr != nil {
 					a.logger().Warn("kit: chat: memory append failed", "err", aerr)
 				}
 			}

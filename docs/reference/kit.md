@@ -399,16 +399,18 @@ type MemoryHit struct {
     Role      model.Role
     Content   string
     Score     float64
+    Untrusted bool
     CreatedAt time.Time
 }
 ```
 
-| Поле        | Тип          | Назначение                   |
-| ----------- | ------------ | ---------------------------- |
-| `Role`      | `model.Role` | Роль сообщения.              |
-| `Content`   | `string`     | Текст (уже прошедший guard). |
-| `Score`     | `float64`    | Оценка сходства при recall.  |
-| `CreatedAt` | `time.Time`  | Время записи сообщения.      |
+| Поле        | Тип          | Назначение                       |
+| ----------- | ------------ | -------------------------------- |
+| `Role`      | `model.Role` | Роль сообщения.                  |
+| `Content`   | `string`     | Текст (уже прошедший guard).     |
+| `Score`     | `float64`    | Оценка сходства при recall.      |
+| `Untrusted` | `bool`       | Сообщение из недоверенного хода. |
+| `CreatedAt` | `time.Time`  | Время записи сообщения.          |
 
 ### GenerateRequest
 

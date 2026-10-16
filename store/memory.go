@@ -20,6 +20,7 @@ type MemoryMessage struct {
 	Vector     []float32
 	EmbedModel string
 	Seq        int64
+	Untrusted  bool
 	CreatedAt  time.Time
 }
 
@@ -29,13 +30,14 @@ func (m MemoryMessage) Document() map[string]any {
 		created = time.Now().UTC()
 	}
 	doc := map[string]any{
-		ThreadField:  m.ThreadID,
-		TenantField:  m.Tenant,
-		UserIDField:  m.UserID,
-		RoleField:    m.Role,
-		ContentField: m.Content,
-		"seq":        m.Seq,
-		"created_at": created.UTC().Format(time.RFC3339Nano),
+		ThreadField:    m.ThreadID,
+		TenantField:    m.Tenant,
+		UserIDField:    m.UserID,
+		RoleField:      m.Role,
+		ContentField:   m.Content,
+		"seq":          m.Seq,
+		UntrustedField: m.Untrusted,
+		"created_at":   created.UTC().Format(time.RFC3339Nano),
 	}
 	if len(m.Vector) > 0 {
 		doc[VectorField] = m.Vector
@@ -92,7 +94,7 @@ func MemoryHistoryBody(tenant, userID, threadID string, limit int) []byte {
 			},
 		},
 		"sort":    []any{map[string]any{"seq": map[string]any{"order": "desc"}}},
-		"_source": []string{RoleField, ContentField, "created_at"},
+		"_source": []string{RoleField, ContentField, UntrustedField, "created_at"},
 	}
 	raw, _ := json.Marshal(body)
 	return raw
@@ -138,7 +140,7 @@ func MemoryRecallBody(tenant, userID string, vector []float32, topK, numCandidat
 				"filter":         filter,
 			},
 		},
-		"_source": []string{RoleField, ContentField, "created_at"},
+		"_source": []string{RoleField, ContentField, UntrustedField, "created_at"},
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -200,6 +202,7 @@ func MemoryWorkingID(tenant, threadID string) string {
 type MemoryHit struct {
 	Role      string
 	Content   string
+	Untrusted bool
 	CreatedAt time.Time
 	Score     float64
 }
@@ -213,6 +216,7 @@ func ParseMemorySearch(body []byte) ([]MemoryHit, error) {
 				Source struct {
 					Role      string `json:"role"`
 					Content   string `json:"content"`
+					Untrusted bool   `json:"untrusted"`
 					CreatedAt string `json:"created_at"`
 				} `json:"_source"`
 			} `json:"hits"`
@@ -237,6 +241,7 @@ func ParseMemorySearch(body []byte) ([]MemoryHit, error) {
 		out = append(out, MemoryHit{
 			Role:      h.Source.Role,
 			Content:   h.Source.Content,
+			Untrusted: h.Source.Untrusted,
 			CreatedAt: created,
 			Score:     h.Score,
 		})
