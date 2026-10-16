@@ -53,6 +53,8 @@ func RawRequest(method, path string, body []byte, contentType string) Request {
 
 const (
 	IndexChunks             = "kit-chunks"
+	IndexMemoryMessages     = "kit-memory-messages"
+	IndexMemoryWorking      = "kit-memory-working"
 	DataStreamTraces        = "kit-traces"
 	DataStreamObservations  = "kit-observations"
 	ILMPolicyName           = "kit-traces-30d"
@@ -67,8 +69,13 @@ const (
 )
 
 const (
-	VectorField = "vector"
-	ACLField    = "acl"
-	TenantField = "tenant"
-	TextField   = "text"
+	VectorField     = "vector"
+	ACLField        = "acl"
+	TenantField     = "tenant"
+	TextField       = "text"
+	EmbedModelField = "embed_model"
+	ThreadField     = "thread_id"
+	UserIDField     = "user_id"
+	RoleField       = "role"
+	ContentField    = "content"
 )

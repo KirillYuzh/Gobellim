@@ -373,12 +373,23 @@ func TestEnsureSchemaWithoutEmbedder(t *testing.T) {
 	if err := EnsureSchema(context.Background(), es, 0); err != nil {
 		t.Fatal(err)
 	}
-	if len(es.paths) != 3 {
-		t.Fatalf("paths = %v, want ILM + 2 templates", es.paths)
+	if len(es.paths) != 5 {
+		t.Fatalf("paths = %v, want ILM + 2 templates + 2 memory indices", es.paths)
 	}
 	for _, p := range es.paths {
 		if strings.Contains(p, IndexChunks) {
 			t.Fatalf("chunks index must not be created without an embedder: %v", es.paths)
+		}
+	}
+	for _, want := range []string{IndexMemoryMessages, IndexMemoryWorking} {
+		found := false
+		for _, p := range es.paths {
+			if strings.HasSuffix(p, "/"+want) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("index %s missing: %v", want, es.paths)
 		}
 	}
 
@@ -394,5 +405,39 @@ func TestEnsureSchemaWithoutEmbedder(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("chunks index missing: %v", withEmbedder.paths)
+	}
+}
+
+func TestChunkDocumentCarriesEmbedModel(t *testing.T) {
+	doc := Chunk{ID: "c1", DocID: "d1", Tenant: "t1", Text: "x", Vector: []float32{1, 0}, EmbedModel: "e5"}.Document()
+	if doc[EmbedModelField] != "e5" {
+		t.Fatalf("embed_model missing from the chunk document: %v", doc)
+	}
+
+	q := Chunk{ID: "q1", DocID: "d1", Tenant: "t1", Quarantine: true, EmbedModel: "e5"}.Document()
+	if _, ok := q[EmbedModelField]; ok {
+		t.Fatalf("quarantined chunk must not carry embed_model: %v", q)
+	}
+}
+
+func TestMSearchNDJSONFiltersByEmbedModel(t *testing.T) {
+	body, err := MSearchNDJSON(SearchQuery{
+		Text:       "hello",
+		Vector:     []float32{1, 2, 3},
+		Principal:  core.Principal{Tenant: "t1", Roles: []string{"support"}},
+		TopK:       5,
+		EmbedModel: "intfloat/multilingual-e5-small",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
+	for _, i := range []int{1, 3} {
+		if !strings.Contains(lines[i], `"embed_model":"intfloat/multilingual-e5-small"`) {
+			t.Fatalf("line %d must carry the embed model filter: %s", i, lines[i])
+		}
+		if !strings.Contains(lines[i], `"acl":["support"]`) {
+			t.Fatalf("line %d must still carry the ACL filter: %s", i, lines[i])
+		}
 	}
 }

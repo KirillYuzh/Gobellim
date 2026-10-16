@@ -48,6 +48,9 @@ type SearchQuery struct {
 	TopK          int
 	NumCandidates int
 	Filter        Filter
+	// EmbedModel restricts the search to chunks produced by this embedder.
+	// Empty disables the restriction.
+	EmbedModel string
 
 	filterQuery map[string]any
 }
@@ -84,12 +87,19 @@ func (q SearchQuery) effectiveFilter() (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if q.filterQuery == nil {
+	clauses := []any{acl}
+	if q.EmbedModel != "" {
+		clauses = append(clauses, map[string]any{"term": map[string]any{EmbedModelField: q.EmbedModel}})
+	}
+	if q.filterQuery != nil {
+		clauses = append(clauses, q.filterQuery)
+	}
+	if len(clauses) == 1 {
 		return acl, nil
 	}
 	return map[string]any{
 		"bool": map[string]any{
-			"filter": []any{acl, q.filterQuery},
+			"filter": clauses,
 		},
 	}, nil
 }

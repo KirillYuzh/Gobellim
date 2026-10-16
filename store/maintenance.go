@@ -29,6 +29,33 @@ func DeleteByDocBody(docID, tenant string) ([]byte, error) {
 	return json.Marshal(body)
 }
 
+// DeleteByDocVersionBody removes every chunk of a document except the chunks of
+// keepVersion. Ingest writes the new version first and then calls this, so a
+// failure between the two leaves duplicated (self-healing) chunks instead of
+// losing the document.
+func DeleteByDocVersionBody(docID, tenant string, keepVersion int64) ([]byte, error) {
+	if strings.TrimSpace(docID) == "" {
+		return nil, fmt.Errorf("store: delete by doc requires a doc id: %w", core.ErrInvalidArgs)
+	}
+	if strings.TrimSpace(tenant) == "" {
+		return nil, fmt.Errorf("store: delete by doc requires a tenant: %w", core.ErrInvalidArgs)
+	}
+	body := map[string]any{
+		"query": map[string]any{
+			"bool": map[string]any{
+				"filter": []any{
+					map[string]any{"term": map[string]any{"doc_id": docID}},
+					map[string]any{"term": map[string]any{TenantField: tenant}},
+				},
+				"must_not": []any{
+					map[string]any{"term": map[string]any{"doc_version": keepVersion}},
+				},
+			},
+		},
+	}
+	return json.Marshal(body)
+}
+
 type deleteByQueryResponse struct {
 	Deleted          int               `json:"deleted"`
 	VersionConflicts int               `json:"version_conflicts"`

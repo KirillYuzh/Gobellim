@@ -26,11 +26,55 @@ func ChunksIndexBody(dims int) ([]byte, error) {
 				"position":    map[string]any{"type": "integer"},
 				"source":      map[string]any{"type": "keyword"},
 				"created_at":  map[string]any{"type": "date"},
+				"doc_version": map[string]any{"type": "long"},
 				"quarantined": map[string]any{"type": "boolean"},
+
+				// EmbedModelField records which embedder produced the vector, so a
+				// search can never mix vectors from different models.
+				EmbedModelField: map[string]any{"type": "keyword"},
 			},
 		},
 	}
 	return json.Marshal(body)
+}
+
+func MemoryMessagesIndexBody(dims int) []byte {
+	props := map[string]any{
+		ThreadField:  map[string]any{"type": "keyword"},
+		TenantField:  map[string]any{"type": "keyword"},
+		UserIDField:  map[string]any{"type": "keyword"},
+		RoleField:    map[string]any{"type": "keyword"},
+		ContentField: map[string]any{"type": "text"},
+		"seq":        map[string]any{"type": "long"},
+		"created_at": map[string]any{"type": "date"},
+	}
+	if dims > 0 {
+		props[VectorField] = map[string]any{"type": "dense_vector", "dims": dims, "index": true, "similarity": "cosine"}
+		props[EmbedModelField] = map[string]any{"type": "keyword"}
+	}
+	return indexBody(props)
+}
+
+func MemoryWorkingIndexBody() []byte {
+	return indexBody(map[string]any{
+		ThreadField:  map[string]any{"type": "keyword"},
+		TenantField:  map[string]any{"type": "keyword"},
+		UserIDField:  map[string]any{"type": "keyword"},
+		"data":       map[string]any{"type": "object", "enabled": false},
+		"updated_at": map[string]any{"type": "date"},
+	})
+}
+
+func indexBody(properties map[string]any) []byte {
+	body := map[string]any{
+		"settings": map[string]any{
+			"number_of_shards":   1,
+			"number_of_replicas": 0,
+		},
+		"mappings": map[string]any{"properties": properties},
+	}
+	b, _ := json.Marshal(body)
+	return b
 }
 
 func ILMPolicyBody(days int) ([]byte, error) {
@@ -96,6 +140,7 @@ func ObservationsTemplateBody() []byte {
 		"model":             map[string]any{"type": "keyword"},
 		"guard_rail":        map[string]any{"type": "keyword"},
 		"guard_action":      map[string]any{"type": "keyword"},
+		"guard_degraded":    map[string]any{"type": "boolean"},
 		"guard_categories":  map[string]any{"type": "keyword"},
 		"guard_version":     map[string]any{"type": "keyword"},
 		"guard_model":       map[string]any{"type": "keyword"},

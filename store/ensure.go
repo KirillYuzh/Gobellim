@@ -29,6 +29,8 @@ func EnsureSchema(ctx context.Context, es ES, dims int) error {
 		{http.MethodPut, "/_ilm/policy/" + ILMPolicyName, "application/json", ilm},
 		{http.MethodPut, "/_index_template/" + TraceTemplateName, "application/json", TracesTemplateBody()},
 		{http.MethodPut, "/_index_template/" + ObservationTemplateName, "application/json", ObservationsTemplateBody()},
+		{http.MethodPut, "/" + IndexMemoryMessages, "application/json", MemoryMessagesIndexBody(dims)},
+		{http.MethodPut, "/" + IndexMemoryWorking, "application/json", MemoryWorkingIndexBody()},
 	}
 	if dims > 0 {
 		chunks, err := ChunksIndexBody(dims)
