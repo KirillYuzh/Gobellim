@@ -1,12 +1,11 @@
 //go:build !ort
 
-// Package gliner is the ML guard layer; without the ort build tag it fails
-// closed.
 package gliner
 
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 
 	"github.com/gobellim/kit/guard"
 	"github.com/gobellim/kit/internal/core"
@@ -30,6 +29,18 @@ func New(cfg Config) (*Detector, error) {
 
 func (*Detector) Name() string { return "L2" }
 
-func (*Detector) Detect(context.Context, guard.Rail, string) ([]guard.Finding, error) {
+func (*Detector) Detect(context.Context, string) ([]guard.Finding, error) {
 	return nil, fmt.Errorf("gliner: built without ORT support; rebuild with -tags ort: %w", core.ErrGuardUnavailable)
+}
+
+func VerifyDir(dir, model string) error {
+	dir = resolveModelsDir(dir)
+	if err := verifyFiles(dir, model); err != nil {
+		return err
+	}
+	return parseConfigJSON(filepath.Join(dir, model, "config.json"))
+}
+
+func CheckParity(_, _ string, _ float64) (Report, error) {
+	return Report{}, fmt.Errorf("gliner: parity gate requires the ort build tag and the native ONNX runtime; rebuild with -tags ort: %w", core.ErrGuardUnavailable)
 }
