@@ -1,10 +1,13 @@
 package elastic
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/gobellim/kit/store"
 )
 
 type Client struct {
@@ -16,19 +19,23 @@ func New(baseURL string, hc *http.Client) *Client {
 	return &Client{base: strings.TrimRight(baseURL, "/"), hc: hc}
 }
 
-func (c *Client) Do(ctx context.Context, method, path string, body io.Reader) (int, []byte, error) {
-	req, err := http.NewRequestWithContext(ctx, method, c.base+path, body)
+func (c *Client) Do(ctx context.Context, req store.Request) (int, []byte, error) {
+	var body io.Reader
+	if len(req.Body) > 0 {
+		body = bytes.NewReader(req.Body)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, req.Method, c.base+req.EffectivePath(), body)
 	if err != nil {
 		return 0, nil, err
 	}
-	if body != nil {
-		if strings.Contains(path, "_bulk") || strings.Contains(path, "_msearch") {
-			req.Header.Set("Content-Type", "application/x-ndjson")
-		} else {
-			req.Header.Set("Content-Type", "application/json")
+	if len(req.Body) > 0 {
+		ct := req.ContentType
+		if ct == "" {
+			ct = "application/json"
 		}
+		httpReq.Header.Set("Content-Type", ct)
 	}
-	resp, err := c.hc.Do(req)
+	resp, err := c.hc.Do(httpReq)
 	if err != nil {
 		return 0, nil, err
 	}

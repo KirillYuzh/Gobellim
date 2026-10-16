@@ -14,16 +14,19 @@ import (
 	"github.com/gobellim/kit/guard"
 	"github.com/gobellim/kit/model"
 	"github.com/gobellim/kit/store"
+	"github.com/gobellim/kit/trace"
 )
 
 type Config struct {
-	ES       store.ES
-	LLM      model.Client
-	Embedder embed.Embedder
-	Policy   *authz.Policy
-	GuardL2  guard.Detector
-	Weather  usecase.WeatherProvider
-	Logger   *slog.Logger
+	ES        store.ES
+	LLM       model.Client
+	Embedder  embed.Embedder
+	Policy    *authz.Policy
+	GuardL2   guard.Detector
+	Weather   usecase.WeatherProvider
+	TraceText trace.TextPolicy
+	Sampler   trace.Sampler
+	Logger    *slog.Logger
 }
 
 type Engine struct {
@@ -35,12 +38,14 @@ type Engine struct {
 
 func New(ctx context.Context, cfg Config) (*Engine, error) {
 	app, err := kit.New(ctx, kit.Config{
-		ES:       cfg.ES,
-		LLM:      cfg.LLM,
-		Embedder: cfg.Embedder,
-		Policy:   cfg.Policy,
-		GuardL2:  cfg.GuardL2,
-		Logger:   cfg.Logger,
+		ES:        cfg.ES,
+		LLM:       cfg.LLM,
+		Embedder:  cfg.Embedder,
+		Policy:    cfg.Policy,
+		GuardL2:   cfg.GuardL2,
+		TraceText: cfg.TraceText,
+		Sampler:   cfg.Sampler,
+		Logger:    cfg.Logger,
 	})
 	if err != nil {
 		return nil, err

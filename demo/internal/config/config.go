@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gobellim/kit/trace"
 )
 
 type Config struct {
@@ -15,6 +17,7 @@ type Config struct {
 	EmbedBaseURL    string
 	EmbedModel      string
 	EmbedDim        int
+	EmbedLocal      bool
 	ModelsDir       string
 	GLiNERModel     string
 	SeedKB          bool
@@ -26,6 +29,9 @@ type Config struct {
 	CAFile          string
 	HTTPTimeout     time.Duration
 	TokenTTL        time.Duration
+
+	TraceText   trace.TextPolicy
+	TraceSample string
 }
 
 func Load() (Config, error) {
@@ -40,6 +46,7 @@ func Load() (Config, error) {
 		EmbedBaseURL:    env("EMBED_BASE_URL", "http://localhost:8088/v1"),
 		EmbedModel:      env("EMBED_MODEL", "intfloat/multilingual-e5-small"),
 		EmbedDim:        envInt("EMBED_DIM", 384),
+		EmbedLocal:      envBool("EMBED_LOCAL", false),
 		ModelsDir:       env("KIT_MODELS_DIR", "models"),
 		GLiNERModel:     env("GLINER_MODEL", "hivetrace__gliner-guard-omni"),
 		SeedKB:          envBool("SEED_KB", true),
@@ -54,6 +61,16 @@ func Load() (Config, error) {
 	}
 	if cfg.Credentials == "" {
 		return Config{}, fmt.Errorf("GIGACHAT_CREDENTIALS is required: put the base64 clientID:clientSecret pair in .env")
+	}
+
+	cfg.TraceSample = env("TRACE_SAMPLE", "always")
+	switch strings.ToLower(env("TRACE_TEXT", "masked")) {
+	case "", "masked":
+		cfg.TraceText = trace.TextMasked
+	case "full":
+		cfg.TraceText = trace.TextFull
+	default:
+		return Config{}, fmt.Errorf("TRACE_TEXT must be masked or full")
 	}
 	return cfg, nil
 }

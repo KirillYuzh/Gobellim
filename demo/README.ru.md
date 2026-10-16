@@ -20,7 +20,7 @@
 | «Сколько идёт доставка в другой город и сколько стоит?» | 2–5 рабочих дней, 400 ₽              |
 | «Какова гарантия на электронику?»                       | 12 месяцев                           |
 | «Можно ли купить в рассрочку?»                          | да, «0-0-6» от 3000 ₽                |
-| «Как связаться с поддержкой?»                           | 8 800 555-35-35, круглосуточно       |
+| «Как связаться с поддержкой?»                           | 8 999 888-77-66, круглосуточно       |
 | «Как получить 5% кэшбэка?»                              | от 50 000 ₽                          |
 | «Какая погода в Москве?»                                | реальная погода — только для `admin` |
 
@@ -67,6 +67,17 @@ go run ./demo/cmd/bot
 
 Сервис слушает `:8080` (`KIT_ADDR`) и после готовности пишет в лог
 `bot listening`.
+
+По умолчанию бот обращается к серверу `embeddings`. Со сборкой `-tags ort` и
+`EMBED_LOCAL=true` он вместо сервера поднимает локальный ONNX-энкодер и читает
+веса из `<KIT_MODELS_DIR>/<org>__<name>/` (сначала скачайте их:
+`go run ./cmd/kitctl model pull intfloat/multilingual-e5-small`); тогда
+`EMBED_MODEL` задаёт локальную модель (её размерность берётся из графа), а сервис
+`embeddings` больше не нужен.
+
+```sh
+EMBED_LOCAL=true CGO_LDFLAGS="-L.ort/lib" go run -tags ort ./demo/cmd/bot
+```
 
 ## Эндпоинты
 
@@ -152,22 +163,25 @@ npx --yes newman run demo/postman/kit-demo.postman_collection.json \
 
 ## Конфигурация
 
-| Переменная             | По умолчанию                     | Назначение                                    |
-| ---------------------- | -------------------------------- | --------------------------------------------- |
-| `KIT_ADDR`             | `:8080`                          | адрес прослушивания                           |
-| `KIT_ES_URL`           | `http://localhost:9200`          | Elasticsearch                                 |
-| `EMBED_BASE_URL`       | `http://localhost:8088/v1`       | OpenAI-совместимый сервер эмбеддингов         |
-| `EMBED_MODEL`          | `intfloat/multilingual-e5-small` | модель эмбеддингов                            |
-| `EMBED_DIM`            | `384`                            | размер вектора; должен совпадать с моделью    |
-| `KIT_MODELS_DIR`       | `models`                         | каталог с весами моделей (только `-tags ort`) |
-| `GLINER_MODEL`         | `hivetrace__gliner-guard-omni`   | подкаталог с guard-моделью                    |
-| `SEED_KB`              | `true`                           | заполнять базу знаний при старте              |
-| `WEATHER_BASE_URL`     | `https://wttr.in`                | базовый URL провайдера погоды                 |
-| `KIT_POLICY`           | `demo/policy.yaml`               | политика RBAC                                 |
-| `GIGACHAT_CREDENTIALS` | —                                | base64 `clientID:clientSecret` (обязательно)  |
-| `GIGACHAT_MODEL`       | `GigaChat-2`                     | имя модели                                    |
-| `GIGACHAT_BASE_URL`    | значение Сбера                   | базовый URL GigaChat                          |
-| `GIGACHAT_AUTH_URL`    | значение Сбера                   | URL OAuth GigaChat                            |
-| `GIGACHAT_CA_FILE`     | —                                | дополнительный корневой CA                    |
-| `KIT_HTTP_TIMEOUT`     | `60s`                            | таймаут HTTP к провайдерам                    |
-| `KIT_TOKEN_TTL`        | `12h`                            | время жизни токена-заглушки                   |
+| Переменная             | По умолчанию                     | Назначение                                                |
+| ---------------------- | -------------------------------- | --------------------------------------------------------- |
+| `KIT_ADDR`             | `:8080`                          | адрес прослушивания                                       |
+| `KIT_ES_URL`           | `http://localhost:9200`          | Elasticsearch                                             |
+| `EMBED_BASE_URL`       | `http://localhost:8088/v1`       | OpenAI-совместимый сервер эмбеддингов                     |
+| `EMBED_MODEL`          | `intfloat/multilingual-e5-small` | модель эмбеддингов                                        |
+| `EMBED_DIM`            | `384`                            | размер вектора; должен совпадать с моделью                |
+| `EMBED_LOCAL`          | `false`                          | локальный ONNX-энкодер вместо сервера (нужен `-tags ort`) |
+| `KIT_MODELS_DIR`       | `models`                         | каталог с весами моделей (только `-tags ort`)             |
+| `GLINER_MODEL`         | `hivetrace__gliner-guard-omni`   | подкаталог с guard-моделью                                |
+| `SEED_KB`              | `true`                           | заполнять базу знаний при старте                          |
+| `WEATHER_BASE_URL`     | `https://wttr.in`                | базовый URL провайдера погоды                             |
+| `KIT_POLICY`           | `demo/policy.yaml`               | политика RBAC                                             |
+| `TRACE_TEXT`           | `masked`                         | политика текста трейса: `masked` или `full`               |
+| `TRACE_SAMPLE`         | `always`                         | сэмплирование трейсов: `always`, `never`, `ratio:0.1`     |
+| `GIGACHAT_CREDENTIALS` | —                                | base64 `clientID:clientSecret` (обязательно)              |
+| `GIGACHAT_MODEL`       | `GigaChat-2`                     | имя модели                                                |
+| `GIGACHAT_BASE_URL`    | значение Сбера                   | базовый URL GigaChat                                      |
+| `GIGACHAT_AUTH_URL`    | значение Сбера                   | URL OAuth GigaChat                                        |
+| `GIGACHAT_CA_FILE`     | —                                | дополнительный корневой CA                                |
+| `KIT_HTTP_TIMEOUT`     | `60s`                            | таймаут HTTP к провайдерам                                |
+| `KIT_TOKEN_TTL`        | `12h`                            | время жизни токена-заглушки                               |
