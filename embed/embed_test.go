@@ -27,6 +27,46 @@ func TestPresetFor(t *testing.T) {
 	}
 }
 
+func TestPresetForE5Variants(t *testing.T) {
+	for _, model := range []string{
+		"intfloat/multilingual-e5-small",
+		"intfloat/multilingual-e5-base",
+		"intfloat/multilingual-e5-large",
+		"Multilingual-E5-Small",
+	} {
+		p, ok := PresetFor(model)
+		if !ok || p.Name != "e5" {
+			t.Fatalf("PresetFor(%q) = %+v ok=%v, want e5", model, p, ok)
+		}
+	}
+	if p, ok := PresetFor("BAAI/bge-m3"); !ok || p.Name != "bge-m3" {
+		t.Fatalf("PresetFor(bge-m3) = %+v ok=%v", p, ok)
+	}
+}
+
+func TestPresetValidate(t *testing.T) {
+	good := []Preset{
+		presetE5,
+		presetBGE,
+		{Pooling: PoolingMean, MaxLen: 1},
+	}
+	for _, p := range good {
+		if err := p.Validate(); err != nil {
+			t.Fatalf("Validate(%+v) = %v, want nil", p, err)
+		}
+	}
+	bad := []Preset{
+		{MaxLen: 512},
+		{Pooling: "max", MaxLen: 512},
+		{Pooling: PoolingMean, MaxLen: 0},
+	}
+	for _, p := range bad {
+		if err := p.Validate(); err == nil {
+			t.Fatalf("Validate(%+v) = nil, want error", p)
+		}
+	}
+}
+
 func TestLoadFileConfig(t *testing.T) {
 	dir := t.TempDir()
 
@@ -40,6 +80,9 @@ func TestLoadFileConfig(t *testing.T) {
 	}
 	if p.Pooling != PoolingCLS || p.QueryPrefix != "q: " || p.MaxLen != 256 || !p.Normalize {
 		t.Fatalf("preset = %+v", p)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("kit_embedder.json must round-trip through Validate: %v", err)
 	}
 
 	bad := filepath.Join(dir, "bad.json")

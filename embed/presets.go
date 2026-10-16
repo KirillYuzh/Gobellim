@@ -49,9 +49,22 @@ func PresetFor(model string) (Preset, bool) {
 	return Preset{}, false
 }
 
+func (p Preset) Validate() error {
+	switch p.Pooling {
+	case PoolingMean, PoolingCLS:
+	default:
+		return fmt.Errorf("embed: preset: unknown pooling %q: %w", p.Pooling, core.ErrInvalidConfig)
+	}
+	if p.MaxLen <= 0 {
+		return fmt.Errorf("embed: preset: max_len must be positive: %w", core.ErrInvalidConfig)
+	}
+	return nil
+}
+
 type LocalConfig struct {
-	Dir   string
-	Model string
+	Dir      string
+	Model    string
+	Sessions int
 }
 
 func ModelDir(modelsDir, model string) string {
