@@ -270,6 +270,6 @@ ML-слоя не фатален — остаётся детерминирова�
   `ErrMaxSteps`, `ErrUnauthorized` и другие)
 - [Конфигурация](../reference/configuration.md) — значения по умолчанию и
   лимиты (`max_steps`, `max_calls_per_tool`, `args_max_bytes` и другие)
-- [Решения и допущения](./decisions.md) — `D1`…`D85`, `A1`…`A9`
+- [Решения и допущения](./decisions.md) — `D1`…`D86`, `A1`…`A9`
 - [Архитектура](./architecture.md) — пакеты, безопасность, observability
 - [План](./plan.md) — этапы и Definition of Done

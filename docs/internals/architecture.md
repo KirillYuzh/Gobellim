@@ -108,6 +108,7 @@ kit/
   docs/                                     документация: getting-started/, concepts/, reference/, internals/ (README-индекс)
   testdata/                                 золотые файлы, parity-фикстуры
   .github/workflows/ci.yml                  CI: build, test, race, ort-vet, lint, fumpt
+  .github/workflows/nightly.yml             ночной ORT parity: библиотеки и веса, `verify parity` (D86)
   .golangci.yml Makefile                    линтер (gofumpt/govet/errcheck/staticcheck/gosec/depguard) и локальный `make check`
 ```
 
@@ -411,7 +412,7 @@ Grafana: в `demo/deploy/grafana/` лежат provisioning ES-datasource и да
 
 - [Бизнес-правила](./business-rules.md) — правила, которые обязана сохранять
   архитектура
-- [Решения и допущения](./decisions.md) — журнал `D1`…`D85` и допущения
+- [Решения и допущения](./decisions.md) — журнал `D1`…`D86` и допущения
   `A1`…`A9`
 - [План](./plan.md) — этапы, тесты, риски, Definition of Done
 - [Ориентиры](./references.md) — Go-проекты, с которых снимаются идеи

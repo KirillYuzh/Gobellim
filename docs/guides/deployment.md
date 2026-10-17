@@ -155,7 +155,8 @@ make check
 `go test ./... -count=1`, `go vet -tags ort ./...` (только типы) и
 `golangci-lint run` — для ядра и для каждого из модулей `mcp`, `webfetch`, `flow`,
 `eval`, `kittest`, `cmd`, `demo`, `scripts` (`D85`). Та же планка в CI: джобы
-`build`, `test`, `race`, `ort-vet`, `lint`, `fumpt`.
+`build`, `test`, `race`, `ort-vet`, `lint`, `fumpt`; ночной `nightly` (D86) ставит
+ORT и веса и гоняет `verify parity`.
 
 ```mermaid
 flowchart TD

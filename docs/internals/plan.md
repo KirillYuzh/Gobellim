@@ -201,7 +201,8 @@ guard — заглушка), полный режим — образ с `libonnxr
       из корня он собирает только ядро, а опциональные пакеты — отдельные модули
       (`D85`).
 - [x] Линтер импортов и CI подключены: `.github/workflows/ci.yml` (build, test,
-      race, ort-vet, lint, fumpt), `.golangci.yml` (`gofumpt`/`govet`/`errcheck`/
+      race, ort-vet, lint, fumpt), ночной `.github/workflows/nightly.yml` (ORT parity,
+      D86), `.golangci.yml` (`gofumpt`/`govet`/`errcheck`/
       `staticcheck`/`gosec`/`depguard`), stdlib-тест `internal/importrules` и `make
 check`. Обвязка зелёная: прогоны на раннере проходят (push в `develop`/`main`
       и pull request), `golangci-lint` v2.13.0 локально даёт 0 замечаний, гейт
@@ -212,8 +213,10 @@ check`. Обвязка зелёная: прогоны на раннере про
       Измеренные числа L1 по публичному корпусу зафиксированы в
       [Как настроить guardrails](../guides/guardrails.md#качество-l1-измеренные-числа)
       — с явной оговоркой, что они не доказывают обобщаемость (там же результат
-      пробы на held-out). Остаётся гейт паритета L2: он требует `-tags ort` и
-      веса ONNX, которых нет в git.
+      пробы на held-out). С D86 гейт паритета L2 исполняется ночью
+      (`.github/workflows/nightly.yml`): библиотеки и веса скачиваются, `verify
+    parity` идёт с `--min-agreement 1.0`; численный порог на `pii-bench` и
+      `insecure-prompts` всё ещё открыт.
 - [x] Guard: рельсы `input`, `output`, `tool_result`;
       каноникализация и decode-and-rescan перед слоями; детерминированный слой
       первым; fail-closed; действие `Detect` на выходе.
@@ -299,7 +302,7 @@ check`. Обвязка зелёная: прогоны на раннере про
 
 ## Смотрите также
 
-- [Решения и допущения](./decisions.md) — `D1`…`D85`, `A1`…`A9`
+- [Решения и допущения](./decisions.md) — `D1`…`D86`, `A1`…`A9`
 - [Архитектура](./architecture.md) — пакеты и рантайм, на которые опирается
   план
 - [Бизнес-правила](./business-rules.md) — `BR-01`…`BR-113`, проверяемые на
