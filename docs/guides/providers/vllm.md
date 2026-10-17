@@ -52,7 +52,7 @@ llm, err := model.NewOpenAI(model.OpenAIConfig{
 - `stream: false` (обычный `Chat`); `ChatStream` запрашивает `stream: true` с
   `stream_options.include_usage` и собирает SSE-дельты.
 
-Именно этот набор должен принимать ваш сервер. Всё остальное — вопрос флагов vLLM.
+Ваш сервер должен принимать этот набор. Всё остальное — вопрос флагов vLLM.
 
 ## Tool calling на стороне сервера
 
