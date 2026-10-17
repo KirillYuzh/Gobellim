@@ -21,11 +21,19 @@ kit подключается как обычный Go-модуль. Сборка
 go get github.com/KirillYuzh/Gobellim
 ```
 
-Проверьте сборку, `vet` и тесты:
+Проверьте сборку, `vet` и тесты ядра:
 
 ```sh
 go build ./... && go vet ./... && go test ./...
 ```
+
+Опциональные пакеты (`mcp`, `webfetch`, `flow`, `eval`, `kittest`, `cmd`, `demo`,
+`scripts`) — отдельные Go-модули того же репозитория (`D85`), поэтому `go build ./...`
+из корня собирает только ядро. В монорепозитории они собираются и запускаются через
+`go -C <dir>`: подмодули ссылаются на ядро через `replace => ..`, поэтому локальная
+сборка не требует публикации. Отдельные теги модулей и публикация — после `v1`
+(`D77`). Те же проверки по каждому модулю делает `make check`; CLI и demo
+запускаются как `go -C cmd run ./kitctl …` и `go -C demo run ./cmd/bot`.
 
 ## Как использовать
 
@@ -131,7 +139,7 @@ app, err := kit.New(ctx, kit.Config{ES: es, LLM: llm, Policy: policy, Embedder: 
 ### Скачивание весов
 
 ```sh
-go run ./cmd/kitctl model pull intfloat/multilingual-e5-small
+go -C cmd run ./kitctl model pull intfloat/multilingual-e5-small
 ```
 
 `kitctl model pull <org/name>` скачивает `model.onnx`, `tokenizer.json` и

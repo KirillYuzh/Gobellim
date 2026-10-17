@@ -205,7 +205,7 @@ func newEmbedder(cfg Config, client *http.Client) (embed.Embedder, error) {
 ### Проверка окружения
 
 ```sh
-go run ./cmd/kitctl verify models --dir models --embed-model intfloat/multilingual-e5-small
+go -C cmd run ./kitctl verify models --dir models --embed-model intfloat/multilingual-e5-small
 ```
 
 `embed.VerifyDir(dir, model)` проверяет наличие `model.onnx`, `tokenizer.json`,

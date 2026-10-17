@@ -55,7 +55,7 @@ func TestEmbedCacheWiringSurvivesIngest(t *testing.T) {
 		})
 
 	ctx := WithPrincipal(context.Background(), Principal{UserID: "u", Tenant: "t", Roles: []string{"admin"}})
-	doc := Doc{ID: "d1", Text: "документ для повторной загрузки"}
+	doc := Doc{ID: "d1", Text: "документ для повторной загрузки", ACL: []string{"admin"}}
 
 	if err := app.Ingest(ctx, doc); err != nil {
 		t.Fatal(err)
@@ -79,7 +79,7 @@ func TestEmbedCacheZeroSizeStaysOff(t *testing.T) {
 		emb, testPolicyMemory, nil)
 
 	ctx := WithPrincipal(context.Background(), Principal{UserID: "u", Tenant: "t", Roles: []string{"admin"}})
-	doc := Doc{ID: "d2", Text: "документ без кэша"}
+	doc := Doc{ID: "d2", Text: "документ без кэша", ACL: []string{"admin"}}
 
 	if err := app.Ingest(ctx, doc); err != nil {
 		t.Fatal(err)

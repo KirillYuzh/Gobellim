@@ -17,14 +17,14 @@ app, err := kit.New(ctx, kit.Config{
 	ES:      es,
 	LLM:     llm,
 	Policy:  policy,
-	GuardL2: guardL2, // guard.Detector: ML-слой; без него работают только L0/L1
+	GuardL2: guardL2, // guard.Detector: ML-слой; обязателен — только L1: guard.L1Only()
 })
 if err != nil {
 	return err
 }
 ```
 
-Детерминированный слой подключается всегда (`guard/rules`). Поле `GuardL2` добавляет ML-модель за интерфейсом `guard.Detector`.
+Детерминированный слой подключается всегда (`guard/rules`). Поле `GuardL2` добавляет ML-модель за интерфейсом `guard.Detector` и **обязательно**: `nil` даёт `ErrInvalidConfig`, а режим только-L1 запрашивается явно — `guard.L1Only()`.
 
 ## Как использовать
 

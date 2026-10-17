@@ -68,10 +68,10 @@ func (a *App) memoryPrincipal(pr core.Principal) error {
 	if pr.UserID == "" {
 		return fmt.Errorf("kit: memory requires a principal with a user ID: %w", core.ErrUnauthorized)
 	}
-	if err := a.rateLimit(pr); err != nil {
+	if err := a.policy.Authorize(pr, authz.PermMemory); err != nil {
 		return err
 	}
-	return a.policy.Authorize(pr, authz.PermMemory)
+	return a.rateLimit(pr)
 }
 
 func (a *App) memoryLoad(ctx context.Context, pr core.Principal, threadID string, limit int, traceID string) ([]model.Message, bool, error) {

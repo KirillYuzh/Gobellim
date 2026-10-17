@@ -54,7 +54,7 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 		return nil, err
 	}
 
-	e := &Engine{app: app, es: cfg.ES, weather: cfg.Weather, guardL2: cfg.GuardL2 != nil}
+	e := &Engine{app: app, es: cfg.ES, weather: cfg.Weather, guardL2: !guard.IsL1Only(cfg.GuardL2)}
 	if _, err := kit.Tool(app, "kb_search", e.kbSearch,
 		kit.Desc("Поиск по базе знаний поддержки: возврат и обмен, доставка, гарантия, оплата и рассрочка, поддержка, программа лояльности. Для погоды этот инструмент не подходит.")); err != nil {
 		return nil, err

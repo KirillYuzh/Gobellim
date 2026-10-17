@@ -4,7 +4,8 @@ kit — библиотека. Приложение создаёт `App`, оди�
 инструменты и вызывает операции, положив принципала в контекст.
 
 `kit.New` проверяет конфигурацию и не делает сетевых вызовов. Индексы создаёт
-`app.Setup`.
+`app.Setup`. Поле `GuardL2` обязательно: `guard.L1Only()` — явный выбор L1-only
+развёртывания (D80, BR-109).
 
 ## Когда использовать
 
@@ -26,6 +27,7 @@ import (
 
 	"github.com/KirillYuzh/Gobellim"
 	"github.com/KirillYuzh/Gobellim/authz"
+	"github.com/KirillYuzh/Gobellim/guard"
 	"github.com/KirillYuzh/Gobellim/model"
 )
 
@@ -49,9 +51,10 @@ func main() {
 	}
 
 	app, err := kit.New(ctx, kit.Config{
-		ES:     es, // ваш клиент Elasticsearch, интерфейс store.ES (см. ниже)
-		LLM:    llm,
-		Policy: policy,
+		ES:      es, // ваш клиент Elasticsearch, интерфейс store.ES (см. ниже)
+		LLM:     llm,
+		Policy:  policy,
+		GuardL2: guard.L1Only(), // ML-слой: без него L1-only запрашивается явно
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -207,7 +210,7 @@ cd demo/deploy && docker compose up -d elasticsearch grafana
 ```
 
 ```sh
-go run ./demo/cmd/bot
+go -C demo run ./cmd/bot
 ```
 
 Демо использует GigaChat, поэтому нужен `GIGACHAT_CREDENTIALS`. Сервис слушает

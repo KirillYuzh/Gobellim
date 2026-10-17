@@ -20,9 +20,6 @@ func (a *App) CallTool(ctx context.Context, name string, args json.RawMessage) (
 	if err != nil {
 		return "", err
 	}
-	if err := a.rateLimit(pr); err != nil {
-		return "", err
-	}
 	if len(args) == 0 {
 		args = json.RawMessage("{}")
 	}
@@ -43,6 +40,13 @@ func (a *App) CallTool(ctx context.Context, name string, args json.RawMessage) (
 		callsPerTool: map[string]int{},
 		invalidTries: map[string]int{},
 		approved:     map[string]bool{},
+	}
+	// Spend the tenant's rate-limit budget only on a call policy allows; a
+	// denial keeps its security-event logging in execTool (BR-107).
+	if a.policy.Allows(pr, def.permission) {
+		if err := a.rateLimit(pr); err != nil {
+			return "", err
+		}
 	}
 	return a.execTool(ctx, model.ToolCall{Name: name, Args: string(args)}, t)
 }

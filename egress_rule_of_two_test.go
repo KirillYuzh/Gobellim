@@ -171,3 +171,26 @@ func TestRuleOfTwoAllowsEgressWithoutPriorToolResult(t *testing.T) {
 		t.Fatal("egress without a prior tool result must be allowed")
 	}
 }
+
+// TestEgressAllowlistSeesThroughJSONEscapes is the regression test for the hole
+// where the allowlist read the raw argument text: a JSON-escaped URL
+// (`https:\/\/host`, or `\u003a` for the colon) yielded no host, so the call was
+// allowed. The arguments are decoded now, so the host is always visible.
+func TestEgressAllowlistSeesThroughJSONEscapes(t *testing.T) {
+	app := &App{cfg: Config{Egress: EgressPolicy{AllowEgressAfterUntrusted: true}}}
+	def := &ToolDef{name: "fetch", effect: EffectEgress, egressHosts: []string{"api.example.com"}}
+
+	for _, args := range []string{
+		`{"url":"https:\/\/evil.example.net\/x"}`,
+		`{"url":"https\u003a\/\/evil.example.net/x"}`,
+		`{"url":"https:\/\/api.example.com\/ok","extra":["https:\/\/evil.example.net\/y"]}`,
+	} {
+		if err := app.checkEgress(def, args, &turn{}); !errors.Is(err, ErrUnauthorized) {
+			t.Fatalf("args %s: err = %v, want ErrUnauthorized", args, err)
+		}
+	}
+
+	if err := app.checkEgress(def, `{"url":"https:\/\/api.example.com\/doc"}`, &turn{}); err != nil {
+		t.Fatalf("an allowed host must pass even escaped: %v", err)
+	}
+}
