@@ -96,6 +96,7 @@ func newStdioTransport(cfg Config) (Transport, error) {
 	return t, nil
 }
 
+// Call writes a request to the child process and waits for the matching response.
 func (t *stdioTransport) Call(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	id := t.nextID.Add(1)
 	ch := make(chan rpcResponse, 1)
@@ -124,10 +125,12 @@ func (t *stdioTransport) Call(ctx context.Context, method string, params any) (j
 	}
 }
 
+// Notify writes a notification to the child process without waiting for a response.
 func (t *stdioTransport) Notify(_ context.Context, method string, params any) error {
 	return t.write(rpcRequest{JSONRPC: "2.0", Method: method, Params: params})
 }
 
+// Close closes stdin and waits for the process to exit, killing it after two seconds.
 func (t *stdioTransport) Close() error {
 	t.closeOnce.Do(func() {
 		_ = t.stdin.Close()

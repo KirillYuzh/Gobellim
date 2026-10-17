@@ -15,14 +15,21 @@ import (
 	stjs "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
+// Effect is the side-effect class of a tool, used by runtime policies such as
+// the Rule of Two and egress host allowlists.
 type Effect int
 
 const (
+	// EffectRead means the tool only reads state.
 	EffectRead Effect = iota
+	// EffectWrite means the tool mutates state.
 	EffectWrite
+	// EffectEgress means the tool sends data outside the trust boundary and is
+	// subject to the host allowlist and Rule of Two.
 	EffectEgress
 )
 
+// String returns "read", "write", "egress", or "unknown".
 func (e Effect) String() string {
 	switch e {
 	case EffectRead:
@@ -36,8 +43,11 @@ func (e Effect) String() string {
 	}
 }
 
+// IsEgress reports whether e is EffectEgress.
 func (e Effect) IsEgress() bool { return e == EffectEgress }
 
+// ToolCallInfo is passed to the before and after tool hooks; Fingerprint is the
+// stable sha256 of the tool name and canonical arguments.
 type ToolCallInfo struct {
 	UserID string
 	Tenant string
@@ -68,10 +78,16 @@ func IdempotencyKey(ctx context.Context) string {
 	return key
 }
 
+// BeforeToolHook runs after argument validation and before the tool executes;
+// proceed=false substitutes output and skips the call.
 type BeforeToolHook func(ctx context.Context, info ToolCallInfo) (proceed bool, output string, err error)
 
+// AfterToolHook always runs after execution and may rewrite the result or error;
+// the tool_result guard runs after both hooks.
 type AfterToolHook func(ctx context.Context, info ToolCallInfo, result string, err error) (string, error)
 
+// ToolDef is a registered tool's descriptor and invocation closure; arguments
+// are validated against its schema with additionalProperties:false.
 type ToolDef struct {
 	name            string
 	description     string
@@ -92,26 +108,41 @@ type ToolDef struct {
 	invoke          func(ctx context.Context, args string) (string, error)
 }
 
+// Name returns the tool name.
 func (t *ToolDef) Name() string { return t.name }
 
+// Description returns the description shown to the model.
 func (t *ToolDef) Description() string { return t.description }
 
+// Permission returns the RBAC permission checked before the tool runs.
 func (t *ToolDef) Permission() string { return t.permission }
 
+// Effect returns the tool's side-effect class.
 func (t *ToolDef) Effect() Effect { return t.effect }
 
+// EgressHosts returns a copy of the host allowlist used for egress tools.
 func (t *ToolDef) EgressHosts() []string { return append([]string(nil), t.egressHosts...) }
 
+// EgressAny reports whether the tool explicitly opted out of the host allowlist.
 func (t *ToolDef) EgressAny() bool { return t.egressAny }
 
+// AllowPII reports whether the tool may receive rehydrated real PII values
+// instead of placeholders.
 func (t *ToolDef) AllowPII() bool { return t.allowPII }
 
+// RequireApproval reports whether each distinct call must be approved by
+// Config.Approver.
 func (t *ToolDef) RequireApproval() bool { return t.requireApproval }
 
+// ValidateOutput reports whether the result is checked against the output type's
+// schema.
 func (t *ToolDef) ValidateOutput() bool { return t.validateOutput }
 
+// Schema returns the raw JSON Schema for the tool's arguments.
 func (t *ToolDef) Schema() json.RawMessage { return t.schema }
 
+// ModelView maps the tool result to what the model sees; it returns the result
+// unchanged when no view function is configured.
 func (t *ToolDef) ModelView(result string) string {
 	if t.modelView == nil {
 		return result
@@ -147,6 +178,8 @@ func (t *ToolDef) validateResult(result string) error {
 	return nil
 }
 
+// Fingerprint returns the stable sha256 of the tool name and canonical
+// arguments; approvals and idempotency keys are bound to it.
 func (t *ToolDef) Fingerprint(args string) string {
 	sum := sha256.Sum256([]byte(t.name + "\x00" + canonicalArgs(args)))
 	return hex.EncodeToString(sum[:])
@@ -167,6 +200,7 @@ func canonicalArgs(args string) string {
 	return string(out)
 }
 
+// ToolOption configures a tool registered by Tool or RawTool.
 type ToolOption func(*toolOptions)
 
 type toolOptions struct {
@@ -183,36 +217,54 @@ type toolOptions struct {
 	afterTool       AfterToolHook
 }
 
+// Desc sets the tool description shown to the model.
 func Desc(s string) ToolOption { return func(o *toolOptions) { o.description = s } }
 
+// Perm overrides the default tool:<name> RBAC permission.
 func Perm(p string) ToolOption { return func(o *toolOptions) { o.permission = p } }
 
+// Effects sets the tool's side-effect class.
 func Effects(e Effect) ToolOption { return func(o *toolOptions) { o.effect = e } }
 
+// EgressHosts sets the host allowlist checked for URLs in an egress tool's
+// arguments.
 func EgressHosts(hosts ...string) ToolOption {
 	return func(o *toolOptions) { o.egressHosts = append([]string(nil), hosts...) }
 }
 
+// EgressAny allows an egress tool to target any host; without it an empty
+// allowlist is a denial.
 func EgressAny() ToolOption { return func(o *toolOptions) { o.egressAny = true } }
 
+// AllowPII permits rehydrating real PII values into arguments when masking is not
+// mandatory.
 func AllowPII(b bool) ToolOption { return func(o *toolOptions) { o.allowPII = b } }
 
+// RequireApproval requires Config.Approver to approve each distinct call
+// fingerprint.
 func RequireApproval(b bool) ToolOption { return func(o *toolOptions) { o.requireApproval = b } }
 
+// ValidateOutput validates the result against the JSON Schema of Out.
 func ValidateOutput(b bool) ToolOption { return func(o *toolOptions) { o.validateOutput = b } }
 
+// ModelView sets a function that rewrites the result before the model sees it.
 func ModelView(f func(string) string) ToolOption {
 	return func(o *toolOptions) { o.modelView = f }
 }
 
+// BeforeToolCall sets a per-tool hook that replaces Config.BeforeToolCall.
 func BeforeToolCall(h BeforeToolHook) ToolOption {
 	return func(o *toolOptions) { o.beforeTool = h }
 }
 
+// AfterToolCall sets a per-tool hook that replaces Config.AfterToolCall.
 func AfterToolCall(h AfterToolHook) ToolOption {
 	return func(o *toolOptions) { o.afterTool = h }
 }
 
+// Tool registers a typed tool, deriving the argument schema from In and
+// serializing Out for the model. It returns ErrInvalidConfig when app, name, or
+// fn is missing, and rejects a schema that cannot be derived or compiled.
 func Tool[In, Out any](app *App, name string, fn func(ctx context.Context, in In) (Out, error), opts ...ToolOption) (*ToolDef, error) {
 	if app == nil {
 		return nil, fmt.Errorf("kit: app is required: %w", core.ErrInvalidConfig)
@@ -290,6 +342,9 @@ func Tool[In, Out any](app *App, name string, fn func(ctx context.Context, in In
 	return def, nil
 }
 
+// RawTool registers a tool whose JSON Schema is supplied verbatim, as with MCP
+// tools; an empty schema becomes {"type":"object"}. It returns ErrInvalidConfig
+// when app, name, or fn is missing, and rejects a schema that cannot be compiled.
 func RawTool(app *App, name string, schema json.RawMessage, fn func(ctx context.Context, args json.RawMessage) (string, error), opts ...ToolOption) (*ToolDef, error) {
 	if app == nil {
 		return nil, fmt.Errorf("kit: app is required: %w", core.ErrInvalidConfig)

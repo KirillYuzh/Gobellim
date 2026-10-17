@@ -78,6 +78,9 @@ func buildHomoglyphs() map[rune]rune {
 	return out
 }
 
+// Canonicalize returns the guard's canonical form of text: invalid UTF-8 is
+// sanitised, then NFKC, case folding, homoglyph folding, digit normalisation,
+// and removal of invisible/bidi characters are applied.
 func Canonicalize(text string) string {
 	out, _ := canonicalizeMap(text)
 	return out
@@ -195,6 +198,8 @@ const (
 	maxDecodedLen      = 4096
 )
 
+// DecodedVariants returns base64, hex, percent-encoded, and form fragments
+// decoded from text (up to two rounds and 24 variants) for L1 rescanning.
 func DecodedVariants(text string) []string {
 	out := []string{}
 	if text == "" {

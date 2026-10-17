@@ -11,12 +11,18 @@ import (
 )
 
 const (
+	// GigaChatDefaultBaseURL is the default GigaChat API endpoint.
 	GigaChatDefaultBaseURL = "https://api.giga.chat"
+	// GigaChatDefaultAuthURL is the default OAuth token endpoint.
 	GigaChatDefaultAuthURL = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
-	GigaChatDefaultScope   = "GIGACHAT_API_PERS"
-	GigaChatDefaultModel   = "GigaChat-2"
+	// GigaChatDefaultScope is the default OAuth scope.
+	GigaChatDefaultScope = "GIGACHAT_API_PERS"
+	// GigaChatDefaultModel is the model used when GigaChatConfig.Model is empty.
+	GigaChatDefaultModel = "GigaChat-2"
 )
 
+// GigaChatConfig configures the GigaChat client; empty URL, Scope and Model
+// fields fall back to the GigaChatDefault* constants.
 type GigaChatConfig struct {
 	BaseURL     string
 	AuthURL     string
@@ -28,12 +34,17 @@ type GigaChatConfig struct {
 	ContextTokens int
 }
 
+// GigaChatClient is a Client backed by GigaChat's chat API, authenticating with
+// OAuth bearer tokens.
 type GigaChatClient struct {
 	cfg GigaChatConfig
 	hc  *http.Client
 	ts  *oauth.TokenSource
 }
 
+// GigaChat builds a GigaChatClient, applying default URLs, scope and model; it
+// returns an error wrapping core.ErrInvalidConfig when Credentials is empty or
+// ContextTokens is negative.
 func GigaChat(cfg GigaChatConfig) (*GigaChatClient, error) {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = GigaChatDefaultBaseURL
@@ -61,6 +72,7 @@ func GigaChat(cfg GigaChatConfig) (*GigaChatClient, error) {
 	}, nil
 }
 
+// Model returns the configured GigaChat model name.
 func (c *GigaChatClient) Model() string { return c.cfg.Model }
 
 type gcFunction struct {
@@ -119,6 +131,8 @@ func gcFinishReason(reason string, call *gcFunctionCall) FinishReason {
 	return FinishStop
 }
 
+// Chat performs one non-streaming GigaChat request: tools are sent as
+// functions, and an empty choices list yields an error wrapping core.ErrProvider.
 func (c *GigaChatClient) Chat(ctx context.Context, req Request) (Response, error) {
 	token, err := c.ts.Token(ctx)
 	if err != nil {

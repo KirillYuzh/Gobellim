@@ -33,6 +33,7 @@ func newHTTPTransport(cfg Config) (Transport, error) {
 	return &httpTransport{cfg: cfg, hc: httpjson.Client(cfg.Client)}, nil
 }
 
+// Call posts a JSON-RPC request and returns the result matching its id.
 func (h *httpTransport) Call(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	h.mu.Lock()
 	h.nextID++
@@ -53,11 +54,13 @@ func (h *httpTransport) Call(ctx context.Context, method string, params any) (js
 	return resp.Result, nil
 }
 
+// Notify posts a JSON-RPC notification and discards the response.
 func (h *httpTransport) Notify(ctx context.Context, method string, params any) error {
 	_, err := h.post(ctx, rpcRequest{JSONRPC: "2.0", Method: method, Params: params})
 	return err
 }
 
+// Close is a no-op; the HTTP transport holds no connection.
 func (h *httpTransport) Close() error { return nil }
 
 func (h *httpTransport) post(ctx context.Context, v any) ([]json.RawMessage, error) {

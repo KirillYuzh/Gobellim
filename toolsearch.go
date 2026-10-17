@@ -8,10 +8,17 @@ import (
 	"github.com/KirillYuzh/Gobellim/model"
 )
 
+// DefaultToolSearchThreshold is the tool count above which tool search ranks the
+// catalog by query relevance.
 const DefaultToolSearchThreshold = 20
 
+// DefaultToolSearchTopK is the number of tools kept by tool search when
+// ToolSearch.TopK is zero.
 const DefaultToolSearchTopK = 8
 
+// ToolSearch configures lexical pre-filtering of a large tool catalog; a
+// non-positive Threshold uses DefaultToolSearchThreshold and a non-positive TopK
+// uses DefaultToolSearchTopK.
 type ToolSearch struct {
 	Enabled   bool
 	Threshold int

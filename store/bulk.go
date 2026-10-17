@@ -6,8 +6,12 @@ import (
 	"fmt"
 )
 
+// ErrBulkItem is the sentinel wrapped by bulk item failures, including
+// VersionConflictError.
 var ErrBulkItem = errors.New("bulk item failed")
 
+// VersionConflictError reports a per-item _bulk version conflict (HTTP 409 or
+// version_conflict_engine_exception).
 type VersionConflictError struct {
 	Action string
 	Status int
@@ -15,13 +19,16 @@ type VersionConflictError struct {
 	Reason string
 }
 
+// Error returns the conflicting bulk action, status, error type, and reason.
 func (e *VersionConflictError) Error() string {
 	return fmt.Sprintf("store: bulk %s version conflict with status %d: %s: %s",
 		e.Action, e.Status, e.Type, e.Reason)
 }
 
+// Unwrap returns ErrBulkItem so errors.Is matches bulk item failures.
 func (e *VersionConflictError) Unwrap() error { return ErrBulkItem }
 
+// IsVersionConflict reports whether err is or wraps a VersionConflictError.
 func IsVersionConflict(err error) bool {
 	var vc *VersionConflictError
 	return errors.As(err, &vc)
@@ -44,6 +51,9 @@ type bulkResponse struct {
 
 const versionConflictType = "version_conflict_engine_exception"
 
+// BulkErrors inspects a _bulk response, returning nil when no item failed, a
+// VersionConflictError for a 409 or version_conflict_engine_exception item, and
+// otherwise an error wrapping ErrBulkItem. An empty body is treated as success.
 func BulkErrors(body []byte) error {
 	if len(body) == 0 {
 		return nil

@@ -10,16 +10,23 @@ import (
 )
 
 const (
-	MaxTopK          = 1000
+	// MaxTopK is the upper bound for SearchQuery.TopK.
+	MaxTopK = 1000
+	// MaxNumCandidates is the upper bound for SearchQuery.NumCandidates.
 	MaxNumCandidates = 10000
 )
 
+// Hit is one search result: the document ID, its score, and the raw _source.
 type Hit struct {
 	ID     string
 	Score  float64
 	Source json.RawMessage
 }
 
+// ACLFilter builds the deny-by-default clause requiring a matching tenant, at
+// least one of the principal's roles in acl, and quarantined:false. A missing
+// tenant wraps core.ErrInvalidArgs, and nil roles become an empty list that
+// matches nothing.
 func ACLFilter(p core.Principal) (map[string]any, error) {
 	if p.Tenant == "" {
 		return nil, fmt.Errorf("store: acl filter requires a tenant: %w", core.ErrInvalidArgs)
@@ -40,6 +47,8 @@ func ACLFilter(p core.Principal) (map[string]any, error) {
 	}, nil
 }
 
+// SearchQuery is a hybrid kNN and BM25 search request over chunks, scoped by
+// Principal and an optional metadata Filter.
 type SearchQuery struct {
 	Index         string
 	Text          string
@@ -102,6 +111,10 @@ func (q SearchQuery) effectiveFilter() (map[string]any, error) {
 	}, nil
 }
 
+// MSearchNDJSON normalizes q and returns an _msearch body with two sub-queries,
+// kNN and BM25, each carrying the ACL clause plus any embed_model and metadata
+// filter clauses. TopK defaults to 10 and is clamped to MaxTopK; NumCandidates
+// defaults to max(TopK*10, 100) and is clamped to MaxNumCandidates.
 func MSearchNDJSON(q SearchQuery) ([]byte, error) {
 	var err error
 	q, err = q.normalized()
@@ -169,6 +182,9 @@ type msearchItem struct {
 	} `json:"hits"`
 }
 
+// ParseMSearch decodes an _msearch response into one hit list per sub-query,
+// failing the whole call on any error branch or failed shard; both wrap
+// core.ErrProvider.
 func ParseMSearch(body []byte) ([][]Hit, error) {
 	var parsed msearchResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
@@ -193,6 +209,10 @@ func ParseMSearch(body []byte) ([][]Hit, error) {
 	return lists, nil
 }
 
+// RRF merges ranked hit lists with reciprocal rank fusion, scoring each ID as
+// the sum of 1/(rankConstant+rank+1), breaking ties by ascending ID, and
+// truncating to topK when topK > 0. A non-positive rankConstant defaults to
+// DefaultRRFRankConst.
 func RRF(lists [][]Hit, rankConstant, topK int) []Hit {
 	if rankConstant <= 0 {
 		rankConstant = DefaultRRFRankConst

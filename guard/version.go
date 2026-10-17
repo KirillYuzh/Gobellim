@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+// ArtifactHash is an optional Detector capability that exposes a model or rule
+// artifact hash; New combines these into the guard version.
 type ArtifactHash interface {
 	Detector
 	ArtifactHash() string
@@ -15,6 +17,8 @@ type ArtifactHash interface {
 
 const artifactDigestLength = 16
 
+// ArtifactHashes returns a short digest of the sorted, non-empty artifact hashes
+// of the given detectors, or "" when none implement ArtifactHash.
 func ArtifactHashes(layers []Detector) string {
 	var hashes []string
 	for _, d := range layers {

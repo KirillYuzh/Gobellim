@@ -10,6 +10,8 @@ import (
 
 const defaultChainBackoff = 500 * time.Millisecond
 
+// ChainConfig tunes a fallback chain: MaxRetries applies per client and Backoff
+// is the base retry delay, defaulting to 500ms when not positive.
 type ChainConfig struct {
 	MaxRetries int
 	Backoff    time.Duration
@@ -21,6 +23,9 @@ type chainClient struct {
 	nativeSchema bool
 }
 
+// Chain returns a Client that tries clients in order, retrying retryable errors
+// up to cfg.MaxRetries per client; it returns an error wrapping
+// core.ErrInvalidConfig when no clients are given or any is nil.
 func Chain(cfg ChainConfig, clients ...Client) (Client, error) {
 	if len(clients) == 0 {
 		return nil, fmt.Errorf("model: chain: at least one client is required: %w", core.ErrInvalidConfig)
@@ -45,10 +50,15 @@ func chainNativeSchema(clients []Client) bool {
 	return len(clients) > 0
 }
 
+// Model returns the first client's model name.
 func (c *chainClient) Model() string { return c.clients[0].Model() }
 
+// SupportsNativeSchema reports true only when every link supports native
+// schema enforcement.
 func (c *chainClient) SupportsNativeSchema() bool { return c.nativeSchema }
 
+// Chat tries each client in order, retrying retryable errors up to MaxRetries
+// per client, and returns the last error if every client fails.
 func (c *chainClient) Chat(ctx context.Context, req Request) (Response, error) {
 	var lastErr error
 	for _, client := range c.clients {

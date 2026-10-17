@@ -25,6 +25,7 @@ Two tiers of code: the **core** is the root Go module — the default `go build 
 - Detection does not depend on the rail; the rail only affects the decision table (`docs/internals/design.md`, `I-02`).
 - Traces carry masked text by default (`Config.TraceText`, `trace.TextMasked`); never log or persist raw message text.
 - Tests use the standard library only. Validate the core with `go build ./... && go vet ./... && go test ./...`; validate every module with `make check`, which runs build, `vet`, tests, `gofumpt` and `golangci-lint` for the core and for each of `mcp`, `webfetch`, `flow`, `eval`, `kittest`, `cmd`, `demo`, `scripts`.
+- Exported API in published packages carries a godoc comment (`internal/apidoc` enforces it); a comment is still not a contract — `docs/` is (`BR-75`).
 
 ## Layout
 

@@ -14,6 +14,8 @@ import (
 
 const cacheKeyDomain = "kit/embed/cache/v1"
 
+// CacheConfig configures NewCached. Size is the maximum number of vectors kept;
+// zero or negative disables caching.
 type CacheConfig struct {
 	Size int
 }
@@ -25,11 +27,15 @@ const (
 	rolePassage cacheRole = "passage"
 )
 
+// CachedEmbedder wraps an Embedder with an LRU vector cache keyed by role, model,
+// and text, so query and passage embeddings never share an entry.
 type CachedEmbedder struct {
 	inner Embedder
 	cache *cache.LRU[[]float32]
 }
 
+// NewCached wraps inner with an LRU cache of cfg.Size vectors. It returns
+// ErrInvalidConfig when inner is nil and skips caching when Size is not positive.
 func NewCached(inner Embedder, cfg CacheConfig) (*CachedEmbedder, error) {
 	if inner == nil {
 		return nil, fmt.Errorf("embed: cache: Embedder is required: %w", core.ErrInvalidConfig)
@@ -41,10 +47,13 @@ func NewCached(inner Embedder, cfg CacheConfig) (*CachedEmbedder, error) {
 	return c, nil
 }
 
+// Model returns the wrapped embedder's model name.
 func (c *CachedEmbedder) Model() string { return c.inner.Model() }
 
+// Dim returns the wrapped embedder's vector dimension.
 func (c *CachedEmbedder) Dim() int { return c.inner.Dim() }
 
+// Len reports the number of cached vectors; it is zero when caching is disabled.
 func (c *CachedEmbedder) Len() int {
 	if c.cache == nil {
 		return 0
@@ -52,10 +61,14 @@ func (c *CachedEmbedder) Len() int {
 	return c.cache.Len()
 }
 
+// Query returns embeddings for search queries, serving and populating the query
+// cache.
 func (c *CachedEmbedder) Query(ctx context.Context, texts []string) ([][]float32, error) {
 	return c.embed(ctx, texts, roleQuery, c.inner.Query)
 }
 
+// Passages returns embeddings for document passages, serving and populating the
+// passage cache.
 func (c *CachedEmbedder) Passages(ctx context.Context, texts []string) ([][]float32, error) {
 	return c.embed(ctx, texts, rolePassage, c.inner.Passages)
 }
