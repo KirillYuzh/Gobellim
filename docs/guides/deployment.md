@@ -49,8 +49,12 @@
 # внешний эмбеддер (e5-small): model.onnx + tokenizer.json + config.json
 go -C cmd run ./kitctl model pull intfloat/multilingual-e5-small
 
-# guard L2 (если вы публикуете артефакт в свой HF-репозиторий)
-go -C cmd run ./kitctl model pull hivetrace/gliner-guard-omni
+# guard L2: публичный HF-репозиторий хранит model.safetensors, а Go-детектору
+# нужен ONNX-граф. Его создаёт скрипт экспорта:
+python3 tools/gliner/export.py --out /tmp/gliner
+mkdir -p models/hivetrace__gliner-guard-omni
+cp /tmp/gliner/model/model.onnx /tmp/gliner/model/tokenizer.json /tmp/gliner/model/config.json \
+  models/hivetrace__gliner-guard-omni/
 ```
 
 | Факт                  | Значение                                                                                                     |
@@ -61,6 +65,10 @@ go -C cmd run ./kitctl model pull hivetrace/gliner-guard-omni
 | Источник по умолчанию | `https://huggingface.co` (`--base-url` переопределяет)                                                       |
 | В git                 | `models/` и `.ort/` игнорируются — веса не коммитятся                                                        |
 | Guard-артефакт        | воспроизводится `python3 tools/gliner/export.py`; кладите три файла в `models/hivetrace__gliner-guard-omni/` |
+
+`kitctl model pull` подходит для моделей, у которых в HF уже лежит `model.onnx`
+(например, внешний эмбеддер). Для guard-модели ONNX создаётся экспортом; если вы
+публикуете готовый ONNX в свой HF-репозиторий, `model pull <org/name>` тоже сработает.
 
 Монтируйте каталог моделей **read-only** в контейнер: `kit` только читает веса.
 

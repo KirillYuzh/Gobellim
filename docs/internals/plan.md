@@ -214,8 +214,9 @@ check`. Обвязка зелёная: прогоны на раннере про
       [Как настроить guardrails](../guides/guardrails.md#качество-l1-измеренные-числа)
       — с явной оговоркой, что они не доказывают обобщаемость (там же результат
       пробы на held-out). С D86 гейт паритета L2 исполняется ночью
-      (`.github/workflows/nightly.yml`): библиотеки и веса скачиваются, `verify
-    parity` идёт с `--min-agreement 1.0`; численный порог на `pii-bench` и
+      (`.github/workflows/nightly.yml`): библиотеки ставятся, модель экспортируется
+      в ONNX скриптом `tools/gliner/export.py`, `verify parity` идёт с
+      `--min-agreement 1.0`; численный порог на `pii-bench` и
       `insecure-prompts` всё ещё открыт.
 - [x] Guard: рельсы `input`, `output`, `tool_result`;
       каноникализация и decode-and-rescan перед слоями; детерминированный слой
