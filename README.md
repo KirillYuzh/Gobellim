@@ -34,23 +34,47 @@ library gives you.
 
 ## The delta: one handler, made safe
 
-An ordinary handler calls your LLM client:
+An ordinary HTTP handler calls your LLM client directly:
 
 ```go
-answer, err := h.llm.Complete(r.Context(), req.Prompt)
+func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
+	var req chatRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	answer, err := h.llm.Complete(r.Context(), req.Prompt)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, map[string]string{"answer": answer})
+}
 ```
 
 The same handler with Gobellim:
 
 ```diff
--answer, err := h.llm.Complete(r.Context(), req.Prompt)
-+ctx := kit.WithPrincipal(r.Context(), kit.Principal{
-+    UserID: req.UserID, Roles: req.Roles, Tenant: req.Tenant,
-+})
-+res, err := h.app.Chat(ctx, kit.ChatRequest{
-+    Messages: []model.Message{{Role: model.RoleUser, Content: req.Prompt}},
-+})
-+answer := res.Message.Content
+ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
+     var req chatRequest
+     if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+         http.Error(w, err.Error(), http.StatusBadRequest)
+         return
+     }
+-    answer, err := h.llm.Complete(r.Context(), req.Prompt)
++    ctx := kit.WithPrincipal(r.Context(), kit.Principal{
++        UserID: req.UserID, Roles: req.Roles, Tenant: req.Tenant,
++    })
++    res, err := h.app.Chat(ctx, kit.ChatRequest{
++        Messages: []model.Message{{Role: model.RoleUser, Content: req.Prompt}},
++    })
+     if err != nil {
+         http.Error(w, err.Error(), http.StatusBadGateway)
+         return
+     }
+-    writeJSON(w, map[string]string{"answer": answer})
++    writeJSON(w, map[string]string{"answer": res.Message.Content})
+ }
 ```
 
 That is the whole change in the handler. The app is built once at startup
