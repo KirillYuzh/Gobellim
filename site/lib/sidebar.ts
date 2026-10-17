@@ -46,6 +46,7 @@ const ORDER = [
   "guides/errors.md",
   "guides/deployment.md",
   "guides/performance.md",
+  "guides/plugins.md",
   "reference",
   "reference/kit.md",
   "reference/providers.md",
