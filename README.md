@@ -14,16 +14,20 @@ guardrails behind one permission-checked call path.
 
 ## Why Gobellim
 
-- **A point solution, not a platform.** Drop it into one handler in a service you
-  already have — no runtime, no graph engine, no lifecycle to adopt. You keep your
-  handlers and your concurrency.
-- **It runs on your infrastructure.** Your Elasticsearch, Postgres or Kafka is
-  reached through a port you implement. We never ship, own or copy your data.
+- **A library, not a service.** Call it from a handler you already have — no
+  runtime, no graph engine, no lifecycle to adopt. You keep your handlers and your
+  concurrency.
+- **It runs on your infrastructure.** Your Elasticsearch — or anything you can
+  reach through the `store.ES` port — is wired in by you. We never ship, own or
+  copy your data.
 - **A small, immutable core.** The default build is pure Go: no `cgo`, no native
-  libraries, no network, and a dependency budget you can read at a glance.
-- **Everything else is a plugin.** Storage, queues, caches and the heavy ML
-  detector are opt-in; if you don't import a plugin, its dependencies and its
-  start-up cost are not in your binary.
+  libraries, no network, and a dependency budget you can read at a glance. The
+  core's boundary is pinned by `internal/importrules`.
+- **Optional packages, imported explicitly.** The heavy ML detector
+  (`guard/gliner`, `-tags ort`) and the store (`store.ES`) are ports you wire in.
+  The repository also ships MCP (client and server), `flow` pipelines, the `eval`
+  harness, cross-encoder `rerank` and the `webfetch` tool as separate packages:
+  import what you need, and none is on a call path unless you configure it.
 - **Safety you cannot forget.** Every operation runs the same four steps —
   authorize, guard, trace, execute — so no check can be skipped.
 - **The model gets no say in access.** Tools the caller may not use are removed
@@ -87,9 +91,10 @@ never widen across tenants.
 <!-- derived: BR-26 -->
 
 Input, tool results and output all pass the guard. L1 — deterministic rules
-(Russian personal IDs and prompt injection) — is in the core and works out of the
-box. L2 is the optional ML detector: `guard-onnx` (local, built with `-tags ort`)
-or `guard-remote` (a shared service). Without L2, kit masks and rejects on L1 only.
+(Russian personal IDs and prompt injection) — is in the core and always runs. L2 is
+the required ML layer (`Config.GuardL2`): the shipped detector is `guard/gliner`,
+built with `-tags ort`. To run L1-only on purpose, pass `guard.L1Only()`;
+`guard-remote` is not implemented.
 
 ## Demo
 

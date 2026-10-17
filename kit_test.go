@@ -220,7 +220,7 @@ func TestSearchAndIngestNeedEmbedder(t *testing.T) {
 	defer func() { _ = app.Close(context.Background()) }()
 	ctx := WithPrincipal(context.Background(), Principal{UserID: "u", Roles: []string{"admin"}, Tenant: "t"})
 
-	if err := app.Ingest(ctx, Doc{ID: "1", Text: "text"}); !errors.Is(err, ErrInvalidConfig) {
+	if err := app.Ingest(ctx, Doc{ID: "1", Text: "text", ACL: []string{"admin"}}); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("ingest err = %v, want ErrInvalidConfig", err)
 	}
 	if _, err := app.Search(ctx, SearchRequest{Query: "q"}); !errors.Is(err, ErrInvalidConfig) {
@@ -557,21 +557,21 @@ func TestNewRejectsGuardWindowWiderThanModelContext(t *testing.T) {
 	}
 
 	_, err = New(context.Background(), Config{
-		ES: discardES{}, LLM: windowLLM{window: 1000}, Policy: policy, GuardMaxChars: 2000,
+		ES: discardES{}, LLM: windowLLM{window: 1000}, Policy: policy, GuardMaxChars: 2000, GuardL2: guard.L1Only(),
 	})
 	if !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("err = %v, want ErrInvalidConfig when the guard window exceeds the model context", err)
 	}
 
 	app, err := New(context.Background(), Config{
-		ES: discardES{}, LLM: windowLLM{window: 100000}, Policy: policy, GuardMaxChars: 2000,
+		ES: discardES{}, LLM: windowLLM{window: 100000}, Policy: policy, GuardMaxChars: 2000, GuardL2: guard.L1Only(),
 	})
 	if err != nil {
 		t.Fatalf("a wide enough context window must be accepted: %v", err)
 	}
 	defer func() { _ = app.Close(context.Background()) }()
 
-	plain, err := New(context.Background(), Config{ES: discardES{}, LLM: &fakeLLM{}, Policy: policy, GuardMaxChars: 2000})
+	plain, err := New(context.Background(), Config{ES: discardES{}, LLM: &fakeLLM{}, Policy: policy, GuardMaxChars: 2000, GuardL2: guard.L1Only()})
 	if err != nil {
 		t.Fatalf("a client without ContextWindow must be accepted: %v", err)
 	}

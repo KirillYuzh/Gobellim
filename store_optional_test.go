@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/KirillYuzh/Gobellim/authz"
+	"github.com/KirillYuzh/Gobellim/guard"
 	"github.com/KirillYuzh/Gobellim/model"
 )
 
@@ -24,9 +25,10 @@ func TestNewWithoutStore(t *testing.T) {
 	llm := &scripted{t: t, queue: []model.Response{textResponse("привет")}}
 
 	app, err := New(context.Background(), Config{
-		LLM:    llm,
-		Policy: policy,
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		LLM:     llm,
+		Policy:  policy,
+		GuardL2: guard.L1Only(),
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
 		t.Fatalf("New without Config.ES: %v", err)

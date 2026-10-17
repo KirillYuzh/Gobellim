@@ -37,6 +37,11 @@ func (a *App) ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamChu
 	if err != nil {
 		return nil, err
 	}
+	// Authorize before guard, memory and recall: a principal without `chat`
+	// must be stopped here (BR-09).
+	if err := a.policy.Authorize(pr, authz.PermChat); err != nil {
+		return nil, err
+	}
 	if err := a.rateLimit(pr); err != nil {
 		return nil, err
 	}

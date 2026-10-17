@@ -158,6 +158,9 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	if cfg.Policy == nil {
 		return nil, fmt.Errorf("kit: Config.Policy is required: %w", core.ErrInvalidConfig)
 	}
+	if cfg.GuardL2 == nil {
+		return nil, fmt.Errorf("kit: Config.GuardL2 is required: set an ML detector (e.g. guard/gliner) or guard.L1Only() to run L1-only on purpose: %w", core.ErrInvalidConfig)
+	}
 	if cfg.EmbedCache.Size > 0 && cfg.Embedder != nil {
 		cached, err := embed.NewCached(cfg.Embedder, cfg.EmbedCache)
 		if err != nil {
@@ -201,6 +204,9 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	if rails := degradedRailNames(cfg); len(rails) > 0 {
 		cfg.Logger.Warn("kit: guard is fail-open on these rails: an unavailable ML layer is skipped instead of failing the request",
 			"rails", rails)
+	}
+	if guard.IsL1Only(cfg.GuardL2) {
+		cfg.Logger.Warn("kit: guard runs L1 only (Config.GuardL2 = guard.L1Only()): no ML layer is active")
 	}
 	if piiMaskingRequired(cfg.LLM) {
 		cfg.Logger.Warn("kit: the model client is outside RegionRU: PII masking is mandatory, AllowPII tools only see placeholders")
@@ -326,6 +332,8 @@ type Health struct {
 	Healthy       bool
 	Degraded      bool
 	GuardFailOpen []string
+	GuardLayers   []string
+	GuardL1Only   bool
 	GuardVersion  string
 	GuardStats    guard.Stats
 	TraceQueue    int
@@ -355,10 +363,13 @@ func (a *App) Metrics() Metrics {
 
 func (a *App) Health() Health {
 	rails := degradedRailNames(a.cfg)
+	layers, _ := a.cfg.guardLayers()
 	h := Health{
 		Healthy:       true,
 		Degraded:      len(rails) > 0,
 		GuardFailOpen: rails,
+		GuardLayers:   layerNames(layers),
+		GuardL1Only:   guard.IsL1Only(a.cfg.GuardL2),
 		GuardVersion:  a.guard.Version(),
 		GuardStats:    a.guard.Stats(),
 		TraceQueue:    a.writer.QueueDepth(),
@@ -649,6 +660,11 @@ type DecisionReport struct {
 func (a *App) Chat(ctx context.Context, req ChatRequest) (res Response, err error) {
 	pr, err := principal(ctx)
 	if err != nil {
+		return res, err
+	}
+	// Authorize before anything that costs: guard, memory and recall all run
+	// below, so a principal without `chat` must be stopped here (BR-09).
+	if err := a.policy.Authorize(pr, authz.PermChat); err != nil {
 		return res, err
 	}
 	if err := a.rateLimit(pr); err != nil {
@@ -1125,7 +1141,7 @@ func (a *App) checkEgress(def *ToolDef, args string, t *turn) error {
 		a.securityEvent("egress_without_allowlist", t, def.name, err)
 		return err
 	}
-	for _, host := range urlHosts(args) {
+	for _, host := range egressHosts(args) {
 		if !hostAllowed(host, def.egressHosts) {
 			err := fmt.Errorf("kit: tool %s: host %q is not allowed: %w", def.name, host, core.ErrUnauthorized)
 			a.securityEvent("egress_host_not_allowed", t, def.name, err)
@@ -1135,8 +1151,38 @@ func (a *App) checkEgress(def *ToolDef, args string, t *turn) error {
 	return nil
 }
 
-func urlHosts(args string) []string {
-	matches := urlHostRe.FindAllString(args, -1)
+// egressHosts returns every host named in the string values of a tool's JSON
+// arguments (BR-51). The arguments are decoded first: scanning the raw text
+// misses JSON escapes ({"url":"https:\/\/host"}, \u003a), so a crafted
+// argument could smuggle a host past the allowlist. ToolDef.validate has already
+// accepted the arguments as JSON by the time this runs.
+func egressHosts(args string) []string {
+	var v any
+	if err := json.Unmarshal([]byte(args), &v); err != nil {
+		return nil
+	}
+	var out []string
+	collectHosts(v, &out)
+	return out
+}
+
+func collectHosts(v any, out *[]string) {
+	switch t := v.(type) {
+	case string:
+		*out = append(*out, urlHostsInString(t)...)
+	case []any:
+		for _, e := range t {
+			collectHosts(e, out)
+		}
+	case map[string]any:
+		for _, e := range t {
+			collectHosts(e, out)
+		}
+	}
+}
+
+func urlHostsInString(s string) []string {
+	matches := urlHostRe.FindAllString(s, -1)
 	out := make([]string, 0, len(matches))
 	for _, raw := range matches {
 		host := raw
@@ -1208,9 +1254,35 @@ type Doc struct {
 	Source string
 }
 
+// validateACL normalises Doc.ACL: it must name at least one role (search is
+// deny-by-default, BR-13, so an empty ACL indexes a document nobody can find),
+// and it must not carry blank or duplicate entries.
+func validateACL(acl []string) ([]string, error) {
+	if len(acl) == 0 {
+		return nil, fmt.Errorf("kit: ingest: Doc.ACL is required: an empty ACL indexes a document nobody can find: %w", core.ErrInvalidArgs)
+	}
+	out := make([]string, 0, len(acl))
+	seen := make(map[string]bool, len(acl))
+	for _, role := range acl {
+		role = strings.TrimSpace(role)
+		if role == "" {
+			return nil, fmt.Errorf("kit: ingest: Doc.ACL has a blank role: %w", core.ErrInvalidArgs)
+		}
+		if seen[role] {
+			continue
+		}
+		seen[role] = true
+		out = append(out, role)
+	}
+	return out, nil
+}
+
 func (a *App) Ingest(ctx context.Context, doc Doc) (err error) {
 	pr, err := principalScoped(ctx)
 	if err != nil {
+		return err
+	}
+	if err := a.policy.Authorize(pr, authz.PermIngest); err != nil {
 		return err
 	}
 	if err := a.rateLimit(pr); err != nil {
@@ -1219,7 +1291,8 @@ func (a *App) Ingest(ctx context.Context, doc Doc) (err error) {
 	if doc.ID == "" {
 		return fmt.Errorf("kit: ingest: doc ID is required: %w", core.ErrInvalidConfig)
 	}
-	if err := a.policy.Authorize(pr, authz.PermIngest); err != nil {
+	acl, err := validateACL(doc.ACL)
+	if err != nil {
 		return err
 	}
 	if a.cfg.Embedder == nil {
@@ -1245,21 +1318,13 @@ func (a *App) Ingest(ctx context.Context, doc Doc) (err error) {
 		return nil
 	}
 
-	vectors, err := call.Do(ctx, a.calls, call.Req{
-		Kind: call.KindEmbed, Name: a.cfg.Embedder.Model(), Permission: authz.PermIngest, TraceID: traceID,
-	}, func(ctx context.Context, span *call.Span) ([][]float32, error) {
-		return a.cfg.Embedder.Passages(ctx, parts)
-	})
-	if err != nil {
-		return err
-	}
-	if len(vectors) != len(parts) {
-		return fmt.Errorf("kit: ingest: embedder returned %d vectors for %d chunks: %w", len(vectors), len(parts), core.ErrProvider)
-	}
-
-	chunks := make([]store.Chunk, 0, len(parts))
-	embedModel := a.cfg.Embedder.Model()
+	// Guard before embedding: a quarantined chunk costs no embedding, and the
+	// embedder receives only masked text, so raw PII never leaves the process
+	// (BR-04). Quarantined chunks are never embedded at all.
 	version := time.Now().UTC().UnixNano()
+	chunks := make([]store.Chunk, 0, len(parts))
+	pending := make([]string, 0, len(parts))
+	pendingAt := make([]int, 0, len(parts))
 	for i, text := range parts {
 		v, gerr := call.Guard(ctx, a.calls, call.Req{
 			Kind: call.KindGuard, Name: "guard:chunk", Rail: guard.RailInput,
@@ -1269,7 +1334,7 @@ func (a *App) Ingest(ctx context.Context, doc Doc) (err error) {
 		case errors.Is(gerr, core.ErrGuardReject):
 			chunks = append(chunks, store.Chunk{
 				ID: fmt.Sprintf("%s#%d#%d", doc.ID, version, i), DocID: doc.ID, Tenant: pr.Tenant,
-				ACL: doc.ACL, Position: i, Source: doc.Source, Quarantine: true, DocVersion: version,
+				ACL: acl, Position: i, Source: doc.Source, Quarantine: true, DocVersion: version,
 			})
 			quarantined++
 			continue
@@ -1278,10 +1343,30 @@ func (a *App) Ingest(ctx context.Context, doc Doc) (err error) {
 		}
 		chunks = append(chunks, store.Chunk{
 			ID: fmt.Sprintf("%s#%d#%d", doc.ID, version, i), DocID: doc.ID, Tenant: pr.Tenant,
-			ACL: doc.ACL, Text: v.Text, Vector: vectors[i], Position: i, Source: doc.Source,
-			EmbedModel: embedModel, DocVersion: version,
+			ACL: acl, Text: v.Text, Position: i, Source: doc.Source, DocVersion: version,
 		})
+		pending = append(pending, v.Text)
+		pendingAt = append(pendingAt, len(chunks)-1)
 		indexed++
+	}
+
+	embedModel := a.cfg.Embedder.Model()
+	if len(pending) > 0 {
+		vectors, err := call.Do(ctx, a.calls, call.Req{
+			Kind: call.KindEmbed, Name: embedModel, Permission: authz.PermIngest, TraceID: traceID,
+		}, func(ctx context.Context, span *call.Span) ([][]float32, error) {
+			return a.cfg.Embedder.Passages(ctx, pending)
+		})
+		if err != nil {
+			return err
+		}
+		if len(vectors) != len(pending) {
+			return fmt.Errorf("kit: ingest: embedder returned %d vectors for %d chunks: %w", len(vectors), len(pending), core.ErrProvider)
+		}
+		for k, at := range pendingAt {
+			chunks[at].Vector = vectors[k]
+			chunks[at].EmbedModel = embedModel
+		}
 	}
 
 	bulk, err := store.ChunksBulkBody(chunks, a.cfg.Embedder.Dim())
@@ -1339,10 +1424,10 @@ func (a *App) Search(ctx context.Context, req SearchRequest) ([]SearchHit, error
 	if err != nil {
 		return nil, err
 	}
-	if err := a.rateLimit(pr); err != nil {
+	if err := a.policy.Authorize(pr, authz.PermSearch); err != nil {
 		return nil, err
 	}
-	if err := a.policy.Authorize(pr, authz.PermSearch); err != nil {
+	if err := a.rateLimit(pr); err != nil {
 		return nil, err
 	}
 	if a.cfg.Embedder == nil {
@@ -1364,17 +1449,25 @@ func (a *App) Search(ctx context.Context, req SearchRequest) ([]SearchHit, error
 	started := time.Now()
 	var hits []SearchHit
 	tr := a.guardTrace(pr, traceID, "search", nil, started)
-	tr.Input = req.Query
 	defer func() {
 		tr.EndTime = time.Now()
 		tr.Metadata = map[string]any{"hits": len(hits)}
 		a.writer.Enqueue(tr)
 	}()
 
+	// The query passes the guard like any input (BR-03): a Reject stops the
+	// search; a Mask is what reaches the embedder, BM25 and the trace, matching
+	// the masked text the index stores (BR-04).
+	query, _, gerr := a.guardText(ctx, guard.RailInput, "guard:query", req.Query, traceID)
+	if gerr != nil {
+		return nil, gerr
+	}
+	tr.Input = query
+
 	vectors, err := call.Do(ctx, a.calls, call.Req{
 		Kind: call.KindEmbed, Name: a.cfg.Embedder.Model(), Permission: authz.PermSearch, TraceID: traceID,
 	}, func(ctx context.Context, span *call.Span) ([][]float32, error) {
-		return a.cfg.Embedder.Query(ctx, []string{req.Query})
+		return a.cfg.Embedder.Query(ctx, []string{query})
 	})
 	if err != nil {
 		return nil, err
@@ -1384,7 +1477,7 @@ func (a *App) Search(ctx context.Context, req SearchRequest) ([]SearchHit, error
 	}
 
 	nd, err := store.MSearchNDJSON(store.SearchQuery{
-		Text:       req.Query,
+		Text:       query,
 		Vector:     vectors[0],
 		Principal:  pr,
 		TopK:       fetchK,
@@ -1469,10 +1562,10 @@ func (a *App) Delete(ctx context.Context, docID string) error {
 	if err != nil {
 		return err
 	}
-	if err := a.rateLimit(pr); err != nil {
+	if err := a.policy.Authorize(pr, authz.PermDelete); err != nil {
 		return err
 	}
-	if err := a.policy.Authorize(pr, authz.PermDelete); err != nil {
+	if err := a.rateLimit(pr); err != nil {
 		return err
 	}
 	body, err := store.DeleteByDocBody(docID, pr.Tenant)
@@ -1530,10 +1623,10 @@ func (a *App) Score(ctx context.Context, s trace.Score) error {
 	if err != nil {
 		return err
 	}
-	if err := a.rateLimit(pr); err != nil {
+	if err := a.policy.Authorize(pr, authz.PermTrace); err != nil {
 		return err
 	}
-	if err := a.policy.Authorize(pr, authz.PermTrace); err != nil {
+	if err := a.rateLimit(pr); err != nil {
 		return err
 	}
 	a.writer.EnqueueScore(s)
@@ -1576,10 +1669,10 @@ func Generate[T any](ctx context.Context, app *App, req GenerateRequest[T]) (Gen
 	if err != nil {
 		return zero, err
 	}
-	if err := app.rateLimit(pr); err != nil {
+	if err := app.policy.Authorize(pr, authz.PermGenerate); err != nil {
 		return zero, err
 	}
-	if err := app.policy.Authorize(pr, authz.PermGenerate); err != nil {
+	if err := app.rateLimit(pr); err != nil {
 		return zero, err
 	}
 	if req.ErrorStrategy == Fallback && req.Fallback == nil {

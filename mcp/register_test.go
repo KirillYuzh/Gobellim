@@ -6,8 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/KirillYuzh/Gobellim"
+	kit "github.com/KirillYuzh/Gobellim"
 	"github.com/KirillYuzh/Gobellim/authz"
+	"github.com/KirillYuzh/Gobellim/guard"
 	"github.com/KirillYuzh/Gobellim/model"
 	"github.com/KirillYuzh/Gobellim/store"
 )
@@ -32,7 +33,7 @@ func testApp(t *testing.T) *kit.App {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := kit.New(context.Background(), kit.Config{ES: nopES{}, LLM: nopLLM{}, Policy: policy})
+	app, err := kit.New(context.Background(), kit.Config{ES: nopES{}, LLM: nopLLM{}, Policy: policy, GuardL2: guard.L1Only()})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,11 +4,11 @@ This repository is **kit**. The specification lives in `docs/` only: read it bef
 Code comments are not a contract — do not infer behaviour from them, and never let a comment
 override the specification.
 
-Two tiers of code: the **core** is the default `go build ./...` — stdlib only, no
-native libraries, no ONNX runtime. Plugins are opt-in and live behind their own
-entry point: `guard/gliner` is L2 detection behind `//go:build ort`, and the
-optional `guard-onnx` / `guard-remote` plugins need `-tags ort` or a remote
-service.
+Two tiers of code: the **core** is the default `go build ./...` — no native
+libraries and no ONNX runtime, only pure-Go modules (YAML, `golang.org/x/text`,
+two JSON Schema libraries). The ML layer is opt-in: `guard/gliner` is L2 detection
+behind `//go:build ort`, and `kit.Config.GuardL2` must be set explicitly — pass
+`guard.L1Only()` to run L1-only on purpose (D80).
 
 ## Read order
 
@@ -24,7 +24,7 @@ service.
 
 - If code and docs disagree, fix the docs in the same change.
 - Every operation goes through `internal/call` (`authz → guard → span → fn`). Never add user-facing middleware or bypass the policy.
-- `authz`, `guard`, `model`, `embed`, `chunk`, `store`, `trace` must not import each other (`docs/internals/architecture.md`); the only permitted core-to-core edge is `trace → store`. `eval` imports `trace` and `internal/**` only and never `kit`. The rules are enforced two ways: the stdlib-only test `internal/importrules` (`go test ./...`) and the `depguard` rules in `.golangci.yml`.
+- `authz`, `guard`, `model`, `embed`, `chunk`, `store`, `trace` must not import each other (`docs/internals/architecture.md`); the only permitted core-to-core edge is `trace → store`. `eval` imports `trace` and `internal/**` only and never `kit`. The core (the `kit` façade, `internal/**` and the seven subsystems) must not import the optional packages (`mcp`, `webfetch`, `flow`, `eval`, `kittest`, `rerank`, `cmd`, `demo`, `scripts`); the only recorded edge is `kit → rerank` (`D84`), enforced by the stdlib-only test `internal/importrules` (`core-no-optional`; a core _test_ may still import an optional package). The family rules are enforced twice — the same test (`go test ./...`) and the `depguard` rules in `.golangci.yml`; the core boundary lives in `internal/importrules` alone, since `depguard` cannot exempt a test-only import.
 - The default build (`go build ./...`) must not require native libraries; ONNX/ORT code goes behind `//go:build ort`.
 - Detection does not depend on the rail; the rail only affects the decision table (`docs/internals/design.md`, `I-02`).
 - Traces carry masked text by default (`Config.TraceText`, `trace.TextMasked`); never log or persist raw message text.
