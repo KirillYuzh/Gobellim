@@ -52,7 +52,7 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
       - name: go test -race
-        run: go test -race -count=1 ./trace/... ./guard/... ./eval/... ./internal/...
+        run: go test -race -count=1 ./...
 
   ort-vet:
     name: ort-vet
