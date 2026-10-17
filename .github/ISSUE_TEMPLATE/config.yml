@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security report
+    url: https://github.com/KirillYuzh/Gobellim/security/advisories/new
+    about: Report a vulnerability privately. Do not open a public issue.
+  - name: Question
+    url: https://github.com/KirillYuzh/Gobellim/issues/new?labels=question
+    about: Ask how to do something. "How do I ..." is a valid issue.
+  - name: Documentation
+    url: https://github.com/KirillYuzh/Gobellim/tree/main/docs
+    about: Guides, concepts and the API reference.
