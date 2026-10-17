@@ -287,8 +287,8 @@ g, err := eval.ScoreBinary(expected, actual)      // TP/FP/FN/TN, precision, rec
 ## Участие
 
 Gobellim принимает issues, форки и pull requests. Начните с
-[CONTRIBUTING.md](.github/CONTRIBUTING.md). Об уязвимостях сообщайте через
-[SECURITY.md](SECURITY.md), а не в публичный трекер.
+[CONTRIBUTING.ru.md](.github/CONTRIBUTING.ru.md). Об уязвимостях сообщайте через
+[SECURITY.ru.md](SECURITY.ru.md), а не в публичный трекер.
 
 ## Лицензия
 
