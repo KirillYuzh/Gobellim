@@ -308,7 +308,7 @@ if _, err := kit.RetrievalTool(app, "search_knowledge"); err != nil {
 
 Инструменты, чья схема приходит извне, регистрируются через `kit.RawTool`: схема
 принимается дословно, а не выводится из Go-типа (невалидная — `ErrInvalidConfig`).
-Именно так работает [клиент MCP](./mcp.md): `mcp.Register` регистрирует
+Так работает [клиент MCP](./mcp.md): `mcp.Register` регистрирует
 `mcp:<server>:<tool>` с эффектом `Egress` (BR-94, BR-95).
 
 ## Дальше

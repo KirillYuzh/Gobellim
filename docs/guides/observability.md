@@ -94,7 +94,7 @@ app, err := kit.New(ctx, kit.Config{
 | `trace.TextMasked` | только текст, прошедший guard (I-07)        | —                                     |
 | `trace.TextFull`   | необработанный текст; `slog.Warn` при `New` | `obsInput` отдаёт исходный `req.Text` |
 
-Ключевое: `Observation.Input` при `masked` — это **guarded-текст**
+`Observation.Input` при `masked` — это **guarded-текст**
 (`v.Text` после guard), поэтому реальные PII/секреты в ES не пишутся. `Trace.Input`
 для `Chat` — последнее санитизированное сообщение после guard; для `Generate` —
 guarded-промпт.

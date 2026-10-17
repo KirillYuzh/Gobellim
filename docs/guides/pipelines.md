@@ -42,7 +42,7 @@ if first.Status != flow.StatusSuccess {
 second := review.Run(ctx, first.State, first.Output) // Result[Review]
 ```
 
-Именно поэтому в `flow` нет `Pipeline`/`Then`/`Chain` — это была бы абстракция над
+Поэтому в `flow` нет `Pipeline`/`Then`/`Chain` — это была бы абстракция над
 обычным вызовом функции (`D31`, `D47`).
 
 ## Схемы из типов
