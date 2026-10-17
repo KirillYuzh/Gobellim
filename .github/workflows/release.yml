@@ -1,0 +1,49 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION: "1.24"
+  # v1.12.0 requires Go 1.26; v1.9.0 is the newest line that builds on 1.24.
+  CYCLONEDX_GOMOD_VERSION: "v1.9.0"
+
+jobs:
+  sbom:
+    name: SBOM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: generate CycloneDX SBOMs
+        run: |
+          set -euo pipefail
+          go install "github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@${CYCLONEDX_GOMOD_VERSION}"
+          bin="$(go env GOPATH)/bin/cyclonedx-gomod"
+          "$bin" mod -json -output sbom-core.cdx.json .
+          for d in mcp webfetch flow eval kittest cmd demo scripts; do
+            (cd "$d" && "$bin" mod -json -output "../sbom-$d.cdx.json" .)
+          done
+          ls -l sbom-*.cdx.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom-*.cdx.json
+          if-no-files-found: error
+
+      - name: attach SBOMs to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: sbom-*.cdx.json
+          generate_release_notes: true
