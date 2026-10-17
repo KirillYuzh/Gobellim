@@ -23,7 +23,10 @@ llm, err := model.Ollama("http://localhost:11434", "llama3.2")
 if err != nil {
 	return err
 }
-app, err := kit.New(ctx, kit.Config{ES: es, LLM: llm, Policy: policy})
+app, err := kit.New(ctx, kit.Config{
+	ES: es, LLM: llm, Policy: policy,
+	GuardL2: guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
+})
 ```
 
 `model.Ollama(baseURL, model)` — обёртка над `model.NewOllama`:

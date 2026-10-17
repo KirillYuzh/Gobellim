@@ -271,6 +271,7 @@ if err != nil {
 }
 app, err := kit.New(ctx, kit.Config{
 	// ...
+	GuardL2:  guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
 	Reranker: rr,
 })
 

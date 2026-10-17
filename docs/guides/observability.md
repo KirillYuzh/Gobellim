@@ -22,7 +22,10 @@ kit пишет трейсы вызовов в Elasticsearch сам: trace соз
 ## Быстрый старт
 
 ```go
-app, err := kit.New(ctx, kit.Config{ES: es, LLM: llm, Policy: policy})
+app, err := kit.New(ctx, kit.Config{
+	ES: es, LLM: llm, Policy: policy,
+	GuardL2: guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
+})
 if err != nil {
 	return err
 }
@@ -81,6 +84,7 @@ flowchart TD
 ```go
 app, err := kit.New(ctx, kit.Config{
 	ES: es, LLM: llm, Policy: policy,
+	GuardL2:   guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
 	TraceText: trace.TextMasked, // по умолчанию; trace.TextFull — явный opt-in
 })
 ```
@@ -111,6 +115,7 @@ guarded-промпт.
 ```go
 app, err := kit.New(ctx, kit.Config{
 	ES: es, LLM: llm, Policy: policy,
+	GuardL2: guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
 	Sampler: trace.SamplerRatio(0.1),
 })
 ```
@@ -203,7 +208,8 @@ rec := trace.NewRecorder()
 
 app, err := kit.New(ctx, kit.Config{
 	ES: es, LLM: llm, Policy: policy,
-	Sinks: []trace.Sink{rec}, // писатель в ES работает всегда; sink'и — дополнительно
+	GuardL2: guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
+	Sinks:   []trace.Sink{rec}, // писатель в ES работает всегда; sink'и — дополнительно
 })
 
 // ... операции ...
@@ -291,6 +297,7 @@ deleted, err := app.Prune(ctx, 30*24*time.Hour)
 ```go
 app, _ := kit.New(ctx, kit.Config{
 	// ...
+	GuardL2: guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
 	Pricing: model.Pricing{InputPerMTok: 3, OutputPerMTok: 15},
 })
 ```
@@ -331,9 +338,10 @@ writeJSON(w, map[string]any{"guard_scans": m.Guard.Scans, "guard_blocked": m.Gua
 ```go
 app, err := kit.New(ctx, kit.Config{
 	ES: es, LLM: llm, Policy: policy,
+	GuardL2: guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
 	Sinks: []trace.Sink{
-		myRecorder,          // например, in-memory для eval
-		customerAnalytics,   // ваш Sink, пишет в чужую систему
+		myRecorder,        // например, in-memory для eval
+		customerAnalytics, // ваш Sink, пишет в чужую систему
 	},
 })
 ```

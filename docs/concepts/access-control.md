@@ -41,7 +41,10 @@ if err != nil {
     return err
 }
 
-app, err := kit.New(ctx, kit.Config{ES: es, LLM: llm, Policy: policy})
+app, err := kit.New(ctx, kit.Config{
+    ES: es, LLM: llm, Policy: policy,
+    GuardL2: guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
+})
 if err != nil {
     return err
 }

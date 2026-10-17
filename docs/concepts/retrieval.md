@@ -183,7 +183,7 @@ API эмбеддера — `Query()` и `Passages()`, без общего `Embed
 правом `search`.
 
 ```go
-app, _ := kit.New(ctx, kit.Config{ /* ... */ Reranker: reranker})
+app, _ := kit.New(ctx, kit.Config{ /* ... */ GuardL2: guard.L1Only(), Reranker: reranker})
 hits, _ := app.Search(ctx, kit.SearchRequest{Query: "вопрос", TopK: 5, Rerank: true})
 ```
 
