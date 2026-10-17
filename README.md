@@ -133,7 +133,7 @@ suites ship with it.
 ## Install
 
 ```sh
-go get github.com/KirillYuzh/Gobellim
+go get github.com/KirillYuzh/Gobellim@v0.1.0
 ```
 
 ## Documentation
@@ -258,6 +258,22 @@ returns `ErrInvalidConfig` (D80).
   review or certification usually expects an ML layer.
 
 A remote guard service is not implemented (D76).
+
+## Eval
+
+`eval` runs deterministic checks over recorded traces and scores quality on
+labelled data. The shipped L1 guard corpus (457 cases: 223 scored, 205 benign
+controls, 29 deferred to L2) passes with recall 1.000, precision 1.000 and a
+false-positive rate of 0.024 against thresholds 0.90 / 0.90 / 0.05. These are L1
+numbers on a public corpus, not a generalization claim; the L2 parity gate runs
+nightly.
+
+```go
+m := eval.ScoreRetrieval(hitIDs, relevantIDs, 10) // precision@K, recall@K, MRR
+g, err := eval.ScoreBinary(expected, actual)      // TP/FP/FN/TN, precision, recall, F1, FPR
+```
+
+Run the shipped guard eval with `go -C scripts run ./guardqual`.
 
 ## Learn more
 

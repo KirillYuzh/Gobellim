@@ -134,7 +134,7 @@ policy и guard сами — и тогда этот wrapper и его тесты
 ## Установка
 
 ```sh
-go get github.com/KirillYuzh/Gobellim
+go get github.com/KirillYuzh/Gobellim@v0.1.0
 ```
 
 ## Документация
@@ -261,6 +261,22 @@ L2 — ML-слой, и он обязателен: `Config.GuardL2` должен 
   сертификация обычно требуют ML-слой.
 
 Удалённый guard-сервис не реализован (D76).
+
+## Eval
+
+`eval` гоняет детерминированные проверки по записанным трейсам и считает
+качество на размеченных данных. Поставляемый корпус L1-guard (457 кейсов: 223
+размеченных, 205 доброкачественных контролей, 29 отложены до L2) проходит с
+recall 1.000, precision 1.000 и FPR 0.024 при порогах 0.90 / 0.90 / 0.05. Это
+числа L1 на публичном корпусе, а не утверждение об обобщаемости; паритет L2
+проверяется ночью.
+
+```go
+m := eval.ScoreRetrieval(hitIDs, relevantIDs, 10) // precision@K, recall@K, MRR
+g, err := eval.ScoreBinary(expected, actual)      // TP/FP/FN/TN, precision, recall, F1, FPR
+```
+
+Запустить поставляемый guard-eval: `go -C scripts run ./guardqual`.
 
 ## Что дальше
 

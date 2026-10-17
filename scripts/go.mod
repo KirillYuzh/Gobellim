@@ -2,7 +2,7 @@ module github.com/KirillYuzh/Gobellim/scripts
 
 go 1.24
 
-require github.com/KirillYuzh/Gobellim v0.0.0
+require github.com/KirillYuzh/Gobellim v0.1.0
 
 require (
 	github.com/daulet/tokenizers v1.27.0 // indirect
