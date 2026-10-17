@@ -335,24 +335,32 @@ func (a *App) memorySetWorking(ctx context.Context, pr core.Principal, threadID 
 // MemoryLoad returns up to limit recent messages of threadID in chronological
 // order; a non-positive limit uses Config.MemoryLimit. It requires the memory
 // permission and a principal with a user ID and tenant.
-func (a *App) MemoryLoad(ctx context.Context, threadID string, limit int) ([]model.Message, error) {
+func (a *App) MemoryLoad(ctx context.Context, threadID string, limit int) (msgs []model.Message, err error) {
+	ao := a.beginAudit(ctx, "memory.load")
+	defer func() { ao.end(err) }()
+	ao.field("thread_id", threadID)
 	pr, traceID, done, err := a.beginMemory(ctx, "load", map[string]any{"thread_id": threadID})
 	if err != nil {
 		return nil, err
 	}
+	ao.trace(traceID)
 	defer done()
-	msgs, _, err := a.memoryLoad(ctx, pr, threadID, limit, traceID)
+	msgs, _, err = a.memoryLoad(ctx, pr, threadID, limit, traceID)
 	return msgs, err
 }
 
 // MemoryAppend appends user and assistant messages with non-empty content to
 // threadID, recording them as trusted. It requires the memory permission and a
 // principal with a user ID and tenant.
-func (a *App) MemoryAppend(ctx context.Context, threadID string, msgs ...model.Message) error {
+func (a *App) MemoryAppend(ctx context.Context, threadID string, msgs ...model.Message) (err error) {
+	ao := a.beginAudit(ctx, "memory.append")
+	defer func() { ao.end(err) }()
+	ao.field("thread_id", threadID)
 	pr, traceID, done, err := a.beginMemory(ctx, "append", map[string]any{"thread_id": threadID, "messages": len(msgs)})
 	if err != nil {
 		return err
 	}
+	ao.trace(traceID)
 	defer done()
 	return a.memoryAppend(ctx, pr, threadID, msgs, false, traceID)
 }
@@ -361,11 +369,14 @@ func (a *App) MemoryAppend(ctx context.Context, threadID string, msgs ...model.M
 // across the principal's threads; a non-positive topK uses Config.MemoryRecall
 // then DefaultMemoryTopK. It requires Config.Embedder, a non-empty query, the
 // memory permission, and a principal with a user ID and tenant.
-func (a *App) MemoryRecall(ctx context.Context, query string, topK int) ([]MemoryHit, error) {
+func (a *App) MemoryRecall(ctx context.Context, query string, topK int) (hits []MemoryHit, err error) {
+	ao := a.beginAudit(ctx, "memory.recall")
+	defer func() { ao.end(err) }()
 	pr, traceID, done, err := a.beginMemory(ctx, "recall", map[string]any{"query_len": len(query), "top_k": topK})
 	if err != nil {
 		return nil, err
 	}
+	ao.trace(traceID)
 	defer done()
 	return a.memoryRecallHits(ctx, pr, query, topK, traceID)
 }
@@ -373,11 +384,15 @@ func (a *App) MemoryRecall(ctx context.Context, query string, topK int) ([]Memor
 // MemoryClear deletes all messages of threadID for the principal and returns the
 // number deleted. It requires the memory permission and a principal with a user
 // ID and tenant.
-func (a *App) MemoryClear(ctx context.Context, threadID string) (int, error) {
+func (a *App) MemoryClear(ctx context.Context, threadID string) (n int, err error) {
+	ao := a.beginAudit(ctx, "memory.clear")
+	defer func() { ao.end(err) }()
+	ao.field("thread_id", threadID)
 	pr, traceID, done, err := a.beginMemory(ctx, "clear", map[string]any{"thread_id": threadID})
 	if err != nil {
 		return 0, err
 	}
+	ao.trace(traceID)
 	defer done()
 	return a.memoryClear(ctx, pr, threadID, traceID)
 }
@@ -385,22 +400,30 @@ func (a *App) MemoryClear(ctx context.Context, threadID string) (int, error) {
 // MemoryWorking returns the thread's working-memory map, or an empty map when
 // none exists. It requires Config.ES, the memory permission, and a principal with
 // a user ID and tenant.
-func (a *App) MemoryWorking(ctx context.Context, threadID string) (map[string]any, error) {
+func (a *App) MemoryWorking(ctx context.Context, threadID string) (data map[string]any, err error) {
+	ao := a.beginAudit(ctx, "memory.working")
+	defer func() { ao.end(err) }()
+	ao.field("thread_id", threadID)
 	pr, traceID, done, err := a.beginMemory(ctx, "working", map[string]any{"thread_id": threadID})
 	if err != nil {
 		return nil, err
 	}
+	ao.trace(traceID)
 	defer done()
 	return a.memoryWorking(ctx, pr, threadID, traceID)
 }
 
 // MemorySetWorking replaces the thread's working-memory document with data. It
 // requires the memory permission and a principal with a user ID and tenant.
-func (a *App) MemorySetWorking(ctx context.Context, threadID string, data map[string]any) error {
+func (a *App) MemorySetWorking(ctx context.Context, threadID string, data map[string]any) (err error) {
+	ao := a.beginAudit(ctx, "memory.set_working")
+	defer func() { ao.end(err) }()
+	ao.field("thread_id", threadID)
 	pr, traceID, done, err := a.beginMemory(ctx, "set_working", map[string]any{"thread_id": threadID})
 	if err != nil {
 		return err
 	}
+	ao.trace(traceID)
 	defer done()
 	return a.memorySetWorking(ctx, pr, threadID, data, traceID)
 }

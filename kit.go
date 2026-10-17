@@ -157,6 +157,11 @@ type Config struct {
 	ResponseCache    ResponseCache
 	ToolSearch       ToolSearch
 	Logger           *slog.Logger
+	// AuditLog receives one structured record per user-facing operation:
+	// principal, tenant, operation, outcome, error kind and trace ID. Nil
+	// disables the audit log. It is separate from Logger so it can be routed to
+	// a compliance sink without debug noise.
+	AuditLog *slog.Logger
 
 	TraceText  trace.TextPolicy
 	Sampler    trace.Sampler
@@ -731,6 +736,8 @@ type DecisionReport struct {
 // assistant messages, and, when ThreadID is set, loads and appends thread memory,
 // which requires the memory permission.
 func (a *App) Chat(ctx context.Context, req ChatRequest) (res Response, err error) {
+	ao := a.beginAudit(ctx, "chat")
+	defer func() { ao.end(err) }()
 	pr, err := principal(ctx)
 	if err != nil {
 		return res, err
@@ -744,6 +751,7 @@ func (a *App) Chat(ctx context.Context, req ChatRequest) (res Response, err erro
 		return res, err
 	}
 	traceID := id.New()
+	ao.trace(traceID)
 	started := time.Now()
 	var total model.Usage
 	var out model.Message
@@ -1358,6 +1366,9 @@ func validateACL(acl []string) ([]string, error) {
 // principal with a tenant; chunks rejected by the input guard are stored as
 // quarantined markers without text or vector.
 func (a *App) Ingest(ctx context.Context, doc Doc) (err error) {
+	ao := a.beginAudit(ctx, "ingest")
+	defer func() { ao.end(err) }()
+	ao.field("doc_id", doc.ID)
 	pr, err := principalScoped(ctx)
 	if err != nil {
 		return err
@@ -1383,6 +1394,7 @@ func (a *App) Ingest(ctx context.Context, doc Doc) (err error) {
 	}
 
 	traceID := id.New()
+	ao.trace(traceID)
 	started := time.Now()
 	tr := a.guardTrace(pr, traceID, "ingest", nil, started)
 	tr.Input = doc.Text
@@ -1508,7 +1520,9 @@ type SearchHit struct {
 // embed_model. It requires the search permission, a non-empty query, and
 // Config.Embedder; the query is recorded as the trace input, subject to
 // Config.TraceText and Config.HideInput.
-func (a *App) Search(ctx context.Context, req SearchRequest) ([]SearchHit, error) {
+func (a *App) Search(ctx context.Context, req SearchRequest) (out []SearchHit, err error) {
+	ao := a.beginAudit(ctx, "search")
+	defer func() { ao.end(err) }()
 	pr, err := principalScoped(ctx)
 	if err != nil {
 		return nil, err
@@ -1535,6 +1549,7 @@ func (a *App) Search(ctx context.Context, req SearchRequest) ([]SearchHit, error
 	fetchK := a.candidateCount(topK, req.Rerank)
 
 	traceID := id.New()
+	ao.trace(traceID)
 	started := time.Now()
 	var hits []SearchHit
 	tr := a.guardTrace(pr, traceID, "search", nil, started)
@@ -1648,7 +1663,10 @@ func (a *App) rerankHits(ctx context.Context, traceID, query string, hits []Sear
 
 // Delete removes all chunks of docID for the principal's tenant; it requires the
 // delete permission and a principal with a tenant.
-func (a *App) Delete(ctx context.Context, docID string) error {
+func (a *App) Delete(ctx context.Context, docID string) (err error) {
+	ao := a.beginAudit(ctx, "delete")
+	defer func() { ao.end(err) }()
+	ao.field("doc_id", docID)
 	pr, err := principalScoped(ctx)
 	if err != nil {
 		return err
@@ -1668,6 +1686,7 @@ func (a *App) Delete(ctx context.Context, docID string) error {
 	req.Idempotent = true
 
 	traceID := id.New()
+	ao.trace(traceID)
 	resp, err := a.esDo(ctx, call.Req{
 		Kind: call.KindDelete, Name: store.IndexChunks, Permission: authz.PermDelete, TraceID: traceID,
 	}, req)
@@ -1682,7 +1701,9 @@ func (a *App) Delete(ctx context.Context, docID string) error {
 
 // Prune deletes traces and observations older than olderThan and returns the
 // number of deleted documents; it requires the prune permission and Config.ES.
-func (a *App) Prune(ctx context.Context, olderThan time.Duration) (int, error) {
+func (a *App) Prune(ctx context.Context, olderThan time.Duration) (n int, err error) {
+	ao := a.beginAudit(ctx, "prune")
+	defer func() { ao.end(err) }()
 	pr, err := principal(ctx)
 	if err != nil {
 		return 0, err
@@ -1691,6 +1712,7 @@ func (a *App) Prune(ctx context.Context, olderThan time.Duration) (int, error) {
 		return 0, err
 	}
 	traceID := id.New()
+	ao.trace(traceID)
 	deleted := 0
 	for _, stream := range []string{store.DataStreamTraces, store.DataStreamObservations} {
 		req := store.RawRequest(http.MethodPost, "/"+stream+"/_delete_by_query", store.PruneBody(olderThan), "application/json")
@@ -1713,7 +1735,10 @@ func (a *App) Prune(ctx context.Context, olderThan time.Duration) (int, error) {
 
 // Score attaches an evaluation score to a trace; it requires the trace permission
 // and enqueues the score on the trace writer.
-func (a *App) Score(ctx context.Context, s trace.Score) error {
+func (a *App) Score(ctx context.Context, s trace.Score) (err error) {
+	ao := a.beginAudit(ctx, "score")
+	defer func() { ao.end(err) }()
+	ao.field("scored_trace_id", s.TraceID)
 	pr, err := principal(ctx)
 	if err != nil {
 		return err
@@ -1773,9 +1798,11 @@ type Generated[T any] struct {
 // requires the generate permission; on decode failure it optionally retries once
 // through StructuringModel, then applies ErrorStrategy. SchemaNative is downgraded
 // to inline when the client does not support it.
-func Generate[T any](ctx context.Context, app *App, req GenerateRequest[T]) (Generated[T], error) {
+func Generate[T any](ctx context.Context, app *App, req GenerateRequest[T]) (gen Generated[T], err error) {
 	var zero Generated[T]
 
+	ao := app.beginAudit(ctx, "generate")
+	defer func() { ao.end(err) }()
 	pr, err := principal(ctx)
 	if err != nil {
 		return zero, err
@@ -1800,6 +1827,7 @@ func Generate[T any](ctx context.Context, app *App, req GenerateRequest[T]) (Gen
 	}
 
 	traceID := id.New()
+	ao.trace(traceID)
 	started := time.Now()
 	tr := app.guardTrace(pr, traceID, "generate", req.Tags, started)
 	defer func() {
