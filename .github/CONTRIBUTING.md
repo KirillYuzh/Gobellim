@@ -1,5 +1,7 @@
 # Contributing to Gobellim
 
+**[English](CONTRIBUTING.md) · [Русский](CONTRIBUTING.ru.md)**
+
 Gobellim is a Go library for LLM calls behind a permission-checked call path.
 Bug reports, documentation fixes, examples and code are welcome. Contributors
 are listed in [CONTRIBUTORS.md](CONTRIBUTORS.md).
