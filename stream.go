@@ -41,21 +41,27 @@ var errStreamGuarded = errors.New("kit: stream blocked by guard")
 // closes, and falls back to a single buffered chunk when the LLM client does not
 // implement model.Streamer.
 func (a *App) ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamChunk, error) {
+	ao := a.beginAudit(ctx, "chat")
 	pr, err := principal(ctx)
 	if err != nil {
+		ao.end(err)
 		return nil, err
 	}
 	// Authorize before guard, memory and recall: a principal without `chat`
 	// must be stopped here (BR-09).
 	if err := a.policy.Authorize(pr, authz.PermChat); err != nil {
+		ao.end(err)
 		return nil, err
 	}
 	if err := a.rateLimit(pr); err != nil {
+		ao.end(err)
 		return nil, err
 	}
 	client := sanitizeMessages(req.Messages)
 	if len(client) == 0 {
-		return nil, fmt.Errorf("kit: chat stream: no user or assistant messages: %w", core.ErrInvalidArgs)
+		err := fmt.Errorf("kit: chat stream: no user or assistant messages: %w", core.ErrInvalidArgs)
+		ao.end(err)
+		return nil, err
 	}
 
 	ch := make(chan StreamChunk, 8)
@@ -75,6 +81,7 @@ func (a *App) ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamChu
 	}
 
 	traceID := id.New()
+	ao.trace(traceID)
 	t := &turn{
 		traceID:      traceID,
 		principal:    pr,
@@ -85,6 +92,7 @@ func (a *App) ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamChu
 	for i := range client {
 		v, gerr := a.guardTextVerdict(ctx, guard.RailInput, "guard:input", client[i].Content, traceID)
 		if gerr != nil {
+			ao.end(gerr)
 			return nil, gerr
 		}
 		if v.Action != guard.Allow || v.Truncated {
@@ -94,13 +102,21 @@ func (a *App) ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamChu
 		client[i].Content = v.Text
 	}
 
-	go a.streamTurn(ctx, req, pr, client, t, streamer, ch)
+	go a.streamTurn(ctx, req, pr, client, t, streamer, ch, ao)
 	return ch, nil
 }
 
-func (a *App) streamTurn(ctx context.Context, req ChatRequest, pr core.Principal, client []model.Message, t *turn, streamer model.Streamer, ch chan<- StreamChunk) {
+func (a *App) streamTurn(ctx context.Context, req ChatRequest, pr core.Principal, client []model.Message, t *turn, streamer model.Streamer, ch chan<- StreamChunk, ao *auditOp) {
 	defer close(ch)
 	traceID := t.traceID
+	var streamErr error
+	sendErr := func(err error) {
+		if streamErr == nil {
+			streamErr = err
+		}
+		ch <- StreamChunk{TraceID: traceID, Err: err}
+	}
+	defer func() { ao.end(streamErr) }()
 	started := time.Now()
 	var total model.Usage
 	var out model.Message
@@ -127,7 +143,7 @@ func (a *App) streamTurn(ctx context.Context, req ChatRequest, pr core.Principal
 	if req.ThreadID != "" {
 		history, historyUntrusted, herr := a.memoryLoad(ctx, pr, req.ThreadID, a.memoryLimit(), traceID)
 		if herr != nil {
-			ch <- StreamChunk{TraceID: traceID, Err: herr}
+			sendErr(herr)
 			return
 		}
 		if historyUntrusted {
@@ -226,7 +242,7 @@ func (a *App) streamTurn(ctx context.Context, req ChatRequest, pr core.Principal
 			if errors.Is(cerr, errStreamGuarded) {
 				ch <- StreamChunk{TraceID: traceID, Retract: true}
 			}
-			ch <- StreamChunk{TraceID: traceID, Err: cerr}
+			sendErr(cerr)
 			return
 		}
 
@@ -235,8 +251,8 @@ func (a *App) streamTurn(ctx context.Context, req ChatRequest, pr core.Principal
 		total.TotalTokens += resp.Usage.TotalTokens
 		total.Cost += resp.Usage.Cost
 		if a.cfg.MaxTotalTokens > 0 && total.TotalTokens > a.cfg.MaxTotalTokens {
-			ch <- StreamChunk{TraceID: traceID, Err: fmt.Errorf("kit: chat: token budget %d exceeded (%d): %w",
-				a.cfg.MaxTotalTokens, total.TotalTokens, core.ErrBudget)}
+			sendErr(fmt.Errorf("kit: chat: token budget %d exceeded (%d): %w",
+				a.cfg.MaxTotalTokens, total.TotalTokens, core.ErrBudget))
 			return
 		}
 
@@ -245,7 +261,7 @@ func (a *App) streamTurn(ctx context.Context, req ChatRequest, pr core.Principal
 				if errors.Is(err, errStreamGuarded) {
 					ch <- StreamChunk{TraceID: traceID, Retract: true}
 				}
-				ch <- StreamChunk{TraceID: traceID, Err: err}
+				sendErr(err)
 				return
 			}
 			out = resp.Message
@@ -265,12 +281,12 @@ func (a *App) streamTurn(ctx context.Context, req ChatRequest, pr core.Principal
 		msgs = append(msgs, resp.Message)
 		results, terr := a.runToolCalls(ctx, resp.Message.ToolCalls, t)
 		if terr != nil {
-			ch <- StreamChunk{TraceID: traceID, Err: terr}
+			sendErr(terr)
 			return
 		}
 		msgs = append(msgs, results...)
 	}
-	ch <- StreamChunk{TraceID: traceID, Err: fmt.Errorf("kit: chat: reached max_steps=%d: %w", a.cfg.MaxSteps, core.ErrMaxSteps)}
+	sendErr(fmt.Errorf("kit: chat: reached max_steps=%d: %w", a.cfg.MaxSteps, core.ErrMaxSteps))
 }
 
 type windowGuard struct {
