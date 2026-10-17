@@ -24,7 +24,10 @@ Session — это группировка по `session_id`, отдельной 
 `main.go`
 
 ```go
-app, err := kit.New(ctx, kit.Config{ES: es, LLM: llm, Policy: policy})
+app, err := kit.New(ctx, kit.Config{
+	ES: es, LLM: llm, Policy: policy,
+	GuardL2: guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
+})
 if err != nil {
 	return err
 }
@@ -139,6 +142,7 @@ app, err := kit.New(ctx, kit.Config{
 	ES:        es,
 	LLM:       llm,
 	Policy:    policy,
+	GuardL2:   guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
 	TraceText: trace.TextMasked, // по умолчанию; trace.TextFull — явный opt-in
 })
 ```
@@ -156,6 +160,7 @@ app, err := kit.New(ctx, kit.Config{
 ```go
 app, err := kit.New(ctx, kit.Config{
 	ES: es, LLM: llm, Policy: policy,
+	GuardL2: guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
 	Sampler: trace.SamplerRatio(0.1), // SamplerAlways | SamplerNever | SamplerRatio(p)
 })
 ```
@@ -174,7 +179,8 @@ rec := trace.NewRecorder()
 
 app, err := kit.New(ctx, kit.Config{
 	ES: es, LLM: llm, Policy: policy,
-	Sinks: []trace.Sink{rec}, // writer добавляется первым, затем эти sinks
+	GuardL2: guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
+	Sinks:   []trace.Sink{rec}, // writer добавляется первым, затем эти sinks
 })
 ```
 

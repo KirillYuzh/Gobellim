@@ -267,7 +267,8 @@ if _, err := kit.Tool(app, "find_order", findOrder,
 ```go
 app, err := kit.New(ctx, kit.Config{
 	ES: es, LLM: llm, Policy: policy,
-	Egress: kit.EgressPolicy{}, // нулевое значение: Rule of Two включён (эгресс после недоверенного ввода запрещён)
+	GuardL2: guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
+	Egress:  kit.EgressPolicy{}, // нулевое значение: Rule of Two включён (эгресс после недоверенного ввода запрещён)
 <!-- derived: BR-51 -->
 })
 
@@ -295,6 +296,7 @@ if _, err := kit.Tool(app, "close_ticket", closeTicket,
 ```go
 app, err := kit.New(ctx, kit.Config{
 	ES: es, LLM: llm, Policy: policy,
+	GuardL2: guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
 	Approver: kit.ApproverFunc(func(ctx context.Context, req kit.ApprovalRequest) (bool, error) {
 		// req.Fingerprint привязан к инструменту и каноническим аргументам:
 		// одобрение нельзя переиграть на другой набор аргументов.

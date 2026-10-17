@@ -42,7 +42,8 @@ func TestBot(t *testing.T) {
 	rec := trace.NewRecorder()
 	app, err := kit.New(ctx, kit.Config{
 		ES: es, LLM: llm, Policy: policy,
-		Sinks: []trace.Sink{rec}, // каждый документ попадает и в рекордер
+		GuardL2: guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
+		Sinks:   []trace.Sink{rec}, // каждый документ попадает и в рекордер
 	})
 	if err != nil {
 		t.Fatal(err)

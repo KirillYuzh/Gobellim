@@ -193,6 +193,7 @@ app, err := kit.New(ctx, kit.Config{
 	ES:     es,
 	LLM:    llm,
 	Policy: policy,
+	GuardL2: guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
 	Egress: kit.EgressPolicy{}, // нулевое значение: Rule of Two включён
 	Approver: kit.ApproverFunc(func(ctx context.Context, req kit.ApprovalRequest) (bool, error) {
 		// req.Fingerprint привязан к инструменту и каноническим аргументам,
