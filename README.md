@@ -281,6 +281,12 @@ Run the shipped guard eval with `go -C scripts run ./guardqual`.
 - [How-to guides →](./docs/guides)
 - [Runnable demo →](./demo)
 
+## Contributing
+
+Gobellim accepts issues, forks and pull requests. Start with
+[CONTRIBUTING.md](.github/CONTRIBUTING.md). Security reports go through
+[SECURITY.md](SECURITY.md), not the public tracker.
+
 ## License
 
 [`MIT`](LICENSE)
