@@ -137,6 +137,17 @@ policy и guard сами — и тогда этот wrapper и его тесты
 go get github.com/KirillYuzh/Gobellim
 ```
 
+## Документация
+
+`docs/` — обычный Markdown, он читается прямо на GitHub. `site/` рендерит те же
+файлы через Next.js и Fumadocs:
+
+```sh
+cd site && npm install && npm run dev
+```
+
+Начните с [docs/README.md](./docs/README.md).
+
 ## Быстрый старт
 
 ```go
