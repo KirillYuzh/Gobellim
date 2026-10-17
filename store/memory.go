@@ -10,6 +10,8 @@ import (
 	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
+// MemoryMessage is one stored thread message, keyed by tenant and user and
+// optionally carrying an embedding.
 type MemoryMessage struct {
 	ID         string
 	ThreadID   string
@@ -24,6 +26,8 @@ type MemoryMessage struct {
 	CreatedAt  time.Time
 }
 
+// Document returns the message's Elasticsearch source map, defaulting CreatedAt
+// to now when zero and adding vector and embed_model only when set.
 func (m MemoryMessage) Document() map[string]any {
 	created := m.CreatedAt
 	if created.IsZero() {
@@ -48,6 +52,9 @@ func (m MemoryMessage) Document() map[string]any {
 	return doc
 }
 
+// ValidateMemoryMessage requires a non-empty thread_id, tenant, and content and
+// a positive seq; a non-empty vector must match dims when dims > 0, and errors
+// wrap core.ErrInvalidArgs.
 func ValidateMemoryMessage(m MemoryMessage, dims int) error {
 	if m.ThreadID == "" {
 		return fmt.Errorf("store: memory message has no thread_id: %w", core.ErrInvalidArgs)
@@ -67,6 +74,8 @@ func ValidateMemoryMessage(m MemoryMessage, dims int) error {
 	return nil
 }
 
+// MemoryBulkBody validates every message and encodes them into a _bulk body for
+// IndexMemoryMessages.
 func MemoryBulkBody(msgs []MemoryMessage, dims int) ([]byte, error) {
 	docs := make([]Doc, 0, len(msgs))
 	for _, m := range msgs {
@@ -78,6 +87,9 @@ func MemoryBulkBody(msgs []MemoryMessage, dims int) ([]byte, error) {
 	return BulkBody(IndexMemoryMessages, docs)
 }
 
+// MemoryHistoryBody returns a search body for the newest limit messages of a
+// tenant, user, and thread, sorted by seq descending; it returns nil when
+// limit <= 0.
 func MemoryHistoryBody(tenant, userID, threadID string, limit int) []byte {
 	if limit <= 0 {
 		return nil
@@ -100,6 +112,9 @@ func MemoryHistoryBody(tenant, userID, threadID string, limit int) []byte {
 	return raw
 }
 
+// MemoryRecallBody returns a kNN search body over all threads of a tenant and
+// user, defaulting and clamping TopK and numCandidates like search. A missing
+// tenant or vector wraps core.ErrInvalidArgs.
 func MemoryRecallBody(tenant, userID string, vector []float32, topK, numCandidates int) ([]byte, error) {
 	if tenant == "" {
 		return nil, fmt.Errorf("store: memory recall requires a tenant: %w", core.ErrInvalidArgs)
@@ -149,6 +164,8 @@ func MemoryRecallBody(tenant, userID string, vector []float32, topK, numCandidat
 	return raw, nil
 }
 
+// MemoryClearBody returns a delete-by-query body matching the given tenant,
+// user, and thread.
 func MemoryClearBody(tenant, userID, threadID string) []byte {
 	body := map[string]any{
 		"query": map[string]any{
@@ -165,6 +182,8 @@ func MemoryClearBody(tenant, userID, threadID string) []byte {
 	return raw
 }
 
+// WorkingMemory is the single structured working-memory document stored per
+// thread.
 type WorkingMemory struct {
 	ThreadID  string
 	Tenant    string
@@ -173,6 +192,8 @@ type WorkingMemory struct {
 	UpdatedAt time.Time
 }
 
+// Document returns the working-memory source map, defaulting UpdatedAt to now
+// when zero and Data to an empty object when nil.
 func (w WorkingMemory) Document() map[string]any {
 	updated := w.UpdatedAt
 	if updated.IsZero() {
@@ -191,6 +212,8 @@ func (w WorkingMemory) Document() map[string]any {
 	}
 }
 
+// MemoryWorkingID returns the document ID for a thread's working memory: the hex
+// SHA-256 of tenant, a NUL byte, and threadID.
 func MemoryWorkingID(tenant, threadID string) string {
 	h := sha256.New()
 	h.Write([]byte(tenant))
@@ -199,6 +222,7 @@ func MemoryWorkingID(tenant, threadID string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// MemoryHit is one recalled memory message with its relevance score.
 type MemoryHit struct {
 	Role      string
 	Content   string
@@ -207,6 +231,9 @@ type MemoryHit struct {
 	Score     float64
 }
 
+// ParseMemorySearch decodes a search response into memory hits, parsing
+// created_at as RFC3339Nano. An error field wraps core.ErrProvider, and an
+// unparsable timestamp is returned as an error.
 func ParseMemorySearch(body []byte) ([]MemoryHit, error) {
 	var parsed struct {
 		Error json.RawMessage `json:"error"`

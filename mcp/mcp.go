@@ -11,6 +11,8 @@ import (
 	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
+// ProtocolVersion is the MCP protocol revision used when Config.ProtocolVersion
+// is empty.
 const ProtocolVersion = "2025-06-18"
 
 const (
@@ -18,6 +20,8 @@ const (
 	clientVersion = "1.0.0"
 )
 
+// Config describes one MCP client connection: a stdio server via Command, Args,
+// Env and Dir, or a streamable HTTP endpoint via URL, Headers and Client.
 type Config struct {
 	Name    string
 	Command string
@@ -45,28 +49,36 @@ func (c Config) withDefaults() Config {
 	return c
 }
 
+// ServerInfo is the name and version an MCP server reports during initialize.
 type ServerInfo struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
 }
 
+// Tool is a tool advertised by an MCP server, including its input schema as sent
+// by the server.
 type Tool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	InputSchema json.RawMessage `json:"inputSchema,omitempty"`
 }
 
+// Content is one item in a tools/call result; CallResult.Text uses only items
+// whose Type is "text".
 type Content struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
 }
 
+// CallResult is the decoded result of tools/call: content items, optional
+// structured content, and the server's isError flag.
 type CallResult struct {
 	Content           []Content       `json:"content,omitempty"`
 	StructuredContent json.RawMessage `json:"structuredContent,omitempty"`
 	IsError           bool            `json:"isError,omitempty"`
 }
 
+// Text joins the text content items with newlines, ignoring other content types.
 func (r CallResult) Text() string {
 	out := ""
 	for i, c := range r.Content {
@@ -81,12 +93,16 @@ func (r CallResult) Text() string {
 	return out
 }
 
+// Transport is the JSON-RPC channel a Client uses: Call sends a request and
+// waits for its response, Notify sends a notification, and Close releases it.
 type Transport interface {
 	Call(ctx context.Context, method string, params any) (json.RawMessage, error)
 	Notify(ctx context.Context, method string, params any) error
 	Close() error
 }
 
+// Client is an MCP client over stdio or streamable HTTP; it initializes lazily
+// and caches the server info from the handshake.
 type Client struct {
 	cfg       Config
 	transport Transport
@@ -96,6 +112,8 @@ type Client struct {
 	ready      bool
 }
 
+// New creates a client from cfg, selecting the stdio transport when Command is
+// set and the HTTP transport when URL is set. It fails if neither or both are set.
 func New(cfg Config) (*Client, error) {
 	cfg = cfg.withDefaults()
 	var (
@@ -118,14 +136,20 @@ func New(cfg Config) (*Client, error) {
 	return &Client{cfg: cfg, transport: tr}, nil
 }
 
+// Name returns the configured client name, which prefixes registered tools.
 func (c *Client) Name() string { return c.cfg.Name }
 
+// ServerInfo returns the info reported by the server; it is zero until
+// Initialize succeeds.
 func (c *Client) ServerInfo() ServerInfo {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.serverInfo
 }
 
+// Initialize performs the initialize handshake and sends
+// notifications/initialized, recording the server info. It is idempotent and is
+// called lazily by ListTools and CallTool.
 func (c *Client) Initialize(ctx context.Context) error {
 	c.mu.RLock()
 	ready := c.ready
@@ -165,6 +189,8 @@ func (c *Client) Initialize(ctx context.Context) error {
 	return nil
 }
 
+// ListTools initializes the client and reads tools/list, following nextCursor
+// until the server stops paginating.
 func (c *Client) ListTools(ctx context.Context) ([]Tool, error) {
 	if err := c.Initialize(ctx); err != nil {
 		return nil, err
@@ -197,6 +223,8 @@ func (c *Client) ListTools(ctx context.Context) ([]Tool, error) {
 	}
 }
 
+// CallTool initializes the client, sends tools/call, and decodes the result;
+// empty args are sent as {}.
 func (c *Client) CallTool(ctx context.Context, name string, args json.RawMessage) (CallResult, error) {
 	if err := c.Initialize(ctx); err != nil {
 		return CallResult{}, err
@@ -219,6 +247,7 @@ func (c *Client) CallTool(ctx context.Context, name string, args json.RawMessage
 	return res, nil
 }
 
+// Close closes the underlying transport, if any.
 func (c *Client) Close() error {
 	if c.transport == nil {
 		return nil
@@ -232,6 +261,7 @@ type rpcError struct {
 	Data    json.RawMessage `json:"data,omitempty"`
 }
 
+// Error renders the JSON-RPC code and message.
 func (e *rpcError) Error() string {
 	return fmt.Sprintf("mcp: rpc error %d: %s", e.Code, e.Message)
 }

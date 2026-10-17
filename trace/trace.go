@@ -2,21 +2,29 @@ package trace
 
 import "time"
 
+// Kind classifies an observation and is written to the "kind" keyword.
 type Kind string
 
 const (
-	KindSpan       Kind = "SPAN"
+	// KindSpan is a span around an operation.
+	KindSpan Kind = "SPAN"
+	// KindGeneration is a model generation.
 	KindGeneration Kind = "GENERATION"
-	KindEvent      Kind = "EVENT"
+	// KindEvent is a point-in-time event such as a guard verdict.
+	KindEvent Kind = "EVENT"
 )
 
+// Level is the severity of an observation; empty is treated as LevelDefault.
 type Level string
 
 const (
+	// LevelDefault is the normal level.
 	LevelDefault Level = "DEFAULT"
-	LevelError   Level = "ERROR"
+	// LevelError marks an observation as failed.
+	LevelError Level = "ERROR"
 )
 
+// Usage carries token counts and monetary cost for a trace or observation.
 type Usage struct {
 	PromptTokens     int
 	CompletionTokens int
@@ -24,6 +32,9 @@ type Usage struct {
 	Cost             float64
 }
 
+// Observation is a single timed operation or event inside a Trace; spans,
+// generations and events are all modeled here. Guard fields record the rail,
+// action and detector that produced the observation.
 type Observation struct {
 	ID              string
 	TraceID         string
@@ -53,6 +64,8 @@ type Observation struct {
 	GuardDegraded bool
 }
 
+// Trace is the root record of one user-facing operation such as chat, ingest,
+// search, generate or memory.
 type Trace struct {
 	ID        string
 	Name      string
@@ -73,6 +86,7 @@ type Trace struct {
 	TextPolicy   TextPolicy
 }
 
+// Score is a numeric evaluation attached to a trace by TraceID.
 type Score struct {
 	TraceID   string
 	Name      string

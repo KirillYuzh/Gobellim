@@ -21,6 +21,9 @@ const (
 	streamHoldback  = 96
 )
 
+// StreamChunk is one stream event: guard-approved Text, a Retract signal, a
+// terminal Done carrying the assembled Final message, or an Err; every chunk
+// carries the turn's TraceID.
 type StreamChunk struct {
 	Text    string
 	TraceID string
@@ -32,6 +35,11 @@ type StreamChunk struct {
 
 var errStreamGuarded = errors.New("kit: stream blocked by guard")
 
+// ChatStream is the streaming form of Chat: it runs the same guard, tool, RBAC,
+// memory, and budget path but emits only text approved by the output rail. It
+// requires the chat permission, returns a channel the caller must drain until it
+// closes, and falls back to a single buffered chunk when the LLM client does not
+// implement model.Streamer.
 func (a *App) ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamChunk, error) {
 	pr, err := principal(ctx)
 	if err != nil {
@@ -269,11 +277,14 @@ type windowGuard struct {
 	emit    func(string) error
 }
 
+// Write buffers delta and flushes guard-approved windows to the downstream
+// writer.
 func (g *windowGuard) Write(delta string) error {
 	g.buf = append(g.buf, []rune(delta)...)
 	return g.flush(false)
 }
 
+// Close flushes the remaining buffer through the output guard.
 func (g *windowGuard) Close() error { return g.flush(true) }
 
 func (g *windowGuard) flush(final bool) error {

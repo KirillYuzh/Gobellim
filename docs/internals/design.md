@@ -366,7 +366,6 @@ func SupportsNativeSchema(client Client) bool
 // Streamer — необязательное расширение Client (I-19). Клиент без него не
 // реализует стриминг, и kit.ChatStream откатывается на буферизованный Chat.
 type Streamer interface {
-	Client
 	ChatStream(ctx context.Context, req Request, onDelta func(string) error) (Response, error)
 }
 
@@ -766,9 +765,9 @@ README описывают именно это поведение.
   фрагментов tool_calls по индексу, `stream_options.include_usage`). `ollama` и
   `gigachat` стриминг не реализуют и идут через откат (I-19).
 - `Chain(ChainConfig, ...Client)`: фолбэк-цепочка с ретраями и `Retry-After`.
-- `Chain` не реализует `SupportsNativeSchema`, поэтому `SupportsNativeSchema(chain)`
-  = `false`: `kit.Generate`/`model.Structurer` инлайнят схему даже при
-  `SchemaNative`, если все звенья цепочки умеют нативную.
+- `Chain` пробрасывает `SupportsNativeSchema`: `chainClient` отвечает `true` только
+  если **каждое** звено поддерживает нативную схему, а на не-нативном звене
+  `Request.SchemaMode` понижается до `SchemaInline()`.
 - `History`/`Counter`/`ByteCounter`: обрезка истории по бюджету с сохранением пар
   `tool_call`/`tool` и стабильного системного префикса.
 - `internal/httpjson`: `Config`, `NewClient` (ретраи, `Retry-After`),

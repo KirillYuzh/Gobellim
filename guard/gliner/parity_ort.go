@@ -46,6 +46,8 @@ type result struct {
 	Safety   string              `json:"safety"`
 }
 
+// CheckParity runs the detector against recorded fixtures and reports agreement;
+// it errors when agreement falls below minAgreement or the config differs.
 func CheckParity(dir, fixturesDir string, minAgreement float64) (Report, error) {
 	ref, err := loadModelConfig(filepath.Join(fixturesDir, "config.json"))
 	if err != nil {

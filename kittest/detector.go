@@ -7,6 +7,7 @@ import (
 	"github.com/KirillYuzh/Gobellim/guard"
 )
 
+// DetectFunc is the function Detector uses to produce findings for a text.
 type DetectFunc func(ctx context.Context, text string) ([]guard.Finding, error)
 
 // Detector is a deterministic guard.Detector driven by Find instead of a model.
@@ -15,8 +16,10 @@ type Detector struct {
 	Find  DetectFunc
 }
 
+// Name returns the detector's label.
 func (d Detector) Name() string { return d.Label }
 
+// Detect calls Find, or returns no findings when Find is nil.
 func (d Detector) Detect(ctx context.Context, text string) ([]guard.Finding, error) {
 	if d.Find == nil {
 		return nil, nil

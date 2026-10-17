@@ -5,16 +5,24 @@ import (
 	"sort"
 )
 
+// Rank pairs a document index with its relevance score; higher scores rank first.
 type Rank struct {
 	Index int
 	Score float64
 }
 
+// Reranker scores documents against a query.
 type Reranker interface {
+	// Rerank returns relevance ranks for documents, typically in descending score order.
 	Rerank(ctx context.Context, query string, documents []string) ([]Rank, error)
+	// Name identifies the reranker in errors.
 	Name() string
 }
 
+// Reorder returns indices 0..n-1 ordered by descending score, then by ascending
+// index for ties, followed by indices absent from ranks in original order.
+// Out-of-range and duplicate ranks are ignored, and a positive topK truncates the
+// result.
 func Reorder(n int, ranks []Rank, topK int) []int {
 	if n <= 0 {
 		return nil

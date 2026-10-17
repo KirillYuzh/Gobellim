@@ -5,14 +5,22 @@ import (
 	"math"
 )
 
+// Embedder computes vectors for search queries and for document passages.
+// Query and Passages are separate because presets may prepend different prefixes.
 type Embedder interface {
+	// Query embeds search query texts with the preset's query prefix.
 	Query(ctx context.Context, texts []string) ([][]float32, error)
+	// Passages embeds document texts with the preset's passage prefix.
 	Passages(ctx context.Context, texts []string) ([][]float32, error)
+	// Dim reports the vector dimension, or 0 when it is not yet known.
 	Dim() int
+	// Model reports the model name used for requests and cache keys.
 	Model() string
 }
 
+// Closer is implemented by embedders that hold resources such as ONNX sessions.
 type Closer interface {
+	// Close releases the embedder's resources.
 	Close() error
 }
 

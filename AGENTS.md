@@ -29,6 +29,7 @@ service.
 - Detection does not depend on the rail; the rail only affects the decision table (`docs/internals/design.md`, `I-02`).
 - Traces carry masked text by default (`Config.TraceText`, `trace.TextMasked`); never log or persist raw message text.
 - Tests use the standard library only. Validate with `go build ./... && go vet ./... && go test ./...` (`make check` adds `gofumpt` and `golangci-lint`).
+- Exported API in published packages carries a godoc comment (`internal/apidoc` enforces it); a comment is still not a contract — `docs/` is (`BR-75`).
 
 ## Layout
 

@@ -38,6 +38,10 @@ type oaiStreamChunk struct {
 	} `json:"usage"`
 }
 
+// ChatStream requests a server-sent-event stream, invoking onDelta for each
+// content fragment and returning the assembled response (content, tool calls
+// and usage). An onDelta error aborts the stream and is returned unchanged;
+// transport, status and decode failures wrap core.ErrProvider.
 func (c *OpenAIClient) ChatStream(ctx context.Context, req Request, onDelta func(string) error) (Response, error) {
 	payload, headers, err := c.encode(req, true)
 	if err != nil {

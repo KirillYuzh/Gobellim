@@ -350,12 +350,18 @@ var injectionPhraseRes = func() []injectionPhrase {
 	return out
 }()
 
+// Detector is the deterministic L1 layer: it matches injection phrases,
+// injection regexes, and PII/secret patterns with checksum validation.
 type Detector struct{}
 
+// New returns the L1 detector.
 func New() *Detector { return &Detector{} }
 
+// Name returns "L1".
 func (*Detector) Name() string { return "L1" }
 
+// Detect scans text for injection, PII, and secret findings, returning them in
+// rune offsets with score 1; empty text yields no findings.
 func (*Detector) Detect(_ context.Context, text string) ([]guard.Finding, error) {
 	if text == "" {
 		return nil, nil

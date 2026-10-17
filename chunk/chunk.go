@@ -8,26 +8,35 @@ import (
 )
 
 const (
-	DefaultSize    = 400
+	// DefaultSize is the default number of tokenizer units per chunk.
+	DefaultSize = 400
+	// DefaultOverlap is the default number of tokenizer units shared by
+	// adjacent chunks.
 	DefaultOverlap = 80
 )
 
+// Token is a tokenizer unit with rune offsets into the original text; Start is
+// inclusive and End is exclusive.
 type Token struct {
 	Text  string
 	Start int
 	End   int
 }
 
+// Tokenizer splits text into tokens carrying rune offsets into that text.
 type Tokenizer interface {
 	Tokens(text string) []Token
 }
 
+// Chunker splits text into overlapping windows of tokenizer units.
 type Chunker struct {
 	tok     Tokenizer
 	size    int
 	overlap int
 }
 
+// New validates the tokenizer, size and overlap and returns a Chunker; size must
+// be > 0 and overlap must be in [0, size).
 func New(tok Tokenizer, size, overlap int) (*Chunker, error) {
 	if tok == nil {
 		return nil, fmt.Errorf("chunk: tokenizer is required: %w", core.ErrInvalidConfig)
@@ -41,6 +50,8 @@ func New(tok Tokenizer, size, overlap int) (*Chunker, error) {
 	return &Chunker{tok: tok, size: size, overlap: overlap}, nil
 }
 
+// Split returns the chunks of text for windows of at most size tokens advancing
+// by size-overlap; it returns nil when the tokenizer yields no tokens.
 func (c *Chunker) Split(text string) []string {
 	toks := c.tok.Tokens(text)
 	if len(toks) == 0 {
@@ -71,8 +82,11 @@ func (c *Chunker) Split(text string) []string {
 	return out
 }
 
+// WhitespaceTokenizer is a Tokenizer whose units are whitespace-separated words.
 type WhitespaceTokenizer struct{}
 
+// Tokens returns the whitespace-separated tokens with rune offsets, skipping
+// leading and trailing whitespace.
 func (WhitespaceTokenizer) Tokens(text string) []Token {
 	runes := []rune(text)
 	var toks []Token
