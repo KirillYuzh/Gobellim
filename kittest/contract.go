@@ -66,6 +66,7 @@ type Scope struct {
 	Roles  []string
 }
 
+// Document is a stored document with its tenant and ACL entries.
 type Document struct {
 	ID     string
 	Tenant string

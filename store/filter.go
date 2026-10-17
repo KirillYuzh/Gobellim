@@ -8,6 +8,8 @@ import (
 	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
+// Filter is a metadata filter language compiled to an Elasticsearch query by
+// CompileFilter.
 type Filter map[string]any
 
 var allowedFilterFields = map[string]struct{}{
@@ -25,6 +27,11 @@ var rangeOperators = map[string]string{
 	"$lte": "lte",
 }
 
+// CompileFilter translates Filter into an Elasticsearch query, accepting the
+// fields doc_id, source, position, created_at, and quarantined and the operators
+// $eq, $ne, $gt, $gte, $lt, $lte, $in, $nin, $exists, $and, $or, and $not.
+// An empty filter yields nil, and invalid fields, operators, or values wrap
+// core.ErrInvalidArgs.
 func CompileFilter(f Filter) (map[string]any, error) {
 	if len(f) == 0 {
 		return nil, nil

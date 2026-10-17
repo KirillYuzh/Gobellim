@@ -7,6 +7,8 @@ import (
 	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
+// ChunksIndexBody returns the kit-chunks mapping with a dense_vector field of
+// the given dims and russian-analyzed text; dims must be > 0.
 func ChunksIndexBody(dims int) ([]byte, error) {
 	if dims <= 0 {
 		return nil, fmt.Errorf("store: vector dims must be > 0, got %d: %w", dims, core.ErrInvalidConfig)
@@ -36,6 +38,8 @@ func ChunksIndexBody(dims int) ([]byte, error) {
 	return json.Marshal(body)
 }
 
+// MemoryMessagesIndexBody returns the kit-memory-messages mapping; vector and
+// embed_model fields are added only when dims > 0.
 func MemoryMessagesIndexBody(dims int) []byte {
 	props := map[string]any{
 		ThreadField:    map[string]any{"type": "keyword"},
@@ -54,6 +58,8 @@ func MemoryMessagesIndexBody(dims int) []byte {
 	return indexBody(props)
 }
 
+// MemoryWorkingIndexBody returns the kit-memory-working mapping, where data is
+// an unindexed object.
 func MemoryWorkingIndexBody() []byte {
 	return indexBody(map[string]any{
 		ThreadField:  map[string]any{"type": "keyword"},
@@ -80,6 +86,8 @@ func indexBody(properties map[string]any) []byte {
 	return b
 }
 
+// ILMPolicyBody returns the kit-traces-30d ILM policy: rollover at 10 GB and
+// delete after days, defaulting to DefaultILMDays when days <= 0.
 func ILMPolicyBody(days int) ([]byte, error) {
 	if days <= 0 {
 		days = DefaultILMDays
@@ -100,6 +108,8 @@ func ILMPolicyBody(days int) ([]byte, error) {
 	return json.Marshal(body)
 }
 
+// TracesTemplateBody returns the kit-traces data-stream template with the trace
+// mapping.
 func TracesTemplateBody() []byte {
 	return template(DataStreamTraces, map[string]any{
 		"@timestamp":    map[string]any{"type": "date"},
@@ -130,6 +140,8 @@ func TracesTemplateBody() []byte {
 	})
 }
 
+// ObservationsTemplateBody returns the kit-observations data-stream template
+// with the observation mapping.
 func ObservationsTemplateBody() []byte {
 	return template(DataStreamObservations, map[string]any{
 		"@timestamp":        map[string]any{"type": "date"},

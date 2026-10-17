@@ -10,6 +10,11 @@ import (
 	"github.com/KirillYuzh/Gobellim/model"
 )
 
+// CallTool invokes one registered tool through the same path as Chat: RBAC,
+// argument size and schema validation, approval, egress policy, hooks, the
+// tool_result guard, and ModelView. It requires a principal in the context,
+// returns ErrToolNotFound for an unknown name and ErrInvalidArgs for oversized or
+// invalid arguments, and returns non-fatal tool failures as error results.
 func (a *App) CallTool(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	pr, err := principal(ctx)
 	if err != nil {

@@ -9,6 +9,8 @@ import (
 	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
+// DeleteByDocBody returns a delete-by-query body matching the given doc_id and
+// tenant; blank values wrap core.ErrInvalidArgs.
 func DeleteByDocBody(docID, tenant string) ([]byte, error) {
 	if strings.TrimSpace(docID) == "" {
 		return nil, fmt.Errorf("store: delete by doc requires a doc id: %w", core.ErrInvalidArgs)
@@ -29,6 +31,8 @@ func DeleteByDocBody(docID, tenant string) ([]byte, error) {
 	return json.Marshal(body)
 }
 
+// DeleteByDocVersionBody returns a delete-by-query body matching doc_id and
+// tenant while excluding chunks whose doc_version equals keepVersion.
 func DeleteByDocVersionBody(docID, tenant string, keepVersion int64) ([]byte, error) {
 	if strings.TrimSpace(docID) == "" {
 		return nil, fmt.Errorf("store: delete by doc requires a doc id: %w", core.ErrInvalidArgs)
@@ -58,6 +62,9 @@ type deleteByQueryResponse struct {
 	Failures         []json.RawMessage `json:"failures"`
 }
 
+// ParseDeleteByQuery decodes a _delete_by_query response, returning the deleted
+// count and an error wrapping core.ErrProvider when failures or version
+// conflicts are reported.
 func ParseDeleteByQuery(body []byte) (deleted int, err error) {
 	var res deleteByQueryResponse
 	if err := json.Unmarshal(body, &res); err != nil {
@@ -74,6 +81,8 @@ func ParseDeleteByQuery(body []byte) (deleted int, err error) {
 	return res.Deleted, nil
 }
 
+// PruneBody returns a delete-by-query body removing documents older than
+// olderThan by @timestamp; a negative duration is treated as zero.
 func PruneBody(olderThan time.Duration) []byte {
 	if olderThan < 0 {
 		olderThan = 0

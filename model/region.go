@@ -6,8 +6,11 @@ package model
 type Region string
 
 const (
+	// RegionRU marks a provider that runs in Russia.
 	RegionRU Region = "ru"
+	// RegionEU marks a provider that runs in the European Union.
 	RegionEU Region = "eu"
+	// RegionUS marks a provider that runs in the United States.
 	RegionUS Region = "us"
 )
 

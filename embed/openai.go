@@ -10,6 +10,9 @@ import (
 	"github.com/KirillYuzh/Gobellim/internal/httpjson"
 )
 
+// OpenAIConfig configures NewOpenAI. BaseURL and Model are required; the client
+// posts to BaseURL joined with /embeddings, and Preset overrides the model-derived
+// preset.
 type OpenAIConfig struct {
 	BaseURL    string
 	APIKey     string
@@ -19,6 +22,7 @@ type OpenAIConfig struct {
 	HTTPClient *http.Client
 }
 
+// OpenAIEmbedder is an Embedder backed by an OpenAI-compatible /embeddings endpoint.
 type OpenAIEmbedder struct {
 	cfg    OpenAIConfig
 	hc     *http.Client
@@ -27,6 +31,8 @@ type OpenAIEmbedder struct {
 	dim    int
 }
 
+// NewOpenAI returns an embedder for an OpenAI-compatible API. BaseURL and Model
+// are required, otherwise it returns ErrInvalidConfig.
 func NewOpenAI(cfg OpenAIConfig) (*OpenAIEmbedder, error) {
 	if cfg.BaseURL == "" {
 		return nil, fmt.Errorf("embed: openai: BaseURL is required: %w", core.ErrInvalidConfig)
@@ -52,8 +58,11 @@ func resolvePreset(explicit *Preset, model string) Preset {
 	return Preset{}
 }
 
+// Model returns the configured model name.
 func (e *OpenAIEmbedder) Model() string { return e.cfg.Model }
 
+// Dim returns the configured dimension, or the first dimension observed from a
+// response when none was configured.
 func (e *OpenAIEmbedder) Dim() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -68,10 +77,14 @@ func (e *OpenAIEmbedder) setDim(n int) {
 	e.mu.Unlock()
 }
 
+// Query embeds search query texts with the preset's query prefix, normalizing
+// each vector when the preset requests it.
 func (e *OpenAIEmbedder) Query(ctx context.Context, texts []string) ([][]float32, error) {
 	return e.embed(ctx, texts, e.preset.QueryPrefix)
 }
 
+// Passages embeds document texts with the preset's passage prefix, normalizing
+// each vector when the preset requests it.
 func (e *OpenAIEmbedder) Passages(ctx context.Context, texts []string) ([][]float32, error) {
 	return e.embed(ctx, texts, e.preset.PassagePrefix)
 }

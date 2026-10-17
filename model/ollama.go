@@ -9,6 +9,8 @@ import (
 	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
+// OllamaConfig configures the Ollama client; an empty BaseURL defaults to
+// http://localhost:11434.
 type OllamaConfig struct {
 	BaseURL    string
 	Model      string
@@ -17,11 +19,14 @@ type OllamaConfig struct {
 	ContextTokens int
 }
 
+// OllamaClient is a Client speaking Ollama's /api/chat protocol.
 type OllamaClient struct {
 	cfg OllamaConfig
 	hc  *http.Client
 }
 
+// NewOllama builds an OllamaClient; Model is required and ContextTokens must
+// not be negative, otherwise the error wraps core.ErrInvalidConfig.
 func NewOllama(cfg OllamaConfig) (*OllamaClient, error) {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = "http://localhost:11434"
@@ -35,10 +40,12 @@ func NewOllama(cfg OllamaConfig) (*OllamaClient, error) {
 	return &OllamaClient{cfg: cfg, hc: httpClient(cfg.HTTPClient)}, nil
 }
 
+// Ollama is a shortcut for NewOllama with only BaseURL and Model set.
 func Ollama(baseURL, modelName string) (*OllamaClient, error) {
 	return NewOllama(OllamaConfig{BaseURL: baseURL, Model: modelName})
 }
 
+// Model returns the configured Ollama model name.
 func (c *OllamaClient) Model() string { return c.cfg.Model }
 
 type ollamaToolCall struct {
@@ -76,6 +83,8 @@ type ollamaResponse struct {
 	Done            bool `json:"done"`
 }
 
+// Chat performs one non-streaming Ollama request, sending tools and, in
+// SchemaNative mode, the JSON Schema as the request format.
 func (c *OllamaClient) Chat(ctx context.Context, req Request) (Response, error) {
 	msgs, native := schemaPlan(req)
 

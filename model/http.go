@@ -21,6 +21,10 @@ func doJSON(ctx context.Context, hc *http.Client, method, url string, headers ma
 	return nil
 }
 
+// Retryable reports whether err is a transient failure worth retrying;
+// context cancellation and non-retryable statuses return false.
 func Retryable(err error) bool { return httpjson.IsRetryable(err) }
 
+// RetryAfter returns the provider-requested retry delay, or zero when err
+// carries none.
 func RetryAfter(err error) time.Duration { return httpjson.RetryAfter(err) }

@@ -18,8 +18,11 @@ import (
 	"github.com/KirillYuzh/Gobellim/internal/ort"
 )
 
+// DefaultSessions is the number of ONNX sessions created when LocalConfig.Sessions
+// is not positive.
 const DefaultSessions = 2
 
+// DefaultBatchSize is the maximum number of texts encoded in one ONNX batch.
 const DefaultBatchSize = 32
 
 const (
@@ -41,6 +44,9 @@ type localEmbedder struct {
 	useType bool
 }
 
+// NewLocal loads an ONNX encoder and tokenizer from ModelDir(cfg.Dir, cfg.Model).
+// It requires model.onnx, tokenizer.json, and config.json, resolves the preset from
+// kit_embedder.json or the model name, and creates cfg.Sessions pooled sessions.
 func NewLocal(cfg LocalConfig) (Embedder, error) {
 	cfg = cfg.withDefaults()
 	if cfg.Model == "" {
@@ -427,6 +433,8 @@ func runtimeError(err error) error {
 	return fmt.Errorf("embed: local: %w: %w", err, core.ErrProvider)
 }
 
+// VerifyDir checks the model files and preset, then loads and closes the encoder
+// to verify that the ONNX runtime can initialize it.
 func VerifyDir(dir, model string) error {
 	if err := verifyDir(dir, model); err != nil {
 		return err

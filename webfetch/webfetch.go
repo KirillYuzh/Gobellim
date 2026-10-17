@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/KirillYuzh/Gobellim"
+	kit "github.com/KirillYuzh/Gobellim"
 	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
@@ -21,6 +21,9 @@ const (
 	defaultUserAgent          = "kit-webfetch/1"
 )
 
+// Config configures the web_fetch tool. AllowHosts, when non-empty, restricts
+// requests and redirects by domain boundary; MaxBytes, Timeout, and MaxRedirects
+// default to 1 MiB, 15s, and 5 when zero.
 type Config struct {
 	AllowHosts   []string
 	MaxBytes     int64
@@ -29,10 +32,13 @@ type Config struct {
 	Headers      map[string]string
 }
 
+// In is the tool input: a single URL to fetch.
 type In struct {
 	URL string `json:"url"`
 }
 
+// Out is the tool output. Status and ContentType come from the response, Text is
+// the body truncated to Config.MaxBytes, and Truncated reports that truncation.
 type Out struct {
 	Status      int    `json:"status"`
 	ContentType string `json:"content_type"`
@@ -67,6 +73,9 @@ type fetcher struct {
 	client *http.Client
 }
 
+// New registers an SSRF-hardened web_fetch tool on app. The tool is marked
+// EffectEgress and uses AllowHosts as its egress allowlist, or EgressAny when the
+// list is empty; it accepts only http and https and refuses non-public addresses.
 func New(app *kit.App, name string, cfg Config) (*kit.ToolDef, error) {
 	c, err := cfg.normalized()
 	if err != nil {

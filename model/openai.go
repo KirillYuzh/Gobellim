@@ -9,6 +9,7 @@ import (
 	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
+// OpenAIConfig configures an OpenAI-compatible client.
 type OpenAIConfig struct {
 	BaseURL    string
 	APIKey     string
@@ -19,11 +20,16 @@ type OpenAIConfig struct {
 	ContextTokens int
 }
 
+// OpenAIClient is a Client speaking the OpenAI chat-completions protocol; it
+// also implements Streamer.
 type OpenAIClient struct {
 	cfg OpenAIConfig
 	hc  *http.Client
 }
 
+// NewOpenAI builds an OpenAIClient; BaseURL and Model are required and
+// ContextTokens must not be negative, otherwise the error wraps
+// core.ErrInvalidConfig.
 func NewOpenAI(cfg OpenAIConfig) (*OpenAIClient, error) {
 	if cfg.BaseURL == "" {
 		return nil, fmt.Errorf("model: openai: BaseURL is required: %w", core.ErrInvalidConfig)
@@ -37,14 +43,19 @@ func NewOpenAI(cfg OpenAIConfig) (*OpenAIClient, error) {
 	return &OpenAIClient{cfg: cfg, hc: httpClient(cfg.HTTPClient)}, nil
 }
 
+// OpenAI is a shortcut for NewOpenAI pointed at api.openai.com with the given
+// API key.
 func OpenAI(apiKey, modelName string) (*OpenAIClient, error) {
 	return NewOpenAI(OpenAIConfig{BaseURL: "https://api.openai.com/v1", APIKey: apiKey, Model: modelName})
 }
 
+// VLLM is a shortcut for NewOpenAI pointed at an OpenAI-compatible base URL
+// with no API key.
 func VLLM(baseURL, modelName string) (*OpenAIClient, error) {
 	return NewOpenAI(OpenAIConfig{BaseURL: baseURL, Model: modelName})
 }
 
+// Model returns the configured model name.
 func (c *OpenAIClient) Model() string { return c.cfg.Model }
 
 type oaiMessage struct {
@@ -191,6 +202,8 @@ func (c *OpenAIClient) encode(req Request, stream bool) (map[string]any, map[str
 	return payload, c.headers(), nil
 }
 
+// Chat performs one non-streaming request and returns the first choice; an
+// empty choices list yields an error wrapping core.ErrProvider.
 func (c *OpenAIClient) Chat(ctx context.Context, req Request) (Response, error) {
 	outBody, headers, err := c.encode(req, false)
 	if err != nil {

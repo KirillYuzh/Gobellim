@@ -17,16 +17,25 @@ import (
 )
 
 const (
-	DefaultQueueSize     = 4096
-	DefaultBatchSize     = 500
+	// DefaultQueueSize is the default capacity of the asynchronous document queue.
+	DefaultQueueSize = 4096
+	// DefaultBatchSize is the default maximum number of documents per bulk request.
+	DefaultBatchSize = 500
+	// DefaultFlushInterval is the default maximum delay before a partial batch is flushed.
 	DefaultFlushInterval = 2 * time.Second
+	// DefaultMaxBatchBytes is the default estimated size limit for a batch.
 	DefaultMaxBatchBytes = 5 << 20
-	DefaultMaxRetries    = 3
-	DefaultRetryBackoff  = 200 * time.Millisecond
+	// DefaultMaxRetries is the default number of retries after a failed bulk request.
+	DefaultMaxRetries = 3
+	// DefaultRetryBackoff is the default base backoff, multiplied by the attempt number.
+	DefaultRetryBackoff = 200 * time.Millisecond
 )
 
 const versionConflictType = "version_conflict_engine_exception"
 
+// Options configures a Writer; zero values are replaced by the Default*
+// constants in NewWriter, a nil Sampler means SamplerAlways, and a nil ES
+// disables Elasticsearch writes so documents go only to Sinks.
 type Options struct {
 	ES      store.ES
 	Sinks   []Sink
@@ -59,6 +68,10 @@ type item struct {
 	size   int
 }
 
+// Writer is an asynchronous Sink that batches documents into Elasticsearch
+// bulk requests and forwards them to the configured sinks. Handing a document to
+// the queue never blocks: when the queue is full it is dropped and counted by
+// Dropped.
 type Writer struct {
 	opts  Options
 	cfg   exportConfig
@@ -78,6 +91,9 @@ type Writer struct {
 	lastErr error
 }
 
+// NewWriter returns a Writer with zero-valued options replaced by defaults; it
+// starts a background flush goroutine only when opts.ES is non-nil. The error
+// return is currently always nil.
 func NewWriter(opts Options) (*Writer, error) {
 	if opts.QueueSize <= 0 {
 		opts.QueueSize = DefaultQueueSize
@@ -153,6 +169,9 @@ func (w *Writer) policyOf(p TextPolicy) TextPolicy {
 	return w.opts.Text
 }
 
+// Enqueue samples by trace ID, applies the text policy, queues the document for
+// Elasticsearch and forwards the trace to the sinks. Traces rejected by the
+// sampler are not forwarded.
 func (w *Writer) Enqueue(t Trace) {
 	if !w.sample(t.ID) {
 		return
@@ -167,6 +186,9 @@ func (w *Writer) Enqueue(t Trace) {
 	w.forward(func(s Sink) { s.Enqueue(t) })
 }
 
+// EnqueueObservation samples by TraceID and runs Options.Processors before
+// serialization, so processor edits reach both Elasticsearch and the sinks;
+// observations left with an empty Name are dropped.
 func (w *Writer) EnqueueObservation(o Observation) {
 	if !w.sample(o.TraceID) {
 		return
@@ -189,6 +211,8 @@ func (w *Writer) EnqueueObservation(o Observation) {
 	w.forward(func(s Sink) { s.EnqueueObservation(o) })
 }
 
+// EnqueueScore samples by TraceID, queues a SCORE document with a zero
+// Timestamp defaulted to now, and forwards the score to the sinks.
 func (w *Writer) EnqueueScore(s Score) {
 	if !w.sample(s.TraceID) {
 		return
@@ -257,12 +281,18 @@ func (w *Writer) countDropped(reason string) {
 	}
 }
 
+// Dropped returns the number of documents dropped because the queue was full or
+// encoding failed.
 func (w *Writer) Dropped() int64 { return w.dropped.Load() }
 
+// QueueDepth returns the number of documents currently waiting in the queue.
 func (w *Writer) QueueDepth() int { return len(w.ch) }
 
+// QueueCapacity returns the capacity of the document queue.
 func (w *Writer) QueueCapacity() int { return cap(w.ch) }
 
+// Close stops the writer once, drains the queue using ctx and returns the joined
+// flush errors collected since the previous call. A nil ctx uses context.Background.
 func (w *Writer) Close(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()

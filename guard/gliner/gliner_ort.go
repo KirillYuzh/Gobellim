@@ -22,12 +22,17 @@ import (
 	"github.com/KirillYuzh/Gobellim/internal/ort"
 )
 
+// DefaultModel is the model name used when Config.Model is empty.
 const DefaultModel = "hivetrace__gliner-guard-omni"
 
+// DefaultSessions is the default number of ORT sessions in the pool.
 const DefaultSessions = 2
 
+// DefaultMaxTokens is the default cap on tokens in the L2 tensor input.
 const DefaultMaxTokens = 512
 
+// Config configures the L2 detector: model directory and name, session pool
+// size and wait, and the token cap; zero values get defaults.
 type Config struct {
 	Dir       string
 	Model     string
@@ -36,6 +41,8 @@ type Config struct {
 	MaxTokens int
 }
 
+// Detector is the ONNX-backed L2 GLiNER detector; it implements
+// guard.NaturalText and reports findings with layer "L2".
 type Detector struct {
 	cfg       modelConfig
 	maxTokens int
@@ -44,6 +51,7 @@ type Detector struct {
 	pool      *ort.Pool
 }
 
+// Health reports pool capacity and in-use sessions, or that the pool is not ready.
 func (d *Detector) Health() core.HealthStatus {
 	if d.pool == nil {
 		return core.HealthStatus{Detail: "gliner: session pool is not ready"}
@@ -81,6 +89,8 @@ func defaultLibPath() string {
 	return ".ort/lib/libonnxruntime.so"
 }
 
+// New loads the model config, tokenizer, and ONNX sessions, applies defaults,
+// and clamps MaxTokens to the model's max_sequence_length.
 func New(cfg Config) (*Detector, error) {
 	cfg = cfg.withDefaults()
 	dir := filepath.Join(cfg.Dir, cfg.Model)
@@ -152,6 +162,8 @@ func New(cfg Config) (*Detector, error) {
 	return &Detector{cfg: mc, maxTokens: maxTokens, wordRe: wordRe, tk: tk, pool: pool}, nil
 }
 
+// VerifyDir checks the model files and config, then constructs and closes a
+// detector to verify the runtime can load the model.
 func VerifyDir(dir, model string) error {
 	dir = resolveModelsDir(dir)
 	if err := verifyFiles(dir, model); err != nil {
@@ -168,10 +180,15 @@ func VerifyDir(dir, model string) error {
 	return d.pool.Close()
 }
 
+// Name returns "L2".
 func (*Detector) Name() string { return "L2" }
 
+// UsesNaturalText reports true: L2 reads the original text, not the canonical form.
 func (*Detector) UsesNaturalText() bool { return true }
 
+// Detect tokenises text into words, runs one inference, and converts entity
+// spans and classification labels into findings; inference errors are wrapped
+// as ErrGuardUnavailable.
 func (d *Detector) Detect(ctx context.Context, text string) ([]guard.Finding, error) {
 	if text == "" {
 		return nil, nil

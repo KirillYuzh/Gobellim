@@ -11,13 +11,17 @@ import (
 	"github.com/KirillYuzh/Gobellim/trace"
 )
 
+// Trace is one recorded trace together with the observations that belong to it.
 type Trace struct {
 	Trace        trace.Trace
 	Observations []trace.Observation
 }
 
+// Check inspects a recorded trace and returns a non-nil error when it fails.
 type Check func(t Trace) error
 
+// Case is one eval scenario: an input to run and the checks to apply to the
+// trace it produces. Metadata is carried through untouched for the caller.
 type Case struct {
 	Name     string
 	Input    string
@@ -25,6 +29,8 @@ type Case struct {
 	Metadata map[string]any
 }
 
+// Result is the outcome of one Case: the pass/fail verdict, any joined check
+// failure, the recorded trace, and the elapsed time.
 type Result struct {
 	Name    string
 	Passed  bool
@@ -33,6 +39,9 @@ type Result struct {
 	Elapsed time.Duration
 }
 
+// Run executes each case sequentially, resetting rec before every case, and
+// returns one Result per case. A failing run function or check is reported in
+// the Result rather than aborting the batch.
 func Run(ctx context.Context, rec *trace.Recorder, cases []Case,
 	run func(ctx context.Context, input string) error,
 ) []Result {
@@ -94,6 +103,9 @@ func runCase(ctx context.Context, rec *trace.Recorder, c Case,
 	return res
 }
 
+// Recorded returns the last trace from rec's snapshot together with its
+// observations. It returns core.ErrInvalidConfig for a nil recorder and
+// core.ErrNotFound when nothing was recorded.
 func Recorded(rec *trace.Recorder) (Trace, error) {
 	if rec == nil {
 		return Trace{}, fmt.Errorf("eval: no recorder: %w", core.ErrInvalidConfig)
@@ -112,11 +124,13 @@ func Recorded(rec *trace.Recorder) (Trace, error) {
 	return Trace{Trace: last, Observations: obs}, nil
 }
 
+// Report aggregates the results of an eval run with passed and failed counts.
 type Report struct {
 	Total, Passed, Failed int
 	Results               []Result
 }
 
+// Summarize counts passed and failed results into a Report.
 func Summarize(results []Result) Report {
 	r := Report{Total: len(results), Results: results}
 	for _, res := range results {
@@ -129,8 +143,11 @@ func Summarize(results []Result) Report {
 	return r
 }
 
+// OK reports whether no result failed.
 func (r Report) OK() bool { return r.Failed == 0 }
 
+// String renders one line per result, "PASS name" or "FAIL name: error", and
+// deliberately omits input and output text.
 func (r Report) String() string {
 	var b strings.Builder
 	for i, res := range r.Results {

@@ -10,6 +10,8 @@ import (
 	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
+// EnsureStepTimeout bounds each individual schema-creation request made by
+// EnsureSchema.
 var EnsureStepTimeout = 30 * time.Second
 
 type step struct {
@@ -19,6 +21,9 @@ type step struct {
 	body        []byte
 }
 
+// EnsureSchema creates the ILM policy, data-stream templates, memory indexes,
+// and, when dims > 0, the chunks index. Already-exists responses count as
+// success, and non-2xx responses wrap core.ErrProvider.
 func EnsureSchema(ctx context.Context, es ES, dims int) error {
 	ilm, err := ILMPolicyBody(DefaultILMDays)
 	if err != nil {
@@ -65,6 +70,7 @@ func alreadyExists(body []byte) bool {
 		strings.Contains(s, "already_exists_exception")
 }
 
+// Snippet returns the first 200 bytes of b for a bounded error excerpt.
 func Snippet(b []byte) string {
 	const n = 200
 	if len(b) > n {
