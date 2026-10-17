@@ -31,6 +31,10 @@ JSON-структуры, чанкинг и attribute groups сознательн
 
 Нужны Python, `gliner2`, `torch`, `numpy`, `onnx`, `onnxruntime`.
 
+> `hivetrace/gliner-guard-omni` на HF содержит `model.safetensors`, а не
+> `model.onnx`; `kitctl model pull` для неё не подходит — ONNX-граф создаёт этот
+> скрипт.
+
 ```sh
 python3 tools/gliner/export.py --out /tmp/gliner
 ```

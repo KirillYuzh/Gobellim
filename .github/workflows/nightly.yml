@@ -16,6 +16,14 @@ env:
   # Matches github.com/daulet/tokenizers v1.27.0 in go.mod.
   TOKENIZERS_VERSION: "v1.27.0"
   GUARD_MODEL: "hivetrace/gliner-guard-omni"
+  # The exporter is pinned to the versions it was written against; a newer
+  # gliner2 can change the extractor API the export script replays.
+  GLINER2_VERSION: "2.1.0"
+  TORCH_VERSION: "2.14.0+cpu"
+  TRANSFORMERS_VERSION: "5.17.0"
+  ONNX_VERSION: "1.23.2"
+  ONNXRUNTIME_VERSION: "1.31.0"
+  NUMPY_VERSION: "2.5.3"
 
 jobs:
   ort-parity:
@@ -28,6 +36,33 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: export the guard model to ONNX
+        # The HuggingFace repo ships model.safetensors, not an ONNX graph, so
+        # kitctl model pull cannot fetch it. tools/gliner/export.py is the
+        # source of the graph and writes the config the Go side reads.
+        env:
+          HF_HUB_OFFLINE: "0"
+        run: |
+          set -euo pipefail
+          python3 -m pip install --upgrade pip
+          python3 -m pip install --extra-index-url https://download.pytorch.org/whl/cpu \
+            "torch==${TORCH_VERSION}"
+          python3 -m pip install \
+            "gliner2==${GLINER2_VERSION}" \
+            "transformers==${TRANSFORMERS_VERSION}" \
+            "onnx==${ONNX_VERSION}" \
+            "onnxruntime==${ONNXRUNTIME_VERSION}" \
+            "numpy==${NUMPY_VERSION}"
+          python3 tools/gliner/export.py --skip-fixtures --out /tmp/gliner
+          mkdir -p models/hivetrace__gliner-guard-omni
+          cp /tmp/gliner/model/model.onnx \
+             /tmp/gliner/model/tokenizer.json \
+             /tmp/gliner/model/config.json \
+             models/hivetrace__gliner-guard-omni/
 
       - name: native libraries
         run: |
@@ -42,10 +77,6 @@ jobs:
           tar -xzf /tmp/libtokenizers.tgz -C .ort/lib
           test -f .ort/lib/libtokenizers.a
           test -f .ort/lib/libonnxruntime.so
-
-      - name: guard weights
-        run: |
-          go -C cmd run ./kitctl model pull "${GUARD_MODEL}" --dir ../models
 
       - name: parity gate
         env:
