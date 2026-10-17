@@ -225,6 +225,13 @@ linters:
       - path: '(^|/)guardqual/main\.go$'
         linters:
           - errcheck
+      # kitctl downloads models from a URL the operator passes on the command
+      # line (--base-url + model name); it is a dev CLI, not a server. Scope the
+      # SSRF taint check to this file so webfetch's own checks stay covered.
+      - path: '(^|/)kitctl/main\.go$'
+        linters:
+          - gosec
+        text: "G704"
 
 formatters:
   enable:
