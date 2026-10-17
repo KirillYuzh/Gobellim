@@ -49,8 +49,10 @@ func newRealApp(t *testing.T, es store.ES, llm model.Client, emb embed.Embedder,
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := Config{ES: es, LLM: llm, Embedder: emb, Policy: policy, Tokenizer: chunk.WhitespaceTokenizer{}, GuardL2: guard.L1Only(),
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	cfg := Config{
+		ES: es, LLM: llm, Embedder: emb, Policy: policy, Tokenizer: chunk.WhitespaceTokenizer{}, GuardL2: guard.L1Only(),
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
 	if tweak != nil {
 		tweak(&cfg)
 	}
