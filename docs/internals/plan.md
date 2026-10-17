@@ -70,8 +70,9 @@
 `gigachat.go` — D8.
 
 Правила зависимостей (архитектура) обязательны и **проверяются автоматически**:
-stdlib-тест `internal/importrules` (в `go test ./...`) и правила `depguard`
-(`.golangci.yml`, в `make check` и в CI-джобе `lint`):
+stdlib-тест `internal/importrules` (в `go test ./...` корневого модуля; обходит
+дерево целиком, включая подмодули) и правила `depguard` (`.golangci.yml`, в
+`make check` и в CI-джобе `lint`; линтер запускается в каждом модуле):
 
 1. `kit` импортирует всё; `internal/call` — только `authz`, `guard`, `trace`.
 2. `authz`, `guard`, `model`, `embed`, `chunk`, `store`, `trace` не импортируют друг
@@ -83,7 +84,8 @@ stdlib-тест `internal/importrules` (в `go test ./...`) и правила `d
 **Критерии приёмки:**
 
 - `go build ./...` без тега `ort` проходит и не требует нативных библиотек;
-  правила импортов проверяются тестом `internal/importrules` и `depguard`.
+  правила импортов проверяются тестом `internal/importrules` и `depguard`; те же
+  проверки проходят в каждом модуле (`make check`).
 - `New` собирает инстанс из переданных ES-клиента (`store.ES`, `Do(ctx, store.Request)`, D10),
   LLM, эмбеддера и `policy.yaml`; ошибка конфигурации → `ErrInvalidConfig`
   (BR-08).
@@ -192,11 +194,15 @@ guard — заглушка), полный режим — образ с `libonnxr
 ## Definition of Done v1
 
 Отметка `[x]` — поведение подтверждено кодом и прогоном
-`go build ./... && go vet ./... && go test ./...`; пустой чекбокс — открыто.
+`go build ./... && go vet ./... && go test ./...` по ядру и по каждому модулю
+(`make check`); пустой чекбокс — открыто.
 
-- [x] `go build ./...` без тега `ort` проходит и не требует нативных библиотек.
+- [x] `go build ./...` без тега `ort` проходит и не требует нативных библиотек;
+      из корня он собирает только ядро, а опциональные пакеты — отдельные модули
+      (`D85`).
 - [x] Линтер импортов и CI подключены: `.github/workflows/ci.yml` (build, test,
-      race, ort-vet, lint, fumpt), `.golangci.yml` (`gofumpt`/`govet`/`errcheck`/
+      race, ort-vet, lint, fumpt), ночной `.github/workflows/nightly.yml` (ORT parity,
+      D86), `.golangci.yml` (`gofumpt`/`govet`/`errcheck`/
       `staticcheck`/`gosec`/`depguard`), stdlib-тест `internal/importrules` и `make
 check`. Обвязка зелёная: прогоны на раннере проходят (push в `develop`/`main`
       и pull request), `golangci-lint` v2.13.0 локально даёт 0 замечаний, гейт
@@ -207,8 +213,10 @@ check`. Обвязка зелёная: прогоны на раннере про
       Измеренные числа L1 по публичному корпусу зафиксированы в
       [Как настроить guardrails](../guides/guardrails.md#качество-l1-измеренные-числа)
       — с явной оговоркой, что они не доказывают обобщаемость (там же результат
-      пробы на held-out). Остаётся гейт паритета L2: он требует `-tags ort` и
-      веса ONNX, которых нет в git.
+      пробы на held-out). С D86 гейт паритета L2 исполняется ночью
+      (`.github/workflows/nightly.yml`): библиотеки и веса скачиваются, `verify
+    parity` идёт с `--min-agreement 1.0`; численный порог на `pii-bench` и
+      `insecure-prompts` всё ещё открыт.
 - [x] Guard: рельсы `input`, `output`, `tool_result`;
       каноникализация и decode-and-rescan перед слоями; детерминированный слой
       первым; fail-closed; действие `Detect` на выходе.
@@ -231,12 +239,12 @@ check`. Обвязка зелёная: прогоны на раннере про
       копии `libonnxruntime.so` и `KIT_ORT_LIB`.
 - [x] Пакет `eval`: детерминированные проверки трейсов (stdlib, зависит от
       `trace`, не от `kit`).
-- [x] Судьба `flow` и `eval` зафиксирована: оба остаются в ядре (D67). Измерено
-      `go list -deps`: у `eval` внешних зависимостей нет, у `flow` — две
-      jsonschema-библиотеки ради схем `In`/`Out`, то есть «нулевые зависимости»
-      верны только для `eval`. Ограничение `eval` держит правило
-      `eval-trace-and-internal-only` из `internal/importrules`; для `flow` такого
-      правила нет.
+- [x] Судьба `flow` и `eval` зафиксирована: D67 держал их в ядре, D85 вынес в
+      отдельные модули с теми же границами импортов. Измерено `go list -deps`: у
+      `eval` внешних зависимостей нет, у `flow` — две jsonschema-библиотеки ради
+      схем `In`/`Out`, то есть «нулевые зависимости» верны только для `eval`.
+      Ограничение `eval` держит правило `eval-trace-and-internal-only` из
+      `internal/importrules`; для `flow` такого правила нет.
 - [x] Локальный эмбеддер (`embed.NewLocal`) реализован под `ort`: пресеты
       e5/bge-m3, `kit_embedder.json`, батч 32, `LocalConfig.Sessions`.
 - [x] Guard-защита от сверхлинейной стоимости: у L2 есть потолок токенов
@@ -294,7 +302,7 @@ check`. Обвязка зелёная: прогоны на раннере про
 
 ## Смотрите также
 
-- [Решения и допущения](./decisions.md) — `D1`…`D84`, `A1`…`A9`
+- [Решения и допущения](./decisions.md) — `D1`…`D86`, `A1`…`A9`
 - [Архитектура](./architecture.md) — пакеты и рантайм, на которые опирается
   план
 - [Бизнес-правила](./business-rules.md) — `BR-01`…`BR-113`, проверяемые на

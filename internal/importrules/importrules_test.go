@@ -107,7 +107,7 @@ var rules = []rule{
 	},
 	{
 		name:    "flow-internal-leaves-only",
-		desc:    "flow is a core primitive (D67): it may import only internal/** leaves — never the kit façade (import cycle), never internal/call, never the core family (authz/guard/model/embed/chunk/store/trace), never a sibling or transport package (eval/rerank/mcp/webfetch); stdlib and the two jsonschema libraries of D67 are outside this rule",
+		desc:    "flow is an optional module (D85) that used to be a core primitive (D67): it may import only internal/** leaves — never the kit façade (import cycle), never internal/call, never the core family (authz/guard/model/embed/chunk/store/trace), never a sibling or transport package (eval/rerank/mcp/webfetch); stdlib and the two jsonschema libraries of D67 are outside this rule",
 		applies: func(pkg string) bool { return rootOf(pkg) == "flow" },
 		allows: func(pkg, imported string) bool {
 			return isUnderInternal(imported) && !isCallPrimitive(imported)

@@ -4,6 +4,9 @@
 // `perf`), so a new dependency or a fattened dependency graph cannot land
 // silently. The budgets are the measured values with headroom; raise one
 // deliberately, in this file, when a change genuinely needs it.
+//
+// It measures the core module: run it from this module (`go -C scripts run
+// ./perfbudget`) or pass the core directory as the first argument.
 package main
 
 import (
@@ -23,7 +26,7 @@ const (
 )
 
 func main() {
-	root := "."
+	root := ".."
 	if len(os.Args) > 1 {
 		root = os.Args[1]
 	}

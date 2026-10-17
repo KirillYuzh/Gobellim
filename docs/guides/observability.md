@@ -377,7 +377,7 @@ kind:SPAN AND tags:effect:*   → group by name → p95(latency_ms)
 - **Нет UI.** `kit-overview` — только провижененный Grafana-дашборд; своего
   интерфейса нет.
 - **Нет trace read API.** JSON read API трейсов не реализован: читать можно сам ES
-  (Kibana/Grafana) или CLI-ридер `go run ./demo/cmd/traces` (`-limit`, `-name`,
+  (Kibana/Grafana) или CLI-ридер `go -C demo run ./cmd/traces` (`-limit`, `-name`,
   `-tenant`, `-trace <id>`). Приложение не может «достать трейс» через kit.
 - **Стоимость считается только при заданном `Config.Pricing`.** Без цены
   `usage.cost`/`cost` равны `0`; токены структурирующего вызова не входят в итог

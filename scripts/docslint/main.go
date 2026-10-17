@@ -4,13 +4,18 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
 func main() {
-	root := flag.String("root", ".", "repository root to lint")
+	root := flag.String("root", "", "repository root to lint (default: the nearest directory with docs/internals/design.md)")
 	quiet := flag.Bool("quiet", false, "suppress informational findings")
 	flag.Parse()
+
+	if *root == "" {
+		*root = defaultRoot()
+	}
 
 	rep, err := Run(*root)
 	if err != nil {
@@ -34,6 +39,15 @@ func main() {
 		fmt.Fprintf(os.Stderr, "docs-lint: FAILED — %s\n", summarise(rep))
 		os.Exit(1)
 	}
+}
+
+func defaultRoot() string {
+	for _, dir := range []string{".", ".."} {
+		if _, err := os.Stat(filepath.Join(dir, "docs", "internals", "design.md")); err == nil {
+			return dir
+		}
+	}
+	return "."
 }
 
 func summarise(rep Report) string {

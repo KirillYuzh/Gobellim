@@ -210,7 +210,7 @@ cd demo/deploy && docker compose up -d elasticsearch grafana
 ```
 
 ```sh
-go run ./demo/cmd/bot
+go -C demo run ./cmd/bot
 ```
 
 Демо использует GigaChat, поэтому нужен `GIGACHAT_CREDENTIALS`. Сервис слушает

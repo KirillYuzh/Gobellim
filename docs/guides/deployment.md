@@ -47,10 +47,10 @@
 
 ```sh
 # внешний эмбеддер (e5-small): model.onnx + tokenizer.json + config.json
-go run ./cmd/kitctl model pull intfloat/multilingual-e5-small
+go -C cmd run ./kitctl model pull intfloat/multilingual-e5-small
 
 # guard L2 (если вы публикуете артефакт в свой HF-репозиторий)
-go run ./cmd/kitctl model pull hivetrace/gliner-guard-omni
+go -C cmd run ./kitctl model pull hivetrace/gliner-guard-omni
 ```
 
 | Факт                  | Значение                                                                                                     |
@@ -125,19 +125,19 @@ CA-файл провайдера (например, для GigaChat) монти�
 
 ```sh
 # 1. Модели на месте и структурно валидны (guard + embedder)
-go run ./cmd/kitctl verify models --dir ./models
+go -C cmd run ./kitctl verify models --dir ./models
 
 # 2. Инвариант I-06: окно guard не шире окна модели (+ политика)
-go run ./cmd/kitctl verify window \
+go -C cmd run ./kitctl verify window \
   --model-context 32000 --guard-max-chars 8000 --policy ./policy.yaml
 
 # 3. Гейт паритета guard (нужна сборка с -tags ort)
 go vet -tags ort ./...
-go run -tags ort ./cmd/kitctl verify parity \
+go -C cmd run -tags ort ./kitctl verify parity \
   --dir ./models --fixtures guard/gliner/testdata --min-agreement 1.0
 
 # 4. Воспроизводимый отчёт по латентности и RSS
-go run -tags ort ./cmd/kitctl verify latency \
+go -C cmd run -tags ort ./kitctl verify latency \
   --dir ./models --iterations 200 --warmup 20 --max-chars 8000
 
 # 5. Локальный гейт целиком
@@ -153,8 +153,10 @@ make check
 
 `make check` гоняет `gofumpt -l`, `go build ./...`, `go vet ./...`,
 `go test ./... -count=1`, `go vet -tags ort ./...` (только типы) и
-`golangci-lint run`. Та же планка в CI: джобы `build`, `test`, `race`, `ort-vet`,
-`lint`, `fumpt`.
+`golangci-lint run` — для ядра и для каждого из модулей `mcp`, `webfetch`, `flow`,
+`eval`, `kittest`, `cmd`, `demo`, `scripts` (`D85`). Та же планка в CI: джобы
+`build`, `test`, `race`, `ort-vet`, `lint`, `fumpt`; ночной `nightly` (D86) ставит
+ORT и веса и гоняет `verify parity`.
 
 ```mermaid
 flowchart TD
@@ -218,7 +220,7 @@ guard_version = <policy_hash>/<layer_id>     // например "9f3c…/L1+L2"
 | `Sinks`          | дополнительные приёмники; писатель в ES всегда остаётся первым                                                                     |
 | очередь писателя | 4096 документов; batch 500 / 2 с / 5 MB; 3 ретрая, backoff 200 мс                                                                  |
 | `dropped`        | счётчик отброшенных при переполнении; `App` его не отдаёт — следите за `slog.Warn` `trace: dropping document` (`проверьте у себя`) |
-| Grafana          | `demo/deploy/grafana/` — provisioning datasource и дашборд `kit-overview`                                                               |
+| Grafana          | `demo/deploy/grafana/` — provisioning datasource и дашборд `kit-overview`                                                          |
 
 `App.Close(ctx)` обязателен при остановке: он сбрасывает остаток очереди.
 Дашборды читают data streams напрямую (`kit-observations` по `kind`/`level`,
@@ -270,7 +272,7 @@ guard_version = <policy_hash>/<layer_id>     // например "9f3c…/L1+L2"
 - **Нет готового решения для хранения снимков `flow`** и для очереди прогонов —
   это на стороне приложения.
 - **Нет API чтения трейсов.** Потребители читают ES (Kibana/Grafana) или CLI-ридер
-  `go run ./demo/cmd/traces` (список трейсов и разбор одного по `-trace`);
+  `go -C demo run ./cmd/traces` (список трейсов и разбор одного по `-trace`);
   JSON-API не реализован ([План](../internals/plan.md)).
 - Образцы `verify parity` требуют фикстур (`guard/gliner/testdata`) и ORT-сборки;
   в релизном пайплайне без ORT этот гейт не запустится.

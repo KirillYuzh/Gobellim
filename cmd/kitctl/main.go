@@ -83,14 +83,15 @@ func runModel(args []string) int {
 	fs := flag.NewFlagSet("model pull", flag.ContinueOnError)
 	dir := fs.String("dir", defaultModelsDir(), "models directory")
 	baseURL := fs.String("base-url", "https://huggingface.co", "model host")
-	if err := fs.Parse(args[1:]); err != nil {
+	pos, err := parseInterleaved(fs, args[1:])
+	if err != nil {
 		return 2
 	}
-	if fs.NArg() != 1 {
+	if len(pos) != 1 {
 		fmt.Fprintln(os.Stderr, "kitctl model pull: expected a model name like org/name")
 		return 2
 	}
-	modelName := fs.Arg(0)
+	modelName := pos[0]
 	dest := embed.ModelDir(*dir, modelName)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)

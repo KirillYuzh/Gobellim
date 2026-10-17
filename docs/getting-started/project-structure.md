@@ -15,7 +15,7 @@ kit — библиотека из пакетов по слоям. Межпаке
 `kit/`
 
 ```text
-kit/
+kit/                                       корневой Go-модуль github.com/KirillYuzh/Gobellim (D85)
   kit.go principal.go tool.go errors.go     фасад: New, Setup, Chat, Ingest, Search, Delete, Score, App.Prune, Generate[T], Tool[In,Out]
   retrieval.go                              встроенный инструмент поиска kit.RetrievalTool
   internal/
@@ -24,7 +24,7 @@ kit/
     ort/                                     пул сессий инференса (реализацию сессии даёт вызывающий)
     httpjson/ oauth/                         общие листы для адаптеров провайдеров
     id/                                      генерация идентификаторов трейсов и observation
-    importrules/                             stdlib-тест правил импортов (I-13); дублирует depguard из .golangci.yml
+    importrules/                             stdlib-тест правил импортов (I-13); обходит дерево целиком, включая подмодули
   authz/                                     policy.yaml, Load/Parse, Authorize(principal, permission)
   guard/                                     Rail/Detector/Pipeline; L1 — rules/, L2 — gliner/ (ONNX под тегом ort, заглушка без него)
   guard/guardtest/                           AllowAll — тестовый детектор (I-15)
@@ -33,15 +33,15 @@ kit/
   chunk/                                     токенный чанкер + Tokenizer
   store/                                     ES interface, index.go (маппинги), chunks.go, search.go, filter.go, maintenance.go
   trace/                                     модель Langfuse, sink (Recorder), async writer (writer.go)
-  eval/                                      детерминированные проверки поверх трейсов (зависит от trace, не от kit)
-  flow/                                      один типизированный шаг `Step[In,Out]`: schema-контракт и suspend/resume (без Pipeline/builder-DSL)
-  rerank/                                    реранкер `Reranker` + адаптер TEI/Cohere, детерминированный `Reorder`
-  mcp/                                       клиент MCP (stdio и streamable HTTP); `Register` → `mcp:<server>:<tool>`
-  webfetch/                                  SSRF-защищённый инструмент исходящего HTTP (эффект egress)
-  cmd/kitctl/                                model pull, policy check, verify window/models/parity/latency
-  .github/workflows/ci.yml                   CI: build, test, race, ort-vet, lint, fumpt
+  rerank/                                    реранкер `Reranker` + адаптер TEI/Cohere, детерминированный `Reorder` (в ядре: его импортирует фасад)
+  eval/                                      отдельный модуль: детерминированные проверки поверх трейсов (зависит от trace, не от kit)
+  flow/                                      отдельный модуль: один типизированный шаг `Step[In,Out]` (без Pipeline/builder-DSL)
+  mcp/                                       отдельный модуль: клиент MCP (stdio и streamable HTTP); `Register` → `mcp:<server>:<tool>`
+  webfetch/                                  отдельный модуль: SSRF-защищённый инструмент исходящего HTTP (эффект egress)
+  cmd/kitctl/                                отдельный модуль: model pull, policy check, verify window/models/parity/latency
+  .github/workflows/ci.yml                   CI: build, test, race, ort-vet, lint, fumpt (по каждому модулю)
   .golangci.yml Makefile                     линтер и локальный `make check`
-  demo/                                      пример на Clean Architecture
+  demo/                                      отдельный модуль: пример на Clean Architecture
     cmd/bot/                                 точка входа HTTP-сервиса
     internal/domain/                         доменные типы
     internal/usecase/                        сценарии (auth, bot) и порты
@@ -52,6 +52,7 @@ kit/
     internal/adapter/memory/                 mock Directory и bearer-токены
     internal/adapter/elastic/                клиент Elasticsearch
     deploy/                                  Dockerfile, docker-compose.yml, grafana/
+  scripts/                                   отдельный модуль: docslint, perfbudget, guardqual
   docs/                                      документация
   testdata/                                  золотые файлы, parity-фикстуры
 ```
@@ -74,11 +75,13 @@ kit/
 5. Глобального состояния нет; `init()` не используется; всё приходит через
    конструкторы и `context.Context`.
 
-Правила проверяются двумя способами: stdlib-тест `internal/importrules` (в
-`go test ./...`) и правила `depguard` в `.golangci.yml` (в `make check` и в
-CI-джобе `lint`); нарушение ломает сборку. Ограничения навешены только на
-перечисленные пакеты: фасад `kit`, `flow`, `webfetch`, `cmd/**` и `demo/**`
-импортируют что угодно — `flow → internal/core` и `webfetch → kit` разрешены.
+Правила проверяются stdlib-тестом `internal/importrules` (в `go test ./...`
+корневого модуля; тест обходит дерево целиком, включая подмодули) и правилами
+`depguard` в `.golangci.yml` (в `make check` и в CI-джобе `lint`; линтер
+запускается в каждом модуле с модульно-относительными путями). Нарушение ломает
+сборку. Ограничения навешены только на перечисленные пакеты: фасад `kit`, `flow`,
+`webfetch`, `cmd/**` и `demo/**` импортируют что угодно — `flow → internal/core` и
+`webfetch → kit` разрешены.
 
 ### Куда что класть
 

@@ -1,0 +1,59 @@
+name: nightly
+
+on:
+  schedule:
+    # The PR loop only type-checks -tags ort; this job actually runs the L2 path.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.24"
+  # Matches the C API headers bundled with github.com/yalue/onnxruntime_go v1.36.0.
+  ORT_VERSION: "1.29.0"
+  # Matches github.com/daulet/tokenizers v1.27.0 in go.mod.
+  TOKENIZERS_VERSION: "v1.27.0"
+  GUARD_MODEL: "hivetrace/gliner-guard-omni"
+
+jobs:
+  ort-parity:
+    name: ORT parity (L2)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: native libraries
+        run: |
+          set -euo pipefail
+          mkdir -p .ort/lib
+          curl -fsSL -o /tmp/onnxruntime.tgz \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz"
+          tar -xzf /tmp/onnxruntime.tgz -C /tmp
+          cp /tmp/onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so* .ort/lib/
+          curl -fsSL -o /tmp/libtokenizers.tgz \
+            "https://github.com/daulet/tokenizers/releases/download/${TOKENIZERS_VERSION}/libtokenizers.linux-amd64.tar.gz"
+          tar -xzf /tmp/libtokenizers.tgz -C .ort/lib
+          test -f .ort/lib/libtokenizers.a
+          test -f .ort/lib/libonnxruntime.so
+
+      - name: guard weights
+        run: |
+          go -C cmd run ./kitctl model pull "${GUARD_MODEL}" --dir ../models
+
+      - name: parity gate
+        env:
+          CGO_ENABLED: "1"
+          CGO_LDFLAGS: -L${{ github.workspace }}/.ort/lib
+          KIT_ORT_LIB: ${{ github.workspace }}/.ort/lib/libonnxruntime.so
+        run: |
+          go -C cmd run -tags ort ./kitctl verify parity \
+            --dir ../models \
+            --fixtures ../guard/gliner/testdata \
+            --min-agreement 1.0
