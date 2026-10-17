@@ -23,7 +23,9 @@ env:
   TRANSFORMERS_VERSION: "5.17.0"
   ONNX_VERSION: "1.23.2"
   ONNXRUNTIME_VERSION: "1.31.0"
+  # numpy 2.5.x requires Python >= 3.12.
   NUMPY_VERSION: "2.5.3"
+  HUGGINGFACE_HUB_VERSION: "1.32.0"
 
 jobs:
   ort-parity:
@@ -38,7 +40,7 @@ jobs:
           cache: true
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: export the guard model to ONNX
         # The HuggingFace repo ships model.safetensors, not an ONNX graph, so
@@ -56,7 +58,8 @@ jobs:
             "transformers==${TRANSFORMERS_VERSION}" \
             "onnx==${ONNX_VERSION}" \
             "onnxruntime==${ONNXRUNTIME_VERSION}" \
-            "numpy==${NUMPY_VERSION}"
+            "numpy==${NUMPY_VERSION}" \
+            "huggingface_hub==${HUGGINGFACE_HUB_VERSION}"
           python3 tools/gliner/export.py --skip-fixtures --out /tmp/gliner
           mkdir -p models/hivetrace__gliner-guard-omni
           cp /tmp/gliner/model/model.onnx \
