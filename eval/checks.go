@@ -10,6 +10,7 @@ import (
 	"github.com/KirillYuzh/Gobellim/trace"
 )
 
+// Includes returns a Check that requires the final output to contain substr.
 func Includes(substr string) Check {
 	return func(t Trace) error {
 		if strings.Contains(output(t), substr) {
@@ -19,6 +20,7 @@ func Includes(substr string) Check {
 	}
 }
 
+// Excludes returns a Check that requires the final output not to contain substr.
 func Excludes(substr string) Check {
 	return func(t Trace) error {
 		if !strings.Contains(output(t), substr) {
@@ -28,6 +30,7 @@ func Excludes(substr string) Check {
 	}
 }
 
+// Equals returns a Check that requires the final output to equal want exactly.
 func Equals(want string) Check {
 	return func(t Trace) error {
 		if output(t) == want {
@@ -37,6 +40,8 @@ func Equals(want string) Check {
 	}
 }
 
+// Matches returns a Check that requires the final output to match re; a nil
+// regexp produces a check that always fails.
 func Matches(re *regexp.Regexp) Check {
 	if re == nil {
 		return func(t Trace) error {
@@ -51,6 +56,8 @@ func Matches(re *regexp.Regexp) Check {
 	}
 }
 
+// Similarity returns a Check that requires DiceSimilarity(output, want) to be
+// at least min.
 func Similarity(want string, min float64) Check {
 	return func(t Trace) error {
 		score := DiceSimilarity(output(t), want)
@@ -61,6 +68,9 @@ func Similarity(want string, min float64) Check {
 	}
 }
 
+// DiceSimilarity returns the Dice coefficient over lower-cased word bigrams of
+// a and b. Inputs without bigrams score 1 when equal ignoring case and
+// surrounding space, otherwise 0.
 func DiceSimilarity(a, b string) float64 {
 	ab := wordBigrams(a)
 	bb := wordBigrams(b)
@@ -103,6 +113,9 @@ func bigramOverlap(a, b []string) int {
 	return n
 }
 
+// CalledTool returns a Check that requires the named tool to appear among the
+// trace's tool observations, which are its SPAN observations ordered by start
+// time.
 func CalledTool(name string) Check {
 	return func(t Trace) error {
 		names := toolNames(t)
@@ -118,6 +131,7 @@ func CalledTool(name string) Check {
 	}
 }
 
+// DidNotCall returns a Check that requires the named tool not to be called.
 func DidNotCall(name string) Check {
 	return func(t Trace) error {
 		for _, n := range toolNames(t) {
@@ -129,6 +143,7 @@ func DidNotCall(name string) Check {
 	}
 }
 
+// UsedNoTools returns a Check that requires that no tool was called.
 func UsedNoTools() Check {
 	return func(t Trace) error {
 		names := toolNames(t)
@@ -139,6 +154,7 @@ func UsedNoTools() Check {
 	}
 }
 
+// MaxToolCalls returns a Check that requires at most n tool calls.
 func MaxToolCalls(n int) Check {
 	return func(t Trace) error {
 		names := toolNames(t)
@@ -149,6 +165,8 @@ func MaxToolCalls(n int) Check {
 	}
 }
 
+// ToolOrder returns a Check that requires names to occur in order as a
+// subsequence of the called tools; other calls may appear in between.
 func ToolOrder(names ...string) Check {
 	want := append([]string(nil), names...)
 	return func(t Trace) error {
@@ -173,6 +191,8 @@ func isSubsequence(want, got []string) bool {
 	return i == len(want)
 }
 
+// NoToolErrors returns a Check that requires no tool observation to be at error
+// level or carry an ErrorKind.
 func NoToolErrors() Check {
 	return func(t Trace) error {
 		var bad []string
@@ -188,6 +208,8 @@ func NoToolErrors() Check {
 	}
 }
 
+// All returns a Check that passes only when every supplied check passes; a nil
+// check counts as a failure.
 func All(fs ...Check) Check {
 	return func(t Trace) error {
 		var failures []error
@@ -208,6 +230,8 @@ func All(fs ...Check) Check {
 	}
 }
 
+// Any returns a Check that passes when at least one supplied check passes; no
+// checks at all is a failure.
 func Any(fs ...Check) Check {
 	return func(t Trace) error {
 		if len(fs) == 0 {
@@ -230,6 +254,8 @@ func Any(fs ...Check) Check {
 	}
 }
 
+// Not returns a Check that fails when f passes and passes when f fails; a nil
+// check fails.
 func Not(f Check) Check {
 	return func(t Trace) error {
 		if f == nil {

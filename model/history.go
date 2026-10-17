@@ -1,17 +1,27 @@
 package model
 
+// Counter estimates the token cost of a text fragment.
 type Counter interface{ Count(text string) int }
 
+// ByteCounter approximates tokens as one per four bytes.
 type ByteCounter struct{}
 
+// Count returns len(text)/4.
 func (ByteCounter) Count(text string) int { return len(text) / 4 }
 
+// History trims a message slice to Budget tokens; a nil Counter or a
+// non-positive Budget disables trimming, and KeepLast (default 2) is the
+// minimum number of trailing messages to keep.
 type History struct {
 	Counter  Counter
 	Budget   int
 	KeepLast int
 }
 
+// Trim drops the oldest droppable messages until the Counter estimate fits
+// Budget, preserving system messages, assistant tool-call groups with their
+// tool results, the last KeepLast messages and the final message. It returns
+// msgs unchanged when trimming is disabled or the estimate already fits.
 func (h History) Trim(msgs []Message) []Message {
 	if h.Budget <= 0 || h.Counter == nil || len(msgs) == 0 {
 		return msgs

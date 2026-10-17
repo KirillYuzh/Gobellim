@@ -6,6 +6,8 @@ import (
 	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
+// Ensemble names a group of detectors that New runs as a single layer; the name
+// is used for per-rail degradation policy and duplicate checks.
 type Ensemble struct {
 	Name      string
 	Detectors []Detector

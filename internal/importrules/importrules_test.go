@@ -20,13 +20,19 @@ type imp struct {
 	dir  string
 	file string
 	line int
+	test bool
 }
 
 type rule struct {
-	name    string
-	desc    string
-	applies func(pkg string) bool
-	allows  func(pkg, imported string) bool
+	name string
+	desc string
+	// skipTests constrains only non-test files: a library's test dependency never
+	// reaches consumers, and a core test may legitimately import an optional
+	// package — kittest is the test kit for exactly that (D78), and the facade
+	// cross-checks Generate against eval.
+	skipTests bool
+	applies   func(pkg string) bool
+	allows    func(pkg, imported string) bool
 }
 
 var coreFamily = []string{"authz", "guard", "model", "embed", "chunk", "store", "trace"}
@@ -51,6 +57,24 @@ var skipDirs = map[string]bool{
 	"testdata":     true,
 	"vendor":       true,
 	"node_modules": true,
+}
+
+// optionalPackages are the non-core packages this repository ships: MCP (client
+// and server), the webfetch tool, the flow primitive, the eval harness, the
+// rerank adapter, the test kit and the tooling (cmd, demo, scripts). The core
+// must not depend on them — the dependency runs the other way, or not at all
+// (docs/internals/architecture.md, «Границы ядра»).
+var optionalPackages = []string{
+	"mcp", "webfetch", "flow", "eval", "kittest", "rerank",
+	"cmd", "demo", "scripts",
+}
+
+// coreOptionalExceptions is the honest list of edges where the compiled core
+// still depends on an optional package. It holds one edge: the façade exposes
+// Config.Reranker and SearchRequest.Rerank, so it imports rerank. The core rule
+// asserts this list is exactly the observed edges, so it cannot grow silently.
+var coreOptionalExceptions = map[[2]string]bool{
+	{"", "rerank"}: true,
 }
 
 var rules = []rule{
@@ -83,7 +107,7 @@ var rules = []rule{
 	},
 	{
 		name:    "flow-internal-leaves-only",
-		desc:    "flow is a core primitive (D67): it may import only internal/** leaves — never the kit façade (import cycle), never internal/call, never the core family (authz/guard/model/embed/chunk/store/trace), never a sibling or transport package (eval/rerank/mcp/webfetch); stdlib and the two jsonschema libraries of D67 are outside this rule",
+		desc:    "flow is an optional module (D85) that used to be a core primitive (D67): it may import only internal/** leaves — never the kit façade (import cycle), never internal/call, never the core family (authz/guard/model/embed/chunk/store/trace), never a sibling or transport package (eval/rerank/mcp/webfetch); stdlib and the two jsonschema libraries of D67 are outside this rule",
 		applies: func(pkg string) bool { return rootOf(pkg) == "flow" },
 		allows: func(pkg, imported string) bool {
 			return isUnderInternal(imported) && !isCallPrimitive(imported)
@@ -94,6 +118,18 @@ var rules = []rule{
 		desc:    "no file under internal/ may import the root kit façade (import-cycle risk)",
 		applies: func(pkg string) bool { return isUnderInternal(pkg) },
 		allows:  func(pkg, imported string) bool { return imported != "" },
+	},
+	{
+		name:      "core-no-optional",
+		desc:      "the compiled core (root façade, internal/**, authz, guard/**, model, embed, chunk, store, trace) must not import an optional package (mcp, webfetch, flow, eval, kittest, rerank, cmd, demo, scripts); the one recorded façade → rerank edge is in coreOptionalExceptions (docs/internals/architecture.md, «Границы ядра», D84)",
+		skipTests: true,
+		applies:   func(pkg string) bool { return isCorePackage(pkg) },
+		allows: func(pkg, imported string) bool {
+			if !isOptionalPackage(imported) {
+				return true
+			}
+			return coreOptionalExceptions[[2]string{rootOf(pkg), rootOf(imported)}]
+		},
 	},
 }
 
@@ -137,6 +173,25 @@ func isCallPrimitive(dir string) bool {
 	return dir == "internal/call" || strings.HasPrefix(dir, "internal/call/")
 }
 
+// isCorePackage reports whether dir belongs to the core: the root façade, any
+// internal/** package, or a subsystem of the core family (authz, guard/**,
+// model, embed, chunk, store, trace).
+func isCorePackage(dir string) bool {
+	return dir == "" || isUnderInternal(dir) || familyOf(dir) != ""
+}
+
+// isOptionalPackage reports whether dir is one of the repository's optional
+// packages. It matches on the root of the path, so mcp/stdio is still mcp.
+func isOptionalPackage(dir string) bool {
+	name := rootOf(dir)
+	for _, o := range optionalPackages {
+		if name == o {
+			return true
+		}
+	}
+	return false
+}
+
 func TestImportRules(t *testing.T) {
 	root, modulePath := moduleRoot(t)
 	imports := collectImports(t, root, modulePath)
@@ -155,6 +210,9 @@ func TestImportRules(t *testing.T) {
 		for _, im := range imports[pkg] {
 			var hit []string
 			for _, r := range rules {
+				if r.skipTests && im.test {
+					continue
+				}
 				if !r.applies(pkg) || r.allows(pkg, im.dir) {
 					continue
 				}
@@ -284,6 +342,81 @@ func TestFlowInternalLeavesOnly(t *testing.T) {
 	})
 }
 
+// TestCoreHasNoOptionalDependency: the core is a point solution only if it does
+// not lean on the optional packages. The rule also pins the recorded edge
+// (façade → rerank), so the coupling is visible and cannot grow silently.
+func TestCoreHasNoOptionalDependency(t *testing.T) {
+	r := ruleByName(t, "core-no-optional")
+
+	t.Run("applies to the core only", func(t *testing.T) {
+		for _, pkg := range []string{
+			"", "internal/call", "internal/core", "authz",
+			"guard", "guard/rules", "guard/gliner", "model", "embed", "chunk", "store", "trace",
+		} {
+			if !r.applies(pkg) {
+				t.Errorf("rule %s must apply to %q", r.name, pkg)
+			}
+		}
+		for _, pkg := range []string{
+			"mcp", "mcp/stdio", "webfetch", "flow", "eval", "kittest", "rerank",
+			"cmd/kitctl", "demo/cmd/bot", "scripts/docslint",
+		} {
+			if r.applies(pkg) {
+				t.Errorf("rule %s must not apply to %q", r.name, pkg)
+			}
+		}
+	})
+
+	t.Run("allows internal and family edges, forbids optionals", func(t *testing.T) {
+		if !r.allows("", "internal/call") || !r.allows("trace", "store") {
+			t.Error("core-internal edges must be allowed")
+		}
+		for _, dir := range []string{
+			"mcp", "webfetch", "flow", "eval", "kittest", "cmd/kitctl", "demo/cmd/bot", "scripts/docslint",
+		} {
+			if r.allows("store", dir) {
+				t.Errorf("the core must not import %q", dir)
+			}
+		}
+		if !r.allows("", "rerank") {
+			t.Error("the recorded façade → rerank edge must be allowed")
+		}
+		if r.allows("store", "rerank") || r.allows("model", "rerank") {
+			t.Error("rerank is optional: only the façade may import it")
+		}
+	})
+
+	t.Run("current graph matches the recorded edges exactly", func(t *testing.T) {
+		root, modulePath := moduleRoot(t)
+		imports := collectImports(t, root, modulePath)
+		if len(imports[""]) == 0 {
+			t.Fatal("no imports collected for the façade: the boundary would pass vacuously")
+		}
+		observed := map[[2]string]bool{}
+		for _, pkg := range sortedPkgDirs(imports) {
+			if !r.applies(pkg) {
+				continue
+			}
+			for _, im := range imports[pkg] {
+				if r.skipTests && im.test {
+					continue
+				}
+				if !r.allows(pkg, im.dir) {
+					t.Errorf("%s:%d imports %s, which %s forbids", im.file, im.line, display(modulePath, im.dir), r.name)
+				}
+				if isOptionalPackage(im.dir) {
+					observed[[2]string{rootOf(pkg), rootOf(im.dir)}] = true
+				}
+			}
+		}
+		for edge := range coreOptionalExceptions {
+			if !observed[edge] {
+				t.Errorf("stale exception %q → %q: no such core→optional edge in the graph", edge[0], edge[1])
+			}
+		}
+	})
+}
+
 func TestRuleNamesUnique(t *testing.T) {
 	seen := map[string]bool{}
 	for _, r := range rules {
@@ -379,6 +512,7 @@ func collectImports(t *testing.T, root, modulePath string) map[string][]imp {
 		}
 		for _, im := range fileImports(f, fset, modulePath, prefix) {
 			im.file = rel
+			im.test = strings.HasSuffix(rel, "_test.go")
 			byPkg[pkgDir] = append(byPkg[pkgDir], im)
 		}
 		return nil

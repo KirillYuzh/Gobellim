@@ -366,7 +366,6 @@ func SupportsNativeSchema(client Client) bool
 // Streamer — необязательное расширение Client (I-19). Клиент без него не
 // реализует стриминг, и kit.ChatStream откатывается на буферизованный Chat.
 type Streamer interface {
-	Client
 	ChatStream(ctx context.Context, req Request, onDelta func(string) error) (Response, error)
 }
 
@@ -665,9 +664,10 @@ type MemoryHit struct {
 ## 4. Решения (дополнение к decisions.md)
 
 Это замороженное ядро решений D21…D30. Решения D31…D67 — в журнале
-[decisions.md](./decisions.md); в частности, судьба `flow` и `eval` в ядре
-зафиксирована в **D67** (`eval` — ноль внешних зависимостей, `flow` — две
-jsonschema-библиотеки ради схем `In`/`Out`).
+[decisions.md](./decisions.md); судьба `flow` и `eval` там зафиксирована в **D67**
+(зависимости) и **D85** (оба вынесены в отдельные модули с теми же границами
+импортов: `eval` — ноль внешних зависимостей, `flow` — две jsonschema-библиотеки
+ради схем `In`/`Out`).
 
 | #   | Решение                                                                                                | Обоснование                                                                                                                                                                                          | Отвергнуто                     |
 | --- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
@@ -766,9 +766,9 @@ README описывают именно это поведение.
   фрагментов tool_calls по индексу, `stream_options.include_usage`). `ollama` и
   `gigachat` стриминг не реализуют и идут через откат (I-19).
 - `Chain(ChainConfig, ...Client)`: фолбэк-цепочка с ретраями и `Retry-After`.
-- `Chain` не реализует `SupportsNativeSchema`, поэтому `SupportsNativeSchema(chain)`
-  = `false`: `kit.Generate`/`model.Structurer` инлайнят схему даже при
-  `SchemaNative`, если все звенья цепочки умеют нативную.
+- `Chain` пробрасывает `SupportsNativeSchema`: `chainClient` отвечает `true` только
+  если **каждое** звено поддерживает нативную схему, а на не-нативном звене
+  `Request.SchemaMode` понижается до `SchemaInline()`.
 - `History`/`Counter`/`ByteCounter`: обрезка истории по бюджету с сохранением пар
   `tool_call`/`tool` и стабильного системного префикса.
 - `internal/httpjson`: `Config`, `NewClient` (ретраи, `Retry-After`),
@@ -1056,3 +1056,23 @@ label)` читает `cls_threshold` (D65).
 - `turn` получил `sync.Mutex` и аксессоры (`takeCall`, `takeInvalidTry`,
   `markUntrusted`/`isUntrusted`, `reserveApproval`/`releaseApproval`); consume-once
   одобрений резервирует fingerprint до вызова `Approver` (BR-53).
+
+### 5.29 Безопасность захода: egress, права, ingest/поиск, ACL, L2 (D80–D83)
+
+- Egress (D82, BR-111): `checkEgress` разбирает аргументы как JSON
+  (`egressHosts`) и ищет хост во всех строковых значениях, а не в сыром тексте;
+  `https:\/\/host` и `\u003a` больше не обходят `EgressHosts`.
+- Порядок «право → лимит» (D81, BR-110): `Authorize` идёт раньше `rateLimit` во
+  всех операциях, а `Chat`/`ChatStream` проверяют `chat` сразу после принципала —
+  до guard, памяти, recall и лимита. `CallTool` проверяет право инструмента до
+  лимита, сохраняя security event при отказе.
+- `Ingest` (D83, BR-112): сначала guard каждого чанка, затем эмбеддинг
+  **маскированного** текста; карантинный чанк не эмбеддится вовсе. Новый рельс не
+  вводится, параллельный guard в этот заход не входит.
+- `Search` (D83, BR-112): запрос проходит рельс `input`; `Reject` —
+  `ErrGuardReject` до эмбеддинга, `Mask` — то, что уходит в эмбеддер, BM25 и трейс.
+- `Doc.ACL` (D83, BR-113): пустой ACL — `ErrInvalidArgs` до эмбеддинга и guard;
+  пустые роли отклоняются, дубликаты схлопываются.
+- `Config.GuardL2` обязателен (D80, BR-109): `nil` — `ErrInvalidConfig`, L1-only —
+  только `guard.L1Only()`; при нём `New` пишет warning, а `Health.GuardLayers` и
+  `Health.GuardL1Only` показывают состав слоёв.

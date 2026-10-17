@@ -3,6 +3,7 @@ package kit
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -218,9 +219,48 @@ func TestGuardRejectsAnUnknownFailOpenRail(t *testing.T) {
 	policy := parseTestPolicy(t, testPolicyMemory)
 	_, err := New(context.Background(), Config{
 		ES: discardES{}, LLM: &fakeLLM{}, Policy: policy,
+		GuardL2:       guard.L1Only(),
 		GuardFailOpen: []guard.Rail{"sideways"},
 	})
 	if !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("err = %v, want ErrInvalidConfig for an unknown rail", err)
+	}
+}
+
+// TestNewRequiresAnExplicitGuardLayerChoice: a nil Config.GuardL2 no longer
+// means "L1 only" by accident — the weaker composition must be requested with
+// guard.L1Only() (D80).
+func TestNewRequiresAnExplicitGuardLayerChoice(t *testing.T) {
+	policy := parseTestPolicy(t, testPolicyMemory)
+	_, err := New(context.Background(), Config{ES: discardES{}, LLM: &fakeLLM{}, Policy: policy})
+	if !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("err = %v, want ErrInvalidConfig: a nil GuardL2 must be refused", err)
+	}
+}
+
+func TestL1OnlyIsReportedInHealth(t *testing.T) {
+	app := newRealApp(t, discardES{}, &fakeLLM{}, nil, testPolicyMemory, nil)
+	h := app.Health()
+	if !h.GuardL1Only {
+		t.Fatal("Health().GuardL1Only must be true for guard.L1Only()")
+	}
+	if len(h.GuardLayers) != 1 || h.GuardLayers[0] != "L1" {
+		t.Fatalf("GuardLayers = %v, want [L1]", h.GuardLayers)
+	}
+}
+
+func TestL1OnlyWarnsAtStartup(t *testing.T) {
+	policy := parseTestPolicy(t, testPolicyMemory)
+	logs := &syncBuffer{}
+	app, err := New(context.Background(), Config{
+		ES: discardES{}, LLM: &fakeLLM{}, Policy: policy, GuardL2: guard.L1Only(),
+		Logger: slog.New(slog.NewTextHandler(logs, nil)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = app.Close(context.Background()) }()
+	if !strings.Contains(logs.String(), "L1 only") {
+		t.Fatalf("no L1-only warning logged: %q", logs.String())
 	}
 }

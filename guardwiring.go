@@ -10,17 +10,25 @@ import (
 )
 
 // guardLayers is the pipeline the core builds: the deterministic L1 rule layer,
-// plus the optional ML layer (Config.GuardL2). A plugin that wants to combine
-// several ML detectors composes them into a single guard.Detector and passes it
-// as GuardL2 — the core knows nothing about ensembles.
+// plus the ML layer (Config.GuardL2). A plugin that wants to combine several ML
+// detectors composes them into a single guard.Detector and passes it as GuardL2 —
+// the core knows nothing about ensembles. guard.L1Only() is the explicit
+// opt-out: it is dropped here, so the layer list stays exactly `L1` (D80).
 func (c Config) guardLayers() ([]guard.Detector, string) {
 	layers := []guard.Detector{rules.New()}
-	model := ""
-	if c.GuardL2 != nil {
-		layers = append(layers, c.GuardL2)
-		model = c.GuardL2.Name()
+	if c.GuardL2 == nil || guard.IsL1Only(c.GuardL2) {
+		return layers, ""
 	}
-	return layers, model
+	return append(layers, c.GuardL2), c.GuardL2.Name()
+}
+
+// layerNames is the audit view of the composition, e.g. ["L1"] or ["L1", "L2"].
+func layerNames(layers []guard.Detector) []string {
+	out := make([]string, 0, len(layers))
+	for _, l := range layers {
+		out = append(out, l.Name())
+	}
+	return out
 }
 
 // guardArtifact is the ML artifact digest folded into the guard version. It comes

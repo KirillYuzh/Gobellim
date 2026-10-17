@@ -10,6 +10,9 @@ import (
 	"github.com/KirillYuzh/Gobellim/internal/httpjson"
 )
 
+// TEIConfig configures NewTEI. BaseURL is required; APIKey, when set, is sent as
+// a Bearer token, Headers are sent with every request, and Model, when set, is
+// used as the client name.
 type TEIConfig struct {
 	BaseURL    string
 	Model      string
@@ -18,11 +21,14 @@ type TEIConfig struct {
 	HTTPClient *http.Client
 }
 
+// TEIClient is a Reranker backed by a Text Embeddings Inference /rerank endpoint.
 type TEIClient struct {
 	cfg TEIConfig
 	hc  *http.Client
 }
 
+// NewTEI returns a TEI reranker. BaseURL is required, otherwise it returns
+// ErrInvalidConfig.
 func NewTEI(cfg TEIConfig) (*TEIClient, error) {
 	if cfg.BaseURL == "" {
 		return nil, fmt.Errorf("rerank: BaseURL is required: %w", core.ErrInvalidConfig)
@@ -30,6 +36,7 @@ func NewTEI(cfg TEIConfig) (*TEIClient, error) {
 	return &TEIClient{cfg: cfg, hc: httpjson.Client(cfg.HTTPClient)}, nil
 }
 
+// Name returns Model when configured, otherwise "tei".
 func (c *TEIClient) Name() string {
 	if c.cfg.Model != "" {
 		return c.cfg.Model
@@ -37,6 +44,8 @@ func (c *TEIClient) Name() string {
 	return "tei"
 }
 
+// Rerank posts the query and documents to /rerank and parses the returned
+// indices and scores; upstream and decode failures are wrapped with ErrProvider.
 func (c *TEIClient) Rerank(ctx context.Context, query string, documents []string) ([]Rank, error) {
 	if len(documents) == 0 {
 		return nil, nil

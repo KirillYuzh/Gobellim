@@ -9,15 +9,21 @@ import (
 	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
+// Doc is one document in a bulk request: ID is written as _id when non-empty,
+// and Source is marshalled as the document body.
 type Doc struct {
 	ID     string
 	Source any
 }
 
+// BulkBody returns a newline-delimited _bulk body using the index action for
+// each doc.
 func BulkBody(index string, docs []Doc) ([]byte, error) {
 	return bulkBody("index", index, docs)
 }
 
+// BulkCreateBody returns a newline-delimited _bulk body using the create action
+// for each doc.
 func BulkCreateBody(index string, docs []Doc) ([]byte, error) {
 	return bulkBody("create", index, docs)
 }
@@ -45,6 +51,8 @@ func bulkBody(op, index string, docs []Doc) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// Chunk is one indexed piece of a source document, carrying tenant, ACL, text,
+// vector, and document version.
 type Chunk struct {
 	ID         string
 	DocID      string
@@ -60,6 +68,8 @@ type Chunk struct {
 	Quarantine bool
 }
 
+// Document returns the chunk's Elasticsearch source map. Quarantined chunks
+// omit text, vector, and embed_model, and CreatedAt defaults to now when zero.
 func (c Chunk) Document() map[string]any {
 	doc := map[string]any{
 		"doc_id":      c.DocID,
@@ -91,6 +101,9 @@ func (c Chunk) Document() map[string]any {
 	return doc
 }
 
+// ValidateChunk rejects a quarantined chunk that carries text or a vector, and a
+// non-quarantined chunk without a vector or with a vector length that differs
+// from dims when dims > 0. Errors wrap core.ErrInvalidArgs.
 func ValidateChunk(c Chunk, dims int) error {
 	if c.Quarantine {
 		if c.Text != "" {
@@ -110,6 +123,8 @@ func ValidateChunk(c Chunk, dims int) error {
 	return nil
 }
 
+// ChunksBulkBody validates every chunk and encodes them into a _bulk body for
+// IndexChunks.
 func ChunksBulkBody(chunks []Chunk, dims int) ([]byte, error) {
 	docs := make([]Doc, 0, len(chunks))
 	for _, c := range chunks {

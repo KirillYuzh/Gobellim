@@ -73,7 +73,7 @@ To run the bot from source, start only the dependencies:
 docker compose up -d elasticsearch grafana embeddings
 
 cp demo/.env.example demo/.env # add GIGACHAT_CREDENTIALS
-go run ./demo/cmd/bot
+go -C demo run ./cmd/bot
 ```
 
 The service listens on `:8080` (`KIT_ADDR`) and logs `bot listening` once it is
@@ -82,12 +82,12 @@ ready.
 By default the bot calls the `embeddings` server. With the `ort` tag and
 `EMBED_LOCAL=true` it runs the in-process ONNX embedder instead, reading
 `<KIT_MODELS_DIR>/<org>__<name>/` (download the weights first with
-`go run ./cmd/kitctl model pull intfloat/multilingual-e5-small`); `EMBED_MODEL`
+`go -C cmd run ./kitctl model pull intfloat/multilingual-e5-small`); `EMBED_MODEL`
 `EMBED_MODEL` then names the local model (its dimension comes from the graph),
 and the `embeddings` service is no longer needed.
 
 ```sh
-EMBED_LOCAL=true CGO_LDFLAGS="-L.ort/lib" go run -tags ort ./demo/cmd/bot
+EMBED_LOCAL=true CGO_LDFLAGS="-L.ort/lib" go -C demo run -tags ort ./cmd/bot
 ```
 
 ## Endpoints
@@ -144,7 +144,7 @@ rejected with `400`.
 L2 is available only in a build with the `ort` tag:
 
 ```sh
-CGO_LDFLAGS="-L.ort/lib" go run -tags ort ./demo/cmd/bot
+CGO_LDFLAGS="-L.ort/lib" go -C demo run -tags ort ./cmd/bot
 ```
 
 Without the tag the bot starts with L1 alone and logs `guard L2 not enabled`.
@@ -154,7 +154,7 @@ git; see [tools/gliner](../tools/gliner/README.md) for how to build them.
 ## TUI
 
 ```sh
-go run ./demo/cmd/tui
+go -C demo run ./cmd/tui
 ```
 
 Logs in as `alice` and stays open. Any line that does not start with `/` goes to
@@ -176,9 +176,9 @@ Flags: `-url` (or `KIT_BOT_URL`), `-timeout`. `NO_COLOR` disables the colors.
 Read traces, observations and scores straight from Elasticsearch:
 
 ```sh
-go run ./demo/cmd/traces                      # the 20 latest traces
-go run ./demo/cmd/traces -name chat -tenant bot
-go run ./demo/cmd/traces -trace <trace-id>    # one trace in full
+go -C demo run ./cmd/traces                      # the 20 latest traces
+go -C demo run ./cmd/traces -name chat -tenant bot
+go -C demo run ./cmd/traces -trace <trace-id>    # one trace in full
 ```
 
 Flags: `-url` (or `KIT_ES_URL`), `-limit`, `-name`, `-tenant`, `-trace`.

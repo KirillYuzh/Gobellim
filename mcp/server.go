@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/KirillYuzh/Gobellim"
+	kit "github.com/KirillYuzh/Gobellim"
 	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
@@ -21,6 +21,8 @@ const (
 	codeMethodNotFound = -32601
 )
 
+// ServerTool is a tool exposed by the server: a name, description, input schema,
+// and handler.
 type ServerTool struct {
 	Name        string
 	Description string
@@ -28,6 +30,8 @@ type ServerTool struct {
 	Handler     func(ctx context.Context, args json.RawMessage) (string, error)
 }
 
+// FromTool adapts a kit tool for the server; calls go through app.CallTool so
+// authorization, guard, egress and tracing still apply.
 func FromTool(app *kit.App, def *kit.ToolDef) ServerTool {
 	return ServerTool{
 		Name:        def.Name(),
@@ -39,6 +43,8 @@ func FromTool(app *kit.App, def *kit.ToolDef) ServerTool {
 	}
 }
 
+// ServerConfig configures the MCP server: identity, tools, allowed browser
+// origins, and a logger.
 type ServerConfig struct {
 	Name           string
 	Version        string
@@ -47,6 +53,8 @@ type ServerConfig struct {
 	Logger         *slog.Logger
 }
 
+// Server is a stateless MCP JSON-RPC server exposing tools over stdio or HTTP;
+// it issues no session id and sends no server notifications.
 type Server struct {
 	cfg  ServerConfig
 	byID map[string]ServerTool
@@ -54,6 +62,8 @@ type Server struct {
 	log  *slog.Logger
 }
 
+// NewServer builds a server from cfg, rejecting an empty name, empty tool names,
+// nil handlers, and duplicate tool names.
 func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.Name == "" {
 		return nil, fmt.Errorf("mcp: server name is required: %w", core.ErrInvalidConfig)
@@ -78,8 +88,11 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	return &Server{cfg: cfg, byID: byID, list: append([]ServerTool(nil), cfg.Tools...), log: log}, nil
 }
 
+// Name returns the configured server name.
 func (s *Server) Name() string { return s.cfg.Name }
 
+// ServeStdio reads one JSON-RPC message per line from in and writes each
+// response line to out until the input ends or ctx is cancelled.
 func (s *Server) ServeStdio(ctx context.Context, in io.Reader, out io.Writer) error {
 	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 0, 64*1024), maxMessageBytes)
@@ -110,6 +123,8 @@ func (s *Server) ServeStdio(ctx context.Context, in io.Reader, out io.Writer) er
 	return sc.Err()
 }
 
+// Handler returns an http.Handler for streamable HTTP: it accepts POST JSON-RPC
+// requests only and rejects requests whose Origin is not in AllowedOrigins.
 func (s *Server) Handler() http.Handler { return http.HandlerFunc(s.serveHTTP) }
 
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {

@@ -9,6 +9,6 @@ import (
 )
 
 func New(_, _ string, log *slog.Logger) guard.Detector {
-	log.Info("guard L2 not enabled", "hint", "rebuild with -tags ort")
-	return nil
+	log.Info("guard L2 not enabled: running L1 only", "hint", "rebuild with -tags ort")
+	return guard.L1Only()
 }

@@ -15,15 +15,23 @@ import (
 	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
+// Action is the decision a verdict carries, ordered from Allow (least severe)
+// to Reject (most severe).
 type Action int
 
 const (
+	// Allow accepts the operation and leaves the text unchanged.
 	Allow Action = iota
+	// Detect records the finding without changing the text or blocking the
+	// operation; it is used for injection/unsafe findings on the output rail.
 	Detect
+	// Mask rewrites PII and SECRET spans in Verdict.Text with placeholders.
 	Mask
+	// Reject blocks the operation and fills Verdict.Tripwire.
 	Reject
 )
 
+// String returns the lowercase action name, or "unknown" for an out-of-range value.
 func (a Action) String() string {
 	switch a {
 	case Allow:
@@ -39,15 +47,24 @@ func (a Action) String() string {
 	}
 }
 
+// Category is the kind of finding; it selects the action for a rail in the decision table.
 type Category string
 
 const (
-	CatPII       Category = "PII"
-	CatSecret    Category = "SECRET"
+	// CatPII marks personally identifiable information; it maps to Mask.
+	CatPII Category = "PII"
+	// CatSecret marks credentials and tokens; it maps to Mask.
+	CatSecret Category = "SECRET"
+	// CatInjection marks prompt-injection attempts; it maps to Reject, or Detect
+	// on the output rail.
 	CatInjection Category = "INJECTION"
-	CatUnsafe    Category = "UNSAFE"
+	// CatUnsafe marks unsafe or harmful content; it maps to Reject, or Detect on
+	// the output rail.
+	CatUnsafe Category = "UNSAFE"
 )
 
+// Finding is one detector hit: a category and label at a rune span in the
+// original text, with the detector's score and layer name.
 type Finding struct {
 	Category Category
 	Label    string
@@ -57,12 +74,17 @@ type Finding struct {
 	Layer    string
 }
 
+// Tripwire explains a Reject verdict: the deciding labels, the rule and layer
+// that fired, and rail/category metadata.
 type Tripwire struct {
 	Reason   string
 	RuleID   string
 	Metadata map[string]any
 }
 
+// Verdict is the result of Pipeline.Check: the action, the findings that drove
+// it, the possibly masked text, and provenance such as version, degradation,
+// and truncation.
 type Verdict struct {
 	Action   Action
 	Rail     Rail
@@ -80,6 +102,8 @@ type Verdict struct {
 	InspectedRunes int
 }
 
+// ObservationMetadata reports truncation for the trace observation, or nil when
+// the whole text was inspected.
 func (v Verdict) ObservationMetadata() map[string]any {
 	if !v.Truncated {
 		return nil
@@ -90,6 +114,8 @@ func (v Verdict) ObservationMetadata() map[string]any {
 	}
 }
 
+// Substitution records a value replaced by Mask so a caller may restore it for
+// tool arguments under AllowPII.
 type Substitution struct {
 	Placeholder string
 	Category    Category
@@ -104,11 +130,15 @@ func (v Verdict) withoutSubstitutions() Verdict {
 	return v
 }
 
+// Detector is one guard layer: Detect returns findings for text and Name
+// identifies the layer; the rail is not passed to detectors.
 type Detector interface {
 	Detect(ctx context.Context, text string) ([]Finding, error)
 	Name() string
 }
 
+// NaturalText is an optional Detector capability: when UsesNaturalText reports
+// true the detector receives the original text instead of the canonical form.
 type NaturalText interface {
 	Detector
 	UsesNaturalText() bool
@@ -120,11 +150,17 @@ func usesNaturalText(d Detector) bool {
 }
 
 const (
-	DefaultMaxChars    = 8000
-	DefaultCacheSize   = 4096
+	// DefaultMaxChars is the default cap on inspected runes.
+	DefaultMaxChars = 8000
+	// DefaultCacheSize is the default number of cached findings.
+	DefaultCacheSize = 4096
+	// DefaultWindowChars is the default detector window; longer text is scanned
+	// in overlapping windows.
 	DefaultWindowChars = 1024
 )
 
+// Options configures New: detector layers and ensembles, per-rail optional
+// layers for degradation, limits and window size, versioning, and callbacks.
 type Options struct {
 	Layers               []Detector
 	Ensembles            []Ensemble
@@ -141,6 +177,8 @@ type Options struct {
 	now func() time.Time
 }
 
+// Pipeline evaluates the configured guard layers for a rail and produces a
+// Verdict; create it with New and call Check.
 type Pipeline struct {
 	layers      []layer
 	degradation degradationPolicy
@@ -153,6 +191,8 @@ type Pipeline struct {
 	counters    counters
 }
 
+// New builds a Pipeline from opts, applying defaults for limits, cache size,
+// and window, and rejecting duplicate or invalid layer configuration.
 func New(opts Options) (*Pipeline, error) {
 	if opts.MaxChars <= 0 {
 		opts.MaxChars = DefaultMaxChars
@@ -198,8 +238,13 @@ func (p *Pipeline) optionalOn(rail Rail, l layer, d Detector) bool {
 	return p.degradation.allows(rail, l.name, d.Name())
 }
 
+// Version returns the guard version recorded in every verdict, built from the
+// configured or derived version plus the detector artifact hash.
 func (p *Pipeline) Version() string { return p.version }
 
+// Check runs every configured layer over text for the rail and returns a
+// Verdict. Text is truncated to MaxChars, L1 reads the canonical form, decoded
+// variants are rescanned through L1, and a required detector error is returned.
 func (p *Pipeline) Check(ctx context.Context, rail Rail, text string) (Verdict, error) {
 	if !ValidRail(rail) {
 		return Verdict{}, fmt.Errorf("guard: unknown rail %q: %w", string(rail), core.ErrInvalidConfig)

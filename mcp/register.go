@@ -5,14 +5,18 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/KirillYuzh/Gobellim"
+	kit "github.com/KirillYuzh/Gobellim"
 	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
+// ToolPrefix returns the kit tool name for an MCP tool: mcp:<server>:<tool>.
 func ToolPrefix(server, tool string) string {
 	return "mcp:" + server + ":" + tool
 }
 
+// Register lists the client's tools and registers each with app as
+// mcp:<server>:<tool>, using the server's input schema and the egress effect.
+// Extra opts are applied after the defaults and may override them.
 func Register(ctx context.Context, app *kit.App, c *Client, opts ...kit.ToolOption) ([]*kit.ToolDef, error) {
 	if app == nil {
 		return nil, fmt.Errorf("mcp: app is required: %w", core.ErrInvalidConfig)

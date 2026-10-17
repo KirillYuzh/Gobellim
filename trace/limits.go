@@ -3,10 +3,15 @@ package trace
 import "unicode/utf8"
 
 const (
+	// DefaultMaxStringLength is the maximum exported string length in bytes;
+	// clipping backs off to a rune boundary.
 	DefaultMaxStringLength = 131072
-	DefaultMaxDepth        = 8
-	DefaultMaxArrayLength  = 50
-	DefaultMaxObjectKeys   = 50
+	// DefaultMaxDepth is the maximum nesting depth exported from metadata.
+	DefaultMaxDepth = 8
+	// DefaultMaxArrayLength is the maximum number of elements exported from a slice.
+	DefaultMaxArrayLength = 50
+	// DefaultMaxObjectKeys is the maximum number of keys exported from a map.
+	DefaultMaxObjectKeys = 50
 )
 
 type exportConfig struct {

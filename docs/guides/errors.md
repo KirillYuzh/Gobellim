@@ -10,21 +10,21 @@
 (`errors.go`). Оборачиваются они с сохранением причины (`%w`, `errors.Join`),
 поэтому проверяются через `errors.Is`.
 
-| Sentinel              | Откуда приходит                                                                                         | Слой              |
-| --------------------- | ------------------------------------------------------------------------------------------------------- | ----------------- |
-| `ErrInvalidConfig`    | `kit.New`, сборка guard/чанкера/писателя, невалидный `policy.yaml`, неполный конфиг провайдера          | старт             |
-| `ErrUnauthorized`     | нет/пуст принципал; `Ingest`/`Search`/`Delete` без `Tenant`; RBAC-отказ; эгресс заблокирован            | примитив / ops    |
-| `ErrGuardReject`      | rail `input` вернул `reject` (fast-fail)                                                                | guard             |
-| `ErrGuardUnavailable` | guard недоступен (fail-closed) или таймаут очереди ORT                                                  | guard             |
-| `ErrProvider`         | провайдер LLM/эмбеддера/ES вернул не-2xx; ответ `Generate` не декодировался; ошибка item `_bulk`        | провайдер         |
-| `ErrInvalidArgs`      | args не JSON или не прошли схему; пустой `SearchRequest.Query`; нет `user`/`assistant`; пустой `doc_id` | детерминированный |
-| `ErrMaxSteps`         | исчерпан `MaxSteps` цикла                                                                               | цикл              |
-| `ErrBudget`           | превышен `Config.MaxTotalTokens` за ход                                                                 | цикл              |
-| `ErrRateLimited`      | исчерпан лимит на тенанта (`Config.RateLimit`, `BR-86`)                                                 | примитив / ops    |
-| `ErrApprovalRequired` | инструмент с `RequireApproval` без `Approver`, отказ или повтор fingerprint                             | approval          |
-| `ErrToolNotFound`     | `App.CallTool` для неизвестного инструмента (в `Chat` — результат-ошибка модели)                        | CallTool          |
-| `ErrTool`             | сбой, помеченный как падение внутри инструмента: ошибка хука или сбой MCP-инструмента                   | инструмент        |
-| `ErrNotFound`         | в `eval` — трейс, который рекордер не получил                                                           | eval              |
+| Sentinel              | Откуда приходит                                                                                                           | Слой              |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| `ErrInvalidConfig`    | `kit.New`, сборка guard/чанкера/писателя, невалидный `policy.yaml`, неполный конфиг провайдера, нет `GuardL2`             | старт             |
+| `ErrUnauthorized`     | нет/пуст принципал; `Ingest`/`Search`/`Delete` без `Tenant`; RBAC-отказ; эгресс заблокирован                              | примитив / ops    |
+| `ErrGuardReject`      | rail `input` вернул `reject` (fast-fail)                                                                                  | guard             |
+| `ErrGuardUnavailable` | guard недоступен (fail-closed) или таймаут очереди ORT                                                                    | guard             |
+| `ErrProvider`         | провайдер LLM/эмбеддера/ES вернул не-2xx; ответ `Generate` не декодировался; ошибка item `_bulk`                          | провайдер         |
+| `ErrInvalidArgs`      | args не JSON или не прошли схему; пустой `SearchRequest.Query`; нет `user`/`assistant`; пустой `doc_id`; пустой `Doc.ACL` | детерминированный |
+| `ErrMaxSteps`         | исчерпан `MaxSteps` цикла                                                                                                 | цикл              |
+| `ErrBudget`           | превышен `Config.MaxTotalTokens` за ход                                                                                   | цикл              |
+| `ErrRateLimited`      | исчерпан лимит на тенанта (`Config.RateLimit`, `BR-86`)                                                                   | примитив / ops    |
+| `ErrApprovalRequired` | инструмент с `RequireApproval` без `Approver`, отказ или повтор fingerprint                                               | approval          |
+| `ErrToolNotFound`     | `App.CallTool` для неизвестного инструмента (в `Chat` — результат-ошибка модели)                                          | CallTool          |
+| `ErrTool`             | сбой, помеченный как падение внутри инструмента: ошибка хука или сбой MCP-инструмента                                     | инструмент        |
+| `ErrNotFound`         | в `eval` — трейс, который рекордер не получил                                                                             | eval              |
 
 > [!NOTE]
 > Эти три sentinel’а объявлены и размечаются (`error_kind`), и все три имеют

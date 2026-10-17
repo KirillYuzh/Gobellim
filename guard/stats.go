@@ -11,6 +11,8 @@ import (
 // len(LatencyBucketMillis)+1 counters.
 var LatencyBucketMillis = []float64{0.1, 0.5, 1, 2, 5, 10, 25, 50, 100, 250}
 
+// Stats is a snapshot of pipeline counters: scans, rejections, truncations,
+// per-rail degradations, and the latency histogram.
 type Stats struct {
 	Scans        uint64
 	Blocked      uint64
@@ -83,6 +85,7 @@ func (c *counters) snapshot() Stats {
 	return s
 }
 
+// Stats returns a snapshot of the pipeline's counters; its maps and slices are copies.
 func (p *Pipeline) Stats() Stats { return p.counters.snapshot() }
 
 func (p *Pipeline) count(rail Rail, v Verdict) { p.counters.count(rail, v) }

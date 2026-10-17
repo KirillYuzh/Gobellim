@@ -3,10 +3,13 @@ package kit
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/KirillYuzh/Gobellim/authz"
+	"github.com/KirillYuzh/Gobellim/guard"
 	"github.com/KirillYuzh/Gobellim/model"
 )
 
@@ -64,12 +67,12 @@ func TestShippedClientsLetNewEnforceI06(t *testing.T) {
 
 	for name, client := range map[string]model.Client{"openai": openai, "ollama": ollama, "gigachat": gigachat} {
 		policy := mustPolicy(t, testPolicy)
-		cfg := Config{ES: discardES{}, LLM: client, Policy: policy, GuardMaxChars: window + 1}
+		cfg := Config{ES: discardES{}, LLM: client, Policy: policy, GuardMaxChars: window + 1, GuardL2: guard.L1Only()}
 		if _, err := New(context.Background(), cfg); !errors.Is(err, ErrInvalidConfig) {
 			t.Fatalf("%s: err = %v, want ErrInvalidConfig", name, err)
 		}
 
-		cfg = Config{ES: discardES{}, LLM: client, Policy: policy, GuardMaxChars: window - 1}
+		cfg = Config{ES: discardES{}, LLM: client, Policy: policy, GuardMaxChars: window - 1, GuardL2: guard.L1Only()}
 		app, err := New(context.Background(), cfg)
 		if err != nil {
 			t.Fatalf("%s: a guard window inside the model window must be accepted: %v", name, err)
@@ -85,5 +88,7 @@ func newConfigWithWindow(window, guardMaxChars int) Config {
 		ES:            discardES{},
 		LLM:           windowLLM{window: window},
 		GuardMaxChars: guardMaxChars,
+		GuardL2:       guard.L1Only(),
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }

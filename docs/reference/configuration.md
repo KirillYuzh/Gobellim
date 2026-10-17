@@ -11,7 +11,7 @@
 | `Pricing`          | `model.Pricing`              | нулевое (стоимость `0`)                | Цена за 1M токенов; библиотека считает `usage.cost` и `cost`.                             |
 | `Embedder`         | `embed.Embedder`             | `nil`                                  | Нужен только для `Ingest` и `Search`.                                                    |
 | `Policy`           | `*authz.Policy`              | — (обязательно)                        | Разобранный `policy.yaml`.                                                               |
-| `GuardL2`          | `guard.Detector`             | `nil`                                  | ML-слой guard (плагин L2, не входит в сборку по умолчанию); при `nil` остаётся только детерминированный L1. |
+| `GuardL2`          | `guard.Detector`             | — (обязательно)                        | ML-слой guard; обязателен. L1-only запрашивается явно через `guard.L1Only()`; `nil` — `ErrInvalidConfig` (D80, BR-109). |
 <!-- derived: BR-26 -->
 | `GuardFailOpen`    | `[]guard.Rail`               | `nil` (fail-closed везде)              | Рельсы, где упавший ML-слой не роняет запрос (BR-06, D73).                         |
 | `GuardMaxChars`    | `int`                        | `8000` (`guard.DefaultMaxChars`)       | Лимит текста для guard.                                                                  |
@@ -70,13 +70,15 @@ type RateLimit struct {
 
 ### Слои guard: L1 в сборке по умолчанию, L2 — плагин
 
-Детерминированный **L1** (фразы, regex, `Canonicalize`, `DecodedVariants`) входит в
-сборку по умолчанию и работает всегда. **L2** — ML-слой (`Config.GuardL2`) — не часть
-ядра: это опциональные плагины `guard-onnx` / `guard-remote`, которые требуют либо
-`-tags ort` (нативный ONNX Runtime), либо удалённого сервиса. При `GuardL2 == nil`
-остаётся только L1.
+Детерминированный **L1** (фразы, regex, `Canonicalize`, `DecodedVariants`) работает
+всегда. **L2** — ML-слой (`Config.GuardL2`) — обязателен: `kit.New` возвращает
+`ErrInvalidConfig` при `nil` (D80, BR-109). Поставляемый ML-детектор — `guard/gliner`
+(сборка с `-tags ort`); для намеренно L1-only развёртывания передают `guard.L1Only()`.
+Плагины `guard-remote`, `store-es` и `trace-otel` не реализованы — существуют только
+контракты (`kittest.DetectorContract`, `kittest.SinkContract`). Состав слоёв отдают
+`Health.GuardLayers` и `Health.GuardL1Only`.
 
-> Производное от BR-27 (`docs/internals/business-rules.md`) и I-13.
+> Производное от BR-27 и BR-109 (`docs/internals/business-rules.md`) и I-13.
 
 ### Политика текста трейса
 

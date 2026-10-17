@@ -16,11 +16,19 @@ import (
 )
 
 const (
-	DefaultMemoryLimit  = 20
-	DefaultMemoryTopK   = 5
+	// DefaultMemoryLimit is the number of recent thread messages loaded when
+	// MemoryLoad is given a non-positive limit.
+	DefaultMemoryLimit = 20
+	// DefaultMemoryTopK is the recall result count used when MemoryRecall is given
+	// a non-positive topK and Config.MemoryRecall is zero.
+	DefaultMemoryTopK = 5
+	// DefaultMemoryRecall is the zero value of Config.MemoryRecall, which disables
+	// semantic recall.
 	DefaultMemoryRecall = 0
 )
 
+// MemoryHit is one recalled memory message, with its similarity score and whether
+// the originating turn was untrusted.
 type MemoryHit struct {
 	Role      model.Role
 	Content   string
@@ -60,10 +68,10 @@ func (a *App) memoryPrincipal(pr core.Principal) error {
 	if pr.UserID == "" {
 		return fmt.Errorf("kit: memory requires a principal with a user ID: %w", core.ErrUnauthorized)
 	}
-	if err := a.rateLimit(pr); err != nil {
+	if err := a.policy.Authorize(pr, authz.PermMemory); err != nil {
 		return err
 	}
-	return a.policy.Authorize(pr, authz.PermMemory)
+	return a.rateLimit(pr)
 }
 
 func (a *App) memoryLoad(ctx context.Context, pr core.Principal, threadID string, limit int, traceID string) ([]model.Message, bool, error) {
@@ -324,6 +332,9 @@ func (a *App) memorySetWorking(ctx context.Context, pr core.Principal, threadID 
 	return err
 }
 
+// MemoryLoad returns up to limit recent messages of threadID in chronological
+// order; a non-positive limit uses Config.MemoryLimit. It requires the memory
+// permission and a principal with a user ID and tenant.
 func (a *App) MemoryLoad(ctx context.Context, threadID string, limit int) ([]model.Message, error) {
 	pr, traceID, done, err := a.beginMemory(ctx, "load", map[string]any{"thread_id": threadID})
 	if err != nil {
@@ -334,6 +345,9 @@ func (a *App) MemoryLoad(ctx context.Context, threadID string, limit int) ([]mod
 	return msgs, err
 }
 
+// MemoryAppend appends user and assistant messages with non-empty content to
+// threadID, recording them as trusted. It requires the memory permission and a
+// principal with a user ID and tenant.
 func (a *App) MemoryAppend(ctx context.Context, threadID string, msgs ...model.Message) error {
 	pr, traceID, done, err := a.beginMemory(ctx, "append", map[string]any{"thread_id": threadID, "messages": len(msgs)})
 	if err != nil {
@@ -343,6 +357,10 @@ func (a *App) MemoryAppend(ctx context.Context, threadID string, msgs ...model.M
 	return a.memoryAppend(ctx, pr, threadID, msgs, false, traceID)
 }
 
+// MemoryRecall embeds query and returns up to topK semantically similar messages
+// across the principal's threads; a non-positive topK uses Config.MemoryRecall
+// then DefaultMemoryTopK. It requires Config.Embedder, a non-empty query, the
+// memory permission, and a principal with a user ID and tenant.
 func (a *App) MemoryRecall(ctx context.Context, query string, topK int) ([]MemoryHit, error) {
 	pr, traceID, done, err := a.beginMemory(ctx, "recall", map[string]any{"query_len": len(query), "top_k": topK})
 	if err != nil {
@@ -352,6 +370,9 @@ func (a *App) MemoryRecall(ctx context.Context, query string, topK int) ([]Memor
 	return a.memoryRecallHits(ctx, pr, query, topK, traceID)
 }
 
+// MemoryClear deletes all messages of threadID for the principal and returns the
+// number deleted. It requires the memory permission and a principal with a user
+// ID and tenant.
 func (a *App) MemoryClear(ctx context.Context, threadID string) (int, error) {
 	pr, traceID, done, err := a.beginMemory(ctx, "clear", map[string]any{"thread_id": threadID})
 	if err != nil {
@@ -361,6 +382,9 @@ func (a *App) MemoryClear(ctx context.Context, threadID string) (int, error) {
 	return a.memoryClear(ctx, pr, threadID, traceID)
 }
 
+// MemoryWorking returns the thread's working-memory map, or an empty map when
+// none exists. It requires Config.ES, the memory permission, and a principal with
+// a user ID and tenant.
 func (a *App) MemoryWorking(ctx context.Context, threadID string) (map[string]any, error) {
 	pr, traceID, done, err := a.beginMemory(ctx, "working", map[string]any{"thread_id": threadID})
 	if err != nil {
@@ -370,6 +394,8 @@ func (a *App) MemoryWorking(ctx context.Context, threadID string) (map[string]an
 	return a.memoryWorking(ctx, pr, threadID, traceID)
 }
 
+// MemorySetWorking replaces the thread's working-memory document with data. It
+// requires the memory permission and a principal with a user ID and tenant.
 func (a *App) MemorySetWorking(ctx context.Context, threadID string, data map[string]any) error {
 	pr, traceID, done, err := a.beginMemory(ctx, "set_working", map[string]any{"thread_id": threadID})
 	if err != nil {

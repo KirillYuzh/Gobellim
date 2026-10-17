@@ -211,8 +211,10 @@ Fail-closed: недоступность guard (`ErrGuardUnavailable`) откло
 
 Fail-closed — это про реакцию на ошибку, а не про состав слоёв. L1
 (детерминированный, regex и контрольные суммы) доступен из коробки; L2 —
-плагин: `guard-onnx` собирается с `-tags ort`, `guard-remote` требует
-запущенного сервиса. Без L2 решения принимает L1.
+плагин: поставляемый ML-детектор — `guard/gliner` (сборка `-tags ort`), а
+`guard-remote` не реализован — удалённый guard вне границ v1. `Config.GuardL2`
+обязателен (`nil` → `ErrInvalidConfig`); режим только-L1 запрашивается явно
+через `guard.L1Only()`.
 
 Честные пределы (см. также [Guardrails](../concepts/guardrails.md)):
 
@@ -355,7 +357,8 @@ flowchart TD
 | Rule of Two не отключён (`AllowEgressAfterUntrusted` = дефолт `false`)    | `Config.Egress` оставлен нулевым; opt-out не делайте без нужды           |
 | `RateLimit` задан на тенанта                                     | `Config.RateLimit{PerSecond, Burst}`; `PerSecond > 0` (`BR-86`)     |
 | `RequireApproval` на необратимых действиях + реальный `Approver` | `kit.RequireApproval(true)`, `Config.Approver`                      |
-| Guard L2 включён и fail-closed                                   | `GuardL2` задан; окно сверено (I-06)                                |
+| Guard L2 включён и fail-closed                                   | `GuardL2` задан (обязателен; не `guard.L1Only()`); окно сверено (I-06) |
+| Состав слоёв guard ожидаемый                                     | `Health().GuardLayers`; `GuardL1Only` — только для осознанного L1-only |
 | Окно guard ≤ окно модели                                         | `kitctl verify window --model-context …`                            |
 | Модели/паритет проверены                                         | `kitctl verify models`, `kitctl verify parity` (`-tags ort`)        |
 | `TraceText` = `masked`                                           | не выставлять `full` без нужды                                      |

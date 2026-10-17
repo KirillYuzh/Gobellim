@@ -134,21 +134,11 @@ if err != nil {
 app, err := kit.New(ctx, kit.Config{ES: es, LLM: llm, Policy: policy})
 ```
 
-> [!WARNING]
-> `model.Chain` **не пробрасывает** `SupportsNativeSchema()`. У результата `Chain`
-> этого метода нет, поэтому `model.SupportsNativeSchema(chain)` возвращает `false`.
-> Практическое следствие: `kit.Generate` и `model.Structurer` при `SchemaNative`
-> решат, что нативная схема недоступна, и **заинлайнят** схему в сообщение — даже
-> если все звенья её поддерживают. Если нативная схема важнее фолбэка, не оборачивайте
-> клиент в `Chain`, либо оберните сами и реализуйте метод:
-
-```go
-type chainNative struct {
-	model.Client
-}
-
-func (chainNative) SupportsNativeSchema() bool { return true }
-```
+> [!NOTE]
+> `model.Chain` **пробрасывает** `SupportsNativeSchema()`: цепочка сообщает `true`,
+> только если **каждое** звено поддерживает нативную схему. На не-нативном
+> звене `Request.SchemaMode` понижается до `SchemaInline`, поэтому смешанная
+> цепочка работает без ручной обёртки.
 
 `model.Chain` также требует хотя бы одного непустого клиента, иначе — `ErrInvalidConfig`.
 

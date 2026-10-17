@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/KirillYuzh/Gobellim/authz"
+	"github.com/KirillYuzh/Gobellim/guard"
 	"github.com/KirillYuzh/Gobellim/model"
 )
 
@@ -26,6 +27,7 @@ func TestIngestRequiresATokenizer(t *testing.T) {
 		LLM:      llm,
 		Embedder: fakeEmbedder{dim: 4},
 		Policy:   policy,
+		GuardL2:  guard.L1Only(),
 		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
@@ -34,7 +36,7 @@ func TestIngestRequiresATokenizer(t *testing.T) {
 	defer func() { _ = app.Close(context.Background()) }()
 
 	ctx := WithPrincipal(context.Background(), Principal{UserID: "u", Roles: []string{"admin"}, Tenant: "t"})
-	if err := app.Ingest(ctx, Doc{ID: "d1", Text: "текст"}); !errors.Is(err, ErrInvalidConfig) {
+	if err := app.Ingest(ctx, Doc{ID: "d1", Text: "текст", ACL: []string{"admin"}}); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("Ingest without a tokenizer err = %v, want ErrInvalidConfig", err)
 	}
 }

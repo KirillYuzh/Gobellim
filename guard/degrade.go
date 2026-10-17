@@ -9,6 +9,8 @@ import (
 	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
+// DefaultDegradedWarnInterval is the minimum interval between degraded-layer
+// warnings for a single rail.
 const DefaultDegradedWarnInterval = time.Minute
 
 type degradationPolicy struct {

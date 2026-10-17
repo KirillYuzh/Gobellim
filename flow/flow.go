@@ -13,24 +13,37 @@ import (
 	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
+// State is the JSON-serialisable key/value bag shared by steps and carried
+// through suspension and resume.
 type State map[string]any
 
+// Status is the outcome of a step run.
 type Status string
 
 const (
-	StatusSuccess   Status = "success"
-	StatusFailed    Status = "failed"
+	// StatusSuccess means the step produced an output.
+	StatusSuccess Status = "success"
+	// StatusFailed means the step returned an error.
+	StatusFailed Status = "failed"
+	// StatusSuspended means the step suspended and can be resumed from Result.Snapshot.
 	StatusSuspended Status = "suspended"
 )
 
+// Suspension is the error value a step returns to pause; it carries an optional
+// payload for the caller and Resume.
 type Suspension struct {
 	Payload any `json:"payload,omitempty"`
 }
 
+// Suspend returns a *Suspension carrying payload, which Run reports as
+// StatusSuspended together with a snapshot.
 func Suspend(payload any) *Suspension { return &Suspension{Payload: payload} }
 
+// Error implements error so a step can return a Suspension from its run function.
 func (s *Suspension) Error() string { return "flow: suspended" }
 
+// Result is the outcome of a step run: status, output or error, the state, and,
+// when suspended, the suspension and the snapshot needed to resume.
 type Result[Out any] struct {
 	Status     Status
 	Output     Out
@@ -40,10 +53,15 @@ type Result[Out any] struct {
 	State      State
 }
 
+// Step is a typed flow step that validates its input and output against the
+// JSON schemas derived from In and Out.
 type Step[In, Out any] struct {
 	r runnable
 }
 
+// New builds a step with the given id that runs fn. It derives input and output
+// schemas from In and Out and rejects an empty id or nil fn with
+// core.ErrInvalidConfig.
 func New[In, Out any](id string, fn func(ctx context.Context, st State, in In) (Out, error)) (*Step[In, Out], error) {
 	if id == "" {
 		return nil, fmt.Errorf("flow: step id is required: %w", core.ErrInvalidConfig)
@@ -62,6 +80,8 @@ func New[In, Out any](id string, fn func(ctx context.Context, st State, in In) (
 	return &Step[In, Out]{r: &runner[In, Out]{stepID: id, in: in, out: out, fn: fn}}, nil
 }
 
+// NewResumable builds a resumable step: a suspended Run can be continued with
+// Resume, whose payload is validated against the schema of Resume.
 func NewResumable[In, Out, Resume any](
 	id string,
 	fn func(ctx context.Context, st State, in In) (Out, error),
@@ -93,8 +113,12 @@ func NewResumable[In, Out, Resume any](
 	return step, nil
 }
 
+// ID returns the step's identifier.
 func (s *Step[In, Out]) ID() string { return s.r.id() }
 
+// Run validates in against the schema of In, invokes the step, and validates the
+// output; a Suspend error becomes StatusSuspended. A nil st is treated as an
+// empty State.
 func (s *Step[In, Out]) Run(ctx context.Context, st State, in In) Result[Out] {
 	if st == nil {
 		st = State{}
@@ -113,6 +137,10 @@ func (s *Step[In, Out]) Run(ctx context.Context, st State, in In) Result[Out] {
 	return success[Out](out, st)
 }
 
+// Resume decodes a snapshot from a suspended Run, validates data against the
+// Resume schema, and continues the step through its onResume function. It fails
+// with core.ErrInvalidArgs when the step is not resumable or the snapshot is
+// malformed.
 func (s *Step[In, Out]) Resume(ctx context.Context, snapshotBytes []byte, data any) Result[Out] {
 	var snap snapshot
 	if err := json.Unmarshal(snapshotBytes, &snap); err != nil {

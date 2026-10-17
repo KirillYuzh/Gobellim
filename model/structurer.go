@@ -11,6 +11,8 @@ import (
 
 const structureInstruction = "Convert the following text into JSON that validates against the provided JSON Schema. Return only JSON."
 
+// Structurer turns prose into JSON matching Schema using one chat call; an
+// empty Instructions field uses a built-in instruction.
 type Structurer struct {
 	Client       Client
 	Schema       json.RawMessage
@@ -27,6 +29,10 @@ func (s Structurer) instruction() string {
 	return structureInstruction
 }
 
+// Structure asks Client for JSON matching Schema and returns the raw text
+// without validating it. It returns an error wrapping core.ErrInvalidConfig
+// when Client or Schema is missing, and downgrades SchemaNative to SchemaInline
+// for clients without native schema support.
 func (s Structurer) Structure(ctx context.Context, prose string) (string, error) {
 	if s.Client == nil {
 		return "", fmt.Errorf("model: structurer: Client is required: %w", core.ErrInvalidConfig)

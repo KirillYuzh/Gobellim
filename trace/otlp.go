@@ -31,6 +31,8 @@ const (
 	otlpMaxAttempts          = 2
 )
 
+// OTLPOptions configures NewOTLP; Endpoint is required and holds the full
+// OTLP/HTTP JSON URL. Zero values fall back to the package defaults.
 type OTLPOptions struct {
 	Endpoint      string
 	Headers       map[string]string
@@ -42,6 +44,8 @@ type OTLPOptions struct {
 	Logger        *slog.Logger
 }
 
+// OTLP is a Sink that buffers traces, observations and scores and exports them
+// as OTLP/HTTP JSON with deterministic span IDs.
 type OTLP struct {
 	endpoint  string
 	headers   map[string]string
@@ -69,6 +73,8 @@ type OTLP struct {
 
 var _ Sink = (*OTLP)(nil)
 
+// NewOTLP returns an OTLP sink and starts its background flush goroutine; it
+// fails when opts.Endpoint is empty.
 func NewOTLP(opts OTLPOptions) (*OTLP, error) {
 	if opts.Endpoint == "" {
 		return nil, errors.New("trace: OTLP endpoint is required")
@@ -119,6 +125,8 @@ func cloneHeaders(in map[string]string) map[string]string {
 	return out
 }
 
+// Enqueue buffers the trace as a root span and signals a flush once the batch
+// size is reached; when the buffer is full the trace is dropped and counted.
 func (o *OTLP) Enqueue(t Trace) {
 	o.mu.Lock()
 	if len(o.traces)+len(o.obs) >= otlpMaxBuffered {
@@ -134,6 +142,8 @@ func (o *OTLP) Enqueue(t Trace) {
 	}
 }
 
+// EnqueueObservation buffers the observation span, dropping it when the buffer
+// is full.
 func (o *OTLP) EnqueueObservation(ob Observation) {
 	o.mu.Lock()
 	if len(o.traces)+len(o.obs) >= otlpMaxBuffered {
@@ -149,6 +159,7 @@ func (o *OTLP) EnqueueObservation(ob Observation) {
 	}
 }
 
+// EnqueueScore buffers the score, dropping it when the score buffer is full.
 func (o *OTLP) EnqueueScore(s Score) {
 	o.mu.Lock()
 	if len(o.scores) >= otlpMaxBuffered {
@@ -189,6 +200,8 @@ func (o *OTLP) run() {
 	}
 }
 
+// Flush synchronously exports all buffered data and returns the errors
+// accumulated since the previous call.
 func (o *OTLP) Flush(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -197,6 +210,8 @@ func (o *OTLP) Flush(ctx context.Context) error {
 	return o.takeErr()
 }
 
+// Close stops the background goroutine once, exports remaining buffered data and
+// returns the accumulated errors; a nil ctx uses context.Background.
 func (o *OTLP) Close(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
