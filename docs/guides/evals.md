@@ -37,7 +37,8 @@ rec := trace.NewRecorder()
 
 app, err := kit.New(ctx, kit.Config{
 	ES: es, LLM: llm, Policy: policy,
-	Sinks: []trace.Sink{rec}, // writer всегда первый; rec — дополнительный приёмник
+	GuardL2: guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
+	Sinks:   []trace.Sink{rec}, // writer всегда первый; rec — дополнительный приёмник
 })
 ```
 
@@ -122,7 +123,11 @@ func TestSupportBotToolOrder(t *testing.T) {
 	ctx = kit.WithPrincipal(ctx, kit.Principal{UserID: "u-1", Roles: []string{"user"}, Tenant: "acme"})
 
 	rec := trace.NewRecorder()
-	app, err := kit.New(ctx, kit.Config{ES: es, LLM: llm, Policy: policy, Sinks: []trace.Sink{rec}})
+	app, err := kit.New(ctx, kit.Config{
+		ES: es, LLM: llm, Policy: policy,
+		GuardL2: guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
+		Sinks:   []trace.Sink{rec},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

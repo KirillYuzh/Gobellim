@@ -22,7 +22,10 @@ llm, err := model.VLLM("http://vllm:8000/v1", "Qwen/Qwen3-8B")
 if err != nil {
 	return err
 }
-app, err := kit.New(ctx, kit.Config{ES: es, LLM: llm, Policy: policy})
+app, err := kit.New(ctx, kit.Config{
+	ES: es, LLM: llm, Policy: policy,
+	GuardL2: guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
+})
 ```
 
 `model.VLLM(baseURL, modelName)` = `NewOpenAI(OpenAIConfig{BaseURL: baseURL, Model: modelName})`.
@@ -159,6 +162,7 @@ app, err := kit.New(ctx, kit.Config{
 	ES:              es,
 	LLM:             llm,
 	Policy:          policy,
+	GuardL2:         guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
 	MaxSteps:        6,
 	MaxCallsPerTool: 2,
 	ToolTimeout:     20 * time.Second,

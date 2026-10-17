@@ -23,9 +23,10 @@ Chat — одна операция. Она собирает историю, пр
 
 ```go
 app, err := kit.New(ctx, kit.Config{
-	ES:     es,     // ваш клиент Elasticsearch
-	LLM:    llm,    // vLLM, Ollama, OpenAI-совместимый API или GigaChat
-	Policy: policy, // authz.Load("policy.yaml")
+	ES:      es,     // ваш клиент Elasticsearch
+	LLM:     llm,    // vLLM, Ollama, OpenAI-совместимый API или GigaChat
+	Policy:  policy, // authz.Load("policy.yaml")
+	GuardL2: guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
 })
 if err != nil {
 	return err

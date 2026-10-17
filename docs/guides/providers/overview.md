@@ -76,9 +76,10 @@ if err != nil {
 	return err
 }
 app, err := kit.New(ctx, kit.Config{
-	ES:     es,     // ваш store.ES
-	LLM:    llm,    // любой model.Client
-	Policy: policy, // *authz.Policy
+	ES:      es,     // ваш store.ES
+	LLM:     llm,    // любой model.Client
+	Policy:  policy, // *authz.Policy
+	GuardL2: guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
 })
 ```
 
@@ -131,7 +132,10 @@ llm, err := model.Chain(model.ChainConfig{MaxRetries: 2, Backoff: 500 * time.Mil
 if err != nil {
 	return err
 }
-app, err := kit.New(ctx, kit.Config{ES: es, LLM: llm, Policy: policy})
+app, err := kit.New(ctx, kit.Config{
+	ES: es, LLM: llm, Policy: policy,
+	GuardL2: guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
+})
 ```
 
 > [!NOTE]

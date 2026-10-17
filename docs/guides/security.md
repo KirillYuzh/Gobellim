@@ -161,13 +161,13 @@ kit.Tool(app, "get_weather", getWeather,
 )
 ```
 
-| Контроль              | Что делает                                                                             |
-| --------------------- | -------------------------------------------------------------------------------------- |
-| `Effect`              | `Read` / `Write` / `Egress`; рантайм применяет правила, не спрашивая модель            |
-| `EgressHosts(hosts…)` | извлекает хосты URL из аргументов (`urlHosts`) и сверяет с allowlist по границе домена |
-| `EgressAny()`         | явный opt-in «любой хост»; пустой allowlist без него — отказ                           |
+| Контроль                           | Что делает                                                                                                         |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `Effect`                           | `Read` / `Write` / `Egress`; рантайм применяет правила, не спрашивая модель                                        |
+| `EgressHosts(hosts…)`              | извлекает хосты URL из аргументов (`urlHosts`) и сверяет с allowlist по границе домена                             |
+| `EgressAny()`                      | явный opt-in «любой хост»; пустой allowlist без него — отказ                                                       |
 | `Egress.AllowEgressAfterUntrusted` | opt-out: снимает запрет эгресса в ходе, где уже был недоверенный ввод (`untrusted`); по умолчанию запрет действует |
-| Отказ                 | `ErrUnauthorized`, **фатально для хода**                                               |
+| Отказ                              | `ErrUnauthorized`, **фатально для хода**                                                                           |
 
 <!-- derived: BR-51 -->
 
@@ -240,6 +240,7 @@ Fail-closed — это про реакцию на ошибку, а не про �
 ```go
 app, err := kit.New(ctx, kit.Config{
 	ES: es, LLM: llm, Policy: policy,
+	GuardL2: guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
 	Approver: kit.ApproverFunc(func(ctx context.Context, req kit.ApprovalRequest) (bool, error) {
 		// req.Tool, req.Args, req.Fingerprint, req.Effect, req.UserID, req.Tenant
 		return yourUIGate(ctx, req.Fingerprint, req.Tool, req.Args)
@@ -333,12 +334,12 @@ flowchart TD
 `kit` разделяет доступ **внутри** приложения (RBAC/ACL), но не изолирует тенантов
 на уровне Elasticsearch.
 
-| Аспект                      | Реальность                                                                                         |
-| --------------------------- | -------------------------------------------------------------------------------------------------- |
-| Трейсы в ES                 | общий data stream (`kit-traces`, `kit-observations`); `tenant` — обычное keyword-поле, не изоляция |
-| Кто читает трейсы           | любой, у кого есть доступ к ES; security-model ES — ваш                                            |
+| Аспект                           | Реальность                                                                                         |
+| -------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Трейсы в ES                      | общий data stream (`kit-traces`, `kit-observations`); `tenant` — обычное keyword-поле, не изоляция |
+| Кто читает трейсы                | любой, у кого есть доступ к ES; security-model ES — ваш                                            |
 | `demo/deploy/docker-compose.yml` | ES запущен с `xpack.security.enabled=false` — годится только для локального стенда                 |
-| Чанки                       | хранятся в одном индексе `kit-chunks`, разделены полями `tenant` + `acl`                           |
+| Чанки                            | хранятся в одном индексе `kit-chunks`, разделены полями `tenant` + `acl`                           |
 
 > [!WARNING]
 > `docker-compose` из `demo/deploy/` **нельзя** переносить в прод как есть: там
@@ -347,25 +348,25 @@ flowchart TD
 
 ## Чек-лист перед продом
 
-| Что                                                              | Как                                                                 |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------- |
-| AuthN на входе                                                   | токен проверяет ваш сервис/gateway; `Principal` кладётся в контекст |
-| `Tenant` и `Roles` из доверенного источника                      | никогда из тела запроса                                             |
-| `policy.yaml` — deny-by-default, без лишних `"*"`                | `kitctl policy check ./policy.yaml`                                 |
-| ACL задан для каждого документа                                  | `Doc.ACL` заполнен при `Ingest`; проверить поиском от другой роли   |
-| Инструменты получили `Effects` и политику хостов                 | ни одного `EffectEgress` без `EgressHosts` или `EgressAny`          |
-| Rule of Two не отключён (`AllowEgressAfterUntrusted` = дефолт `false`)    | `Config.Egress` оставлен нулевым; opt-out не делайте без нужды           |
-| `RateLimit` задан на тенанта                                     | `Config.RateLimit{PerSecond, Burst}`; `PerSecond > 0` (`BR-86`)     |
-| `RequireApproval` на необратимых действиях + реальный `Approver` | `kit.RequireApproval(true)`, `Config.Approver`                      |
-| Guard L2 включён и fail-closed                                   | `GuardL2` задан (обязателен; не `guard.L1Only()`); окно сверено (I-06) |
-| Состав слоёв guard ожидаемый                                     | `Health().GuardLayers`; `GuardL1Only` — только для осознанного L1-only |
-| Окно guard ≤ окно модели                                         | `kitctl verify window --model-context …`                            |
-| Модели/паритет проверены                                         | `kitctl verify models`, `kitctl verify parity` (`-tags ort`)        |
-| `TraceText` = `masked`                                           | не выставлять `full` без нужды                                      |
-| Сэмплинг и лимиты экспорта настроены                             | `Sampler`, `HideInput`/`HideOutput`                                 |
-| Секреты из окружения, `.env` не закоммичен                       | `.gitignore` содержит `.env`, `models/`, `.ort/`                    |
-| ES и Grafana закрыты аутентификацией                             | ваш контур; `demo/deploy/` — только локальный стенд                      |
-| `guardtest.AllowAll` не попал в прод                             | `grep -r AllowAll` по вашему коду — только тесты                    |
+| Что                                                                    | Как                                                                    |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| AuthN на входе                                                         | токен проверяет ваш сервис/gateway; `Principal` кладётся в контекст    |
+| `Tenant` и `Roles` из доверенного источника                            | никогда из тела запроса                                                |
+| `policy.yaml` — deny-by-default, без лишних `"*"`                      | `kitctl policy check ./policy.yaml`                                    |
+| ACL задан для каждого документа                                        | `Doc.ACL` заполнен при `Ingest`; проверить поиском от другой роли      |
+| Инструменты получили `Effects` и политику хостов                       | ни одного `EffectEgress` без `EgressHosts` или `EgressAny`             |
+| Rule of Two не отключён (`AllowEgressAfterUntrusted` = дефолт `false`) | `Config.Egress` оставлен нулевым; opt-out не делайте без нужды         |
+| `RateLimit` задан на тенанта                                           | `Config.RateLimit{PerSecond, Burst}`; `PerSecond > 0` (`BR-86`)        |
+| `RequireApproval` на необратимых действиях + реальный `Approver`       | `kit.RequireApproval(true)`, `Config.Approver`                         |
+| Guard L2 включён и fail-closed                                         | `GuardL2` задан (обязателен; не `guard.L1Only()`); окно сверено (I-06) |
+| Состав слоёв guard ожидаемый                                           | `Health().GuardLayers`; `GuardL1Only` — только для осознанного L1-only |
+| Окно guard ≤ окно модели                                               | `kitctl verify window --model-context …`                               |
+| Модели/паритет проверены                                               | `kitctl verify models`, `kitctl verify parity` (`-tags ort`)           |
+| `TraceText` = `masked`                                                 | не выставлять `full` без нужды                                         |
+| Сэмплинг и лимиты экспорта настроены                                   | `Sampler`, `HideInput`/`HideOutput`                                    |
+| Секреты из окружения, `.env` не закоммичен                             | `.gitignore` содержит `.env`, `models/`, `.ort/`                       |
+| ES и Grafana закрыты аутентификацией                                   | ваш контур; `demo/deploy/` — только локальный стенд                    |
+| `guardtest.AllowAll` не попал в прод                                   | `grep -r AllowAll` по вашему коду — только тесты                       |
 
 ## Чего библиотека не делает
 

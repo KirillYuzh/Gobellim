@@ -106,7 +106,10 @@ emb, err := embed.NewLocal(embed.LocalConfig{
 if err != nil {
 	return err // без -tags ort или без весов — ErrInvalidConfig
 }
-app, err := kit.New(ctx, kit.Config{ES: es, LLM: llm, Policy: policy, Embedder: emb})
+app, err := kit.New(ctx, kit.Config{
+	ES: es, LLM: llm, Policy: policy, Embedder: emb,
+	GuardL2: guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
+})
 ```
 
 Размерность берётся из графа; `LocalConfig.Sessions` (по умолчанию `2`) задаёт

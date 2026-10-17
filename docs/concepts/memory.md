@@ -26,6 +26,7 @@ app, err := kit.New(ctx, kit.Config{
 	LLM:          llm,
 	Embedder:     emb,       // нужен для семантического recall
 	Policy:       policy,    // роли должны иметь право `memory`
+	GuardL2:      guard.L1Only(), // L1-only; в продакшене: guard/gliner (-tags ort)
 	MemoryLimit:  20,        // сколько последних сообщений подставлять; 0 → 20
 	MemoryRecall: 0,         // >0 включает recall в Chat
 })
