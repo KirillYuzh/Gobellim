@@ -1,5 +1,7 @@
 # Security policy
 
+**[English](SECURITY.md) · [Русский](SECURITY.ru.md)**
+
 Gobellim is a security-sensitive library: it sits between your handler and an
 LLM, a retrieval store and tools.
 
