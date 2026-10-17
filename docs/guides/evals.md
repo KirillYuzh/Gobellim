@@ -113,6 +113,33 @@ func Run(ctx context.Context, rec *trace.Recorder, cases []Case,
 - `NoToolErrors` считает ошибкой observation, у которой `Level == ERROR` **или**
   непустой `ErrorKind`.
 
+## Метрики качества
+
+`eval` также считает две метрики на размеченном наборе, чтобы качество retrieval
+и guard не оценивалось на глаз.
+
+`ScoreRetrieval` сравнивает ранжированный список с эталонными ID:
+
+```go
+m := eval.ScoreRetrieval(
+	[]string{"doc-7", "doc-2", "doc-9"}, // что вернул Search
+	[]string{"doc-2", "doc-9"},          // что считается релевантным
+	3,                                   // K
+)
+// m.Precision = 2/3, m.Recall = 1, m.MRR = 1/2
+```
+
+`ScoreBinary` строит матрицу ошибок бинарного детектора (например, «guard сработал
+/ пропустил») и считает precision, recall, F1 и FPR:
+
+```go
+m, err := eval.ScoreBinary(expected, actual) // []bool одной длины
+```
+
+Обе функции не зависят от модели: соберите набор запросов с эталонными
+документами или корпус размеченных guard-кейсов и зафиксируйте метрики как порог
+в CI.
+
 ## Рецепты
 
 ### Тест: модель вызвала нужный инструмент в нужном порядке
