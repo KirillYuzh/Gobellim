@@ -3,7 +3,7 @@ module github.com/KirillYuzh/Gobellim/flow
 go 1.24
 
 require (
-	github.com/KirillYuzh/Gobellim v0.0.0
+	github.com/KirillYuzh/Gobellim v0.1.0
 	github.com/invopop/jsonschema v0.14.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 )
