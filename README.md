@@ -23,11 +23,13 @@ guardrails behind one permission-checked call path.
 - **A small, immutable core.** The default build is pure Go: no `cgo`, no native
   libraries, no network, and a dependency budget you can read at a glance. The
   core's boundary is pinned by `internal/importrules`.
-- **Optional packages, imported explicitly.** The heavy ML detector
+- **Optional packages — separate modules.** The heavy ML detector
   (`guard/gliner`, `-tags ort`) and the store (`store.ES`) are ports you wire in.
-  The repository also ships MCP (client and server), `flow` pipelines, the `eval`
-  harness, cross-encoder `rerank` and the `webfetch` tool as separate packages:
-  import what you need, and none is on a call path unless you configure it.
+  MCP (client and server), `flow` pipelines, the `eval` harness, the `webfetch`
+  tool, the CLI, the demo and the dev scripts ship as separate Go modules of the
+  same repository; `rerank` stays in the core because the façade imports it. The
+  core is what you `go get`; optional modules are built from this repository
+  (`go -C <dir>`), and none is on a call path unless you configure it.
 - **Safety you cannot forget.** Every operation runs the same four steps —
   authorize, guard, trace, execute — so no check can be skipped.
 - **The model gets no say in access.** Tools the caller may not use are removed

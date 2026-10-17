@@ -12,6 +12,8 @@ permissions:
 
 env:
   GO_VERSION: "1.24"
+  # Optional packages live in their own modules (D85); rerank stays in the core.
+  OPTIONAL_MODULES: "mcp webfetch flow eval kittest cmd demo scripts"
 
 jobs:
   build:
@@ -23,10 +25,20 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: go build
+      - name: go build (core)
         run: go build ./...
-      - name: go vet
+      - name: go vet (core)
         run: go vet ./...
+      - name: go build/vet (optional modules)
+        run: |
+          for dir in $OPTIONAL_MODULES; do
+            echo "==> $dir"
+            if [ "$dir" = "cmd" ]; then
+              (cd "$dir" && go build -o /dev/null ./... && go vet ./...)
+            else
+              (cd "$dir" && go build ./... && go vet ./...)
+            fi
+          done
 
   test:
     name: test
@@ -37,10 +49,16 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: go test
+      - name: go test (core)
         run: go test ./... -count=1
       - name: import rules (I-13)
         run: go test ./internal/importrules/ -run TestImportRules -v
+      - name: go test (optional modules)
+        run: |
+          for dir in $OPTIONAL_MODULES; do
+            echo "==> $dir"
+            (cd "$dir" && go test ./... -count=1)
+          done
 
   race:
     name: race
@@ -51,8 +69,14 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: go test -race
-        run: go test -race -count=1 ./trace/... ./guard/... ./eval/... ./internal/...
+      - name: go test -race (core)
+        run: go test -race -count=1 ./...
+      - name: go test -race (optional modules)
+        run: |
+          for dir in $OPTIONAL_MODULES; do
+            echo "==> $dir"
+            (cd "$dir" && go test -race -count=1 ./...)
+          done
 
   ort-vet:
     name: ort-vet
@@ -63,8 +87,14 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: go vet -tags ort (type-check only)
+      - name: go vet -tags ort (core)
         run: go vet -tags ort ./...
+      - name: go vet -tags ort (optional modules)
+        run: |
+          for dir in $OPTIONAL_MODULES; do
+            echo "==> $dir"
+            (cd "$dir" && go vet -tags ort ./...)
+          done
 
   lint:
     name: lint
@@ -75,11 +105,17 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: golangci-lint
+      - name: golangci-lint (core)
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.13.0
           verify: true
+      - name: golangci-lint (optional modules)
+        run: |
+          for dir in $OPTIONAL_MODULES; do
+            echo "==> $dir"
+            (cd "$dir" && golangci-lint run)
+          done
 
   fumpt:
     name: fumpt
@@ -112,7 +148,7 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
       - name: docs-lint
-        run: go run ./scripts/docslint
+        run: go -C scripts run ./docslint
 
   guard-quality:
     name: guard quality (L1)
@@ -128,7 +164,7 @@ jobs:
       - name: guard quality report
         run: |
           set -o pipefail
-          go run ./scripts/guardqual | tee guard-quality.md
+          go -C scripts run ./guardqual | tee guard-quality.md
       - name: publish report to the job summary
         if: always()
         run: cat guard-quality.md >> "$GITHUB_STEP_SUMMARY"
@@ -145,7 +181,7 @@ jobs:
       # Hard gate: direct requires, go.sum size, and the module closure of the
       # default build. A dependency cannot land silently.
       - name: dependency budgets
-        run: go run ./scripts/perfbudget/
+        run: go -C scripts run ./perfbudget/
       # Published, not gated: ns/op depends on the runner. The allocation gate
       # lives in perf_gate_test.go and runs in the `test` job.
       - name: benchmarks (core overhead, no L2)

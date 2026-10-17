@@ -72,7 +72,7 @@ ready`.
 docker compose up -d elasticsearch grafana embeddings
 
 cp demo/.env.example demo/.env # добавить GIGACHAT_CREDENTIALS
-go run ./demo/cmd/bot
+go -C demo run ./cmd/bot
 ```
 
 Сервис слушает `:8080` (`KIT_ADDR`) и после готовности пишет в лог
@@ -81,12 +81,12 @@ go run ./demo/cmd/bot
 По умолчанию бот обращается к серверу `embeddings`. Со сборкой `-tags ort` и
 `EMBED_LOCAL=true` он вместо сервера поднимает локальный ONNX-энкодер и читает
 веса из `<KIT_MODELS_DIR>/<org>__<name>/` (сначала скачайте их:
-`go run ./cmd/kitctl model pull intfloat/multilingual-e5-small`); тогда
+`go -C cmd run ./kitctl model pull intfloat/multilingual-e5-small`); тогда
 `EMBED_MODEL` задаёт локальную модель (её размерность берётся из графа), а сервис
 `embeddings` больше не нужен.
 
 ```sh
-EMBED_LOCAL=true CGO_LDFLAGS="-L.ort/lib" go run -tags ort ./demo/cmd/bot
+EMBED_LOCAL=true CGO_LDFLAGS="-L.ort/lib" go -C demo run -tags ort ./cmd/bot
 ```
 
 ## Эндпоинты
@@ -146,7 +146,7 @@ curl -s localhost:8080/stats -H "Authorization: Bearer $TOKEN"
 L2 доступен только в сборке с тегом `ort`:
 
 ```sh
-CGO_LDFLAGS="-L.ort/lib" go run -tags ort ./demo/cmd/bot
+CGO_LDFLAGS="-L.ort/lib" go -C demo run -tags ort ./cmd/bot
 ```
 
 Без тега бот стартует с одним L1 и пишет в лог `guard L2 not enabled`. Веса лежат
@@ -156,7 +156,7 @@ CGO_LDFLAGS="-L.ort/lib" go run -tags ort ./demo/cmd/bot
 ## TUI
 
 ```sh
-go run ./demo/cmd/tui
+go -C demo run ./cmd/tui
 ```
 
 Входит как `alice` и остаётся открытым. Любая строка, не начинающаяся с `/`,
@@ -178,9 +178,9 @@ go run ./demo/cmd/tui
 Чтение трейсов, observations и оценок прямо из Elasticsearch:
 
 ```sh
-go run ./demo/cmd/traces                      # 20 последних трейсов
-go run ./demo/cmd/traces -name chat -tenant bot
-go run ./demo/cmd/traces -trace <trace-id>    # один трейс целиком
+go -C demo run ./cmd/traces                      # 20 последних трейсов
+go -C demo run ./cmd/traces -name chat -tenant bot
+go -C demo run ./cmd/traces -trace <trace-id>    # один трейс целиком
 ```
 
 Флаги: `-url` (или `KIT_ES_URL`), `-limit`, `-name`, `-tenant`, `-trace`.

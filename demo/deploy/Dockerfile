@@ -13,7 +13,8 @@ RUN go mod download
 COPY . .
 ARG BUILD_TAGS=""
 ARG CGO=0
-RUN CGO_ENABLED=${CGO} go build -tags "${BUILD_TAGS}" -trimpath -o /out/kit-bot ./demo/cmd/bot
+WORKDIR /src/demo
+RUN CGO_ENABLED=${CGO} go build -tags "${BUILD_TAGS}" -trimpath -o /out/kit-bot ./cmd/bot
 
 FROM debian:bookworm-slim
 RUN useradd --system --uid 10001 --create-home kit \

@@ -46,6 +46,34 @@ L2 появился потолок токенов).
 (исходящие). Grafana → ES. Входящий трафик только на 8080. Локальные модели
 загружаются заранее (`kitctl model pull`) для ORT-сборки.
 
+## Модули
+
+Репозиторий — монорепозиторий из девяти Go-модулей (`D85`). Ядро — корневой модуль
+`github.com/KirillYuzh/Gobellim`: только его собирает `go build ./...` из корня и
+только его подключают через `go get`. Опциональные пакеты — отдельные модули с тем
+же префиксом пути; `rerank` остаётся в ядре, потому что фасад его импортирует
+(`D84`).
+
+| Модуль                           | Пакеты                                                                                                    | Зависит от                              |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| `github.com/…/Gobellim`          | корневой фасад, `internal/**`, `authz`, `guard/**`, `model`, `embed`, `chunk`, `store`, `trace`, `rerank` | —                                       |
+| `github.com/…/Gobellim/mcp`      | `mcp`, `mcp/stdio`                                                                                        | ядро                                    |
+| `github.com/…/Gobellim/webfetch` | `webfetch`                                                                                                | ядро                                    |
+| `github.com/…/Gobellim/flow`     | `flow`                                                                                                    | ядро, две jsonschema-библиотеки (`D67`) |
+| `github.com/…/Gobellim/eval`     | `eval`                                                                                                    | ядро (`trace`, `internal/core`)         |
+| `github.com/…/Gobellim/kittest`  | `kittest`                                                                                                 | ядро (`model`, `guard`, `trace`)        |
+| `github.com/…/Gobellim/cmd`      | `cmd/kitctl`                                                                                              | ядро                                    |
+| `github.com/…/Gobellim/demo`     | `demo/cmd/**`, `demo/internal/**`                                                                         | ядро                                    |
+| `github.com/…/Gobellim/scripts`  | `scripts/docslint`, `scripts/perfbudget`, `scripts/guardqual`                                             | ядро                                    |
+
+Подмодули объявляют `require github.com/KirillYuzh/Gobellim v0.0.0` и
+`replace github.com/KirillYuzh/Gobellim => ..`, поэтому локальная сборка не требует
+публикации и `go.work`. Команды из подмодуля запускаются как
+`go -C <dir> run ./<cmd>`; `make check` и CI собирают, vet-ят и тестируют каждый
+модуль отдельно. Линтер запускается в каждом модуле, поэтому пути в его правилах
+модульно-относительные; межмодульную границу ядра проверяет
+`internal/importrules`, который обходит дерево целиком, включая подмодули.
+
 ## Пакеты
 
 ```
@@ -66,16 +94,17 @@ kit/
   chunk/                                    токенный чанкер + Tokenizer (обязателен для Ingest)
   store/                                    ES interface + Request, index.go (маппинги), chunks.go, search.go, filter.go, bulk.go, memory.go (индексы и запросы памяти), maintenance.go, ensure.go
   trace/                                    модель Langfuse, async writer (writer.go), policy.go (TextPolicy/Sampler), sink.go, otlp.go (Sink OTLP/HTTP)
-  eval/                                     детерминированные проверки трейсов (только stdlib; зависит от trace и internal/core, не от kit) — ноль внешних зависимостей
-  kittest/                                  тестовый набор: fake model.Client, скриптовый guard.Detector, контрактные тесты для плагинов
-  flow/                                     один типизированный шаг `Step[In,Out]` со schema-контрактом и suspend/resume (без Pipeline/builder-DSL, D47); единственное внешнее ребро ядра — валидатор схем (D67)
-  rerank/                                   реранкер за интерфейсом Reranker + адаптер TEI/Cohere (/rerank), детерминированный `Reorder`
-  mcp/                                      клиент Model Context Protocol (stdio и streamable HTTP) + `Register` — инструменты как `mcp:<server>:<tool>`; сервер `NewServer`/`FromTool` отдаёт инструменты наружу через `App.CallTool`
-  webfetch/                                 SSRF-защищённый инструмент исходящего HTTP (эффект egress)
-  internal/importrules/                     stdlib-тест правил импортов (I-13); дублирует правила depguard из .golangci.yml
-  cmd/kitctl/                               model pull, policy check, verify window/models/parity/latency
-  demo/                         пример на Clean Architecture: cmd/bot + internal/{domain,usecase,adapter}
+  eval/                                     [модуль] детерминированные проверки трейсов (только stdlib; зависит от trace и internal/core, не от kit) — ноль внешних зависимостей
+  kittest/                                  [модуль] тестовый набор: fake model.Client, скриптовый guard.Detector, контрактные тесты для плагинов
+  flow/                                     [модуль] один типизированный шаг `Step[In,Out]` со schema-контрактом и suspend/resume (без Pipeline/builder-DSL, D47); внешние зависимости — валидатор схем (D67)
+  rerank/                                   реранкер за интерфейсом Reranker + адаптер TEI/Cohere (/rerank), детерминированный `Reorder` (в ядре: D84)
+  mcp/                                      [модуль] клиент Model Context Protocol (stdio и streamable HTTP) + `Register` — инструменты как `mcp:<server>:<tool>`; сервер `NewServer`/`FromTool` отдаёт инструменты наружу через `App.CallTool`
+  webfetch/                                 [модуль] SSRF-защищённый инструмент исходящего HTTP (эффект egress)
+  internal/importrules/                     stdlib-тест правил импортов (I-13); обходит дерево целиком, включая подмодули
+  cmd/kitctl/                               [модуль] model pull, policy check, verify window/models/parity/latency
+  demo/                                     [модуль] пример на Clean Architecture: cmd/bot + internal/{domain,usecase,adapter}
     deploy/                                 Dockerfile, docker-compose.yml, grafana/ (policy — demo/policy.yaml)
+  scripts/                                  [модуль] docslint, perfbudget, guardqual
   docs/                                     документация: getting-started/, concepts/, reference/, internals/ (README-индекс)
   testdata/                                 золотые файлы, parity-фикстуры
   .github/workflows/ci.yml                  CI: build, test, race, ort-vet, lint, fumpt
@@ -85,8 +114,10 @@ kit/
 `kittest` импортирует только порты (`model`, `guard`, `trace`) и никогда фасад `kit`, поэтому его может импортировать и тест самого ядра. Контрактные тесты `kittest.DetectorContract`, `kittest.SinkContract` и `kittest.ScopeIsolation` (D78) — условие качества, но не объявление «официальным»: официальный плагин — обещание поддержки, поэтому поставляется ровно один референсный — `guard/gliner` (L2, `-tags ort`); `guard-remote`, `store-es` и `trace-otel` не реализованы (D76).
 
 **Правила зависимостей.** Правила обязательны (I-13) и **подключены**: их проверяют
-и stdlib-тест `internal/importrules` (в `go test ./...`), и правила `depguard` в
-`.golangci.yml` (в `make check` и в CI-джобе `lint`).
+stdlib-тест `internal/importrules` (в `go test ./...` корневого модуля; тест обходит
+дерево целиком, включая подмодули) и правила `depguard` в `.golangci.yml` (в
+`make check` и в CI-джобе `lint`; линтер запускается в каждом модуле, поэтому
+семейные правила действуют в ядре, а межмодульные границы держит тест).
 
 1. `kit` импортирует всё. `internal/call` зависит от контрактов
    `authz`/`guard`/`trace` как от интерфейсов (`Authorizer`, `Guarder`,
@@ -118,23 +149,24 @@ kit/
 исключение.
 
 Правило смотрит на компилируемый код, поэтому импорт опционального пакета из теста
-ядра разрешён: `kittest` и есть тестовый набор для тестов ядра (D78), а тест фасада
-сверяет `Generate` с `eval`. Единственное записанное ребро ядра — `kit → rerank`
+ядра разрешён: `kittest` и есть тестовый набор для тестов ядра (D78). Единственное
+записанное ребро ядра — `kit → rerank`
 (`Config.Reranker`, `SearchRequest.Rerank`): оно лежит в `coreOptionalExceptions`, и
 тест проверяет, что список исключений **точно** совпадает с наблюдаемыми рёбрами,
 поэтому молча вырасти не может. В `depguard` это правило не
 продублировано: там нельзя исключить тестовый импорт, а без такого исключения
-тест фасада (`eval`) и `kittest` в тестах ядра давали бы ложные срабатывания.
+`kittest` в тестах ядра давал бы ложные срабатывания.
 
-`flow` — исключение: по D67 это примитив ядра, поэтому он подчинён правилу
-`flow-internal-leaves-only` и может импортировать только листья `internal/**`.
+`flow` — примитив (D67), с D85 — отдельный модуль; правило
+`flow-internal-leaves-only` продолжает применяться, потому что тест обходит дерево
+целиком, и `flow` может импортировать только листья `internal/**`.
 Запрещены фасад `kit` (цикл), `internal/call` (он тянет `guard` и `trace`, то есть
 провёл бы в примитив всё семейство ядра), семейство ядра
 (`authz`/`guard`/`model`/`embed`/`chunk`/`store`/`trace`) и соседние пакеты
 (`eval`, `rerank`, `mcp`, `webfetch`). Стандартная библиотека и две
-jsonschema-библиотеки из D67 правилом не охвачены. То же ограничение
-продублировано в `.golangci.yml` (`depguard`), чтобы правило проверялось на двух
-независимых уровнях.
+jsonschema-библиотеки из D67 правилом не охвачены. В `depguard` это ограничение не
+дублируется: паттерны его правил модульно-относительные, и внутри модуля `flow` они
+не отличили бы его файлы от любых других.
 
 Ограничение на `eval` — единственное правило теста, которое не про семейство ядра:
 `eval-trace-and-internal-only` («`eval` may import only `trace` and `internal/**`,
@@ -143,8 +175,8 @@ and must never import the root kit façade») запрещает ему подн
 первое ограничивает только `authz`/`guard`/`model`/`embed`/`chunk`/`store`/`trace`,
 второе — только листья под `internal/`. Поэтому граница, зафиксированная для `flow`
 и `eval` в D67 («`eval` — ноль внешних зависимостей, `flow` — две jsonschema-библиотеки
-ради схем `In`/`Out`»), сегодня держится на stdlib-тесте `go test ./...` и правилах
-`depguard` в `.golangci.yml`, а не на `internal/importrules`: новое внешнее ребро в
+ради схем `In`/`Out`»), сегодня держится на stdlib-тесте `go test ./...` (он обходит
+дерево целиком, включая подмодули), а не на `depguard`: новое внешнее ребро в
 `flow` этот тест не поймает. Расширение правила на `flow` — открытая работа, а не
 состоявшееся свойство.
 
@@ -379,7 +411,7 @@ Grafana: в `demo/deploy/grafana/` лежат provisioning ES-datasource и да
 
 - [Бизнес-правила](./business-rules.md) — правила, которые обязана сохранять
   архитектура
-- [Решения и допущения](./decisions.md) — журнал `D1`…`D84` и допущения
+- [Решения и допущения](./decisions.md) — журнал `D1`…`D85` и допущения
   `A1`…`A9`
 - [План](./plan.md) — этапы, тесты, риски, Definition of Done
 - [Ориентиры](./references.md) — Go-проекты, с которых снимаются идеи

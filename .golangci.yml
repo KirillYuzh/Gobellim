@@ -1,4 +1,7 @@
-# kit lint config; mirrors internal/importrules (I-13, BR-74).
+# kit lint config; the family rules mirror internal/importrules (I-13, BR-74).
+# The config is used for every module (D85); its `files` patterns are
+# module-relative, so the cross-module core boundary is enforced by the
+# tree-wide `internal/importrules` test, not by depguard.
 
 version: "2"
 
@@ -204,64 +207,6 @@ linters:
             - pkg: github.com/KirillYuzh/Gobellim/demo
               desc: "internal leaves may import only internal/** (I-13)"
 
-        eval:
-          files:
-            - "eval/**"
-          deny:
-            - pkg: github.com/KirillYuzh/Gobellim$
-              desc: "eval must not import the kit façade (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/authz
-              desc: "eval may import only trace and internal/** (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/guard
-              desc: "eval may import only trace and internal/** (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/model
-              desc: "eval may import only trace and internal/** (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/embed
-              desc: "eval may import only trace and internal/** (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/chunk
-              desc: "eval may import only trace and internal/** (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/store
-              desc: "eval may import only trace and internal/** (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/cmd
-              desc: "eval may import only trace and internal/** (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/demo
-              desc: "eval may import only trace and internal/** (I-13)"
-
-        flow:
-          files:
-            - "flow/**"
-          deny:
-            - pkg: github.com/KirillYuzh/Gobellim$
-              desc: "flow must not import the kit façade (I-13, cycle risk)"
-            - pkg: github.com/KirillYuzh/Gobellim/internal/call
-              desc: "flow may import only internal/** leaves, not the call primitive (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/authz
-              desc: "flow must not import the core family (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/guard
-              desc: "flow must not import the core family (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/model
-              desc: "flow must not import the core family (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/embed
-              desc: "flow must not import the core family (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/chunk
-              desc: "flow must not import the core family (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/store
-              desc: "flow must not import the core family (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/trace
-              desc: "flow must not import the core family (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/eval
-              desc: "flow may import only internal/** leaves (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/rerank
-              desc: "flow may import only internal/** leaves (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/mcp
-              desc: "flow may import only internal/** leaves (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/webfetch
-              desc: "flow may import only internal/** leaves (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/cmd
-              desc: "flow may import only internal/** leaves (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/demo
-              desc: "flow may import only internal/** leaves (I-13)"
-
         internal-no-facade:
           files:
             - "internal/**"
@@ -271,11 +216,13 @@ linters:
 
   exclusions:
     rules:
-      - path: 'cmd/kitctl/(latency|verify)\.go|scripts/guardqual/run\.go'
+      # Paths are module-relative (run.relative-path-mode: gomod): these match
+      # inside the cmd and scripts modules, which are separate modules (D85).
+      - path: '(^|/)kitctl/(latency|verify)\.go$|(^|/)guardqual/run\.go$'
         linters:
           - staticcheck
         text: "SA4023"
-      - path: 'scripts/guardqual/main\.go'
+      - path: '(^|/)guardqual/main\.go$'
         linters:
           - errcheck
 

@@ -4,11 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"regexp"
 	"strings"
 	"testing"
 
-	"github.com/KirillYuzh/Gobellim/eval"
 	"github.com/KirillYuzh/Gobellim/model"
 	"github.com/KirillYuzh/Gobellim/trace"
 )
@@ -137,52 +135,38 @@ func TestGenerateStructuringModelCanRepairAnOffSchemaAnswer(t *testing.T) {
 	}
 }
 
-func TestGenerateOffSchemaAnswerAsEvalCase(t *testing.T) {
+func TestGenerateOffSchemaAnswerIsObservable(t *testing.T) {
 	const answer = `{"approved":true,"notes":"ок","confidence":0.9}`
 
 	rec := trace.NewRecorder()
 	app := newRealApp(t, discardES{}, offSchemaLLM{content: answer}, nil, testPolicyMemory, func(c *Config) {
 		c.Sinks = []trace.Sink{rec}
 	})
-	rec.Reset()
 
-	cases := []eval.Case{{
-		Name:  "generate off-schema answer is rejected before decoding",
-		Input: "проверь заявку",
-		Checks: []eval.Check{
-			eval.Matches(mustCompile(`"confidence":0\.9`)),
-			eval.All(
-				func(tr eval.Trace) error {
-					for _, o := range tr.Observations {
-						if o.Kind == trace.KindGeneration {
-							return nil
-						}
-					}
-					return errors.New("no GENERATION observation recorded")
-				},
-			),
-		},
-	}}
-
-	results := eval.Run(generateCtx(), rec, cases, func(ctx context.Context, input string) error {
-		var got Generated[reviewAnswer]
-		_, err := Generate[reviewAnswer](ctx, app, GenerateRequest[reviewAnswer]{
-			Prompt:        input,
-			ErrorStrategy: Warn,
-		})
-		if err != nil {
-			return err
-		}
-		if got.Decoded {
-			return errors.New("off-schema answer reported Decoded")
-		}
-		return nil
+	got, err := Generate[reviewAnswer](generateCtx(), app, GenerateRequest[reviewAnswer]{
+		Prompt:        "проверь заявку",
+		ErrorStrategy: Warn,
 	})
-
-	report := eval.Summarize(results)
-	if !report.OK() {
-		t.Fatalf("eval case failed:\n%s", report.String())
+	if err != nil {
+		t.Fatalf("err = %v", err)
 	}
+	if got.Decoded {
+		t.Fatal("off-schema answer reported Decoded")
+	}
+
+	snap := rec.Snapshot()
+	if len(snap.Traces) != 1 {
+		t.Fatalf("recorded %d trace(s), want 1", len(snap.Traces))
+	}
+	if !strings.Contains(snap.Traces[0].Output, `"confidence":0.9`) {
+		t.Fatalf("the trace output must keep the offending answer: %q", snap.Traces[0].Output)
+	}
+	for _, o := range snap.Observations {
+		if o.Kind == trace.KindGeneration {
+			return
+		}
+	}
+	t.Fatal("no GENERATION observation recorded")
 }
 
 func TestGenerateSchemaForAnyAcceptsAnything(t *testing.T) {
@@ -199,12 +183,4 @@ func TestGenerateSchemaForAnyAcceptsAnything(t *testing.T) {
 	if err := json.Unmarshal([]byte(got.Raw), &m); err != nil {
 		t.Fatalf("Raw is not the original answer: %v", err)
 	}
-}
-
-func mustCompile(expr string) *regexp.Regexp {
-	re, err := regexp.Compile(expr)
-	if err != nil {
-		panic(err)
-	}
-	return re
 }

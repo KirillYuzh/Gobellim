@@ -7,7 +7,7 @@
 ## Как это измерено
 
 ```sh
-go run -tags ort ./cmd/kitctl verify latency --dir ./models \
+go -C cmd run -tags ort ./kitctl verify latency --dir ./models \
   --iterations 20 --warmup 2 --max-chars 8000 --window 1024
 ```
 
