@@ -169,11 +169,14 @@ func explain(out *os.File, outcomes []outcome, id string) int {
 }
 
 func defaultPath(p string) string {
-	if _, err := os.Stat(p); err == nil {
-		return p
-	}
-	if _, err := os.Stat(filepath.Join("..", "..", p)); err == nil {
-		return filepath.Join("..", "..", p)
+	for _, dir := range []string{".", "..", filepath.Join("..", "..")} {
+		candidate := p
+		if dir != "." {
+			candidate = filepath.Join(dir, p)
+		}
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
 	}
 	return p
 }
