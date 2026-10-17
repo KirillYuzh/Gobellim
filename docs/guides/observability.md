@@ -94,7 +94,7 @@ app, err := kit.New(ctx, kit.Config{
 | `trace.TextMasked` | только текст, прошедший guard (I-07)        | —                                     |
 | `trace.TextFull`   | необработанный текст; `slog.Warn` при `New` | `obsInput` отдаёт исходный `req.Text` |
 
-Ключевое: `Observation.Input` при `masked` — это **guarded-текст**
+`Observation.Input` при `masked` — это **guarded-текст**
 (`v.Text` после guard), поэтому реальные PII/секреты в ES не пишутся. `Trace.Input`
 для `Chat` — последнее санитизированное сообщение после guard; для `Generate` —
 guarded-промпт.
@@ -106,6 +106,26 @@ guarded-промпт.
 > `trace.TextFull` — осознанный отказ от маскирования. Он удобен на стенде и
 > опасен в проде: в ES уйдут сырые PII и секреты. Библиотека предупредит один раз
 > `slog.Warn` при `kit.New`, и всё.
+
+## Аудит операций
+
+`Config.AuditLog` включает отдельный структурный журнал: одна строка на каждую
+пользовательскую операцию. Поля: `operation`, `user_id`, `tenant`, `roles`,
+`outcome` (`ok`/`denied`/`error`), `error_kind`, `trace_id`, `duration_ms`, а для
+документных операций — `doc_id` или `thread_id`.
+
+```go
+app, err := kit.New(ctx, kit.Config{
+	/* ... */
+	AuditLog: slog.New(slog.NewJSONHandler(auditFile, nil)),
+})
+```
+
+Записи пишутся и при отказе до авторизации: принципал берётся из контекста
+best-effort, поэтому запрос без принципала всё равно даёт строку с
+`outcome: denied`. Тексты запросов и ответов в аудит не попадают — только
+идентификаторы. Аудит не заменяет трейсы: трейс несёт наблюдения и маскированный
+текст, аудит — кто, когда и с каким результатом вызывал операцию.
 
 ## Сэмплирование
 

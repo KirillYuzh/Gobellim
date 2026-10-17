@@ -136,6 +136,17 @@ suites ship with it.
 go get github.com/KirillYuzh/Gobellim
 ```
 
+## Documentation
+
+`docs/` is plain Markdown and reads directly on GitHub. `site/` renders the same
+files with Next.js and Fumadocs:
+
+```sh
+cd site && npm install && npm run dev
+```
+
+Start at [docs/README.md](./docs/README.md).
+
 ## Quickstart
 
 ```go

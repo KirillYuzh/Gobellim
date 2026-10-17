@@ -15,7 +15,10 @@ import (
 // tool_result guard, and ModelView. It requires a principal in the context,
 // returns ErrToolNotFound for an unknown name and ErrInvalidArgs for oversized or
 // invalid arguments, and returns non-fatal tool failures as error results.
-func (a *App) CallTool(ctx context.Context, name string, args json.RawMessage) (string, error) {
+func (a *App) CallTool(ctx context.Context, name string, args json.RawMessage) (result string, err error) {
+	ao := a.beginAudit(ctx, "tool")
+	defer func() { ao.end(err) }()
+	ao.field("tool", name)
 	pr, err := principal(ctx)
 	if err != nil {
 		return "", err
@@ -41,6 +44,7 @@ func (a *App) CallTool(ctx context.Context, name string, args json.RawMessage) (
 		invalidTries: map[string]int{},
 		approved:     map[string]bool{},
 	}
+	ao.trace(t.traceID)
 	// Spend the tenant's rate-limit budget only on a call policy allows; a
 	// denial keeps its security-event logging in execTool (BR-107).
 	if a.policy.Allows(pr, def.permission) {
