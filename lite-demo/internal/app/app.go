@@ -28,7 +28,9 @@ func Run(cfg config.Config, log *slog.Logger) error {
 	}
 
 	uc, err := usecase.New(usecase.Deps{
-		LLM:    llm.NewOllama(cfg.OllamaURL, cfg.OllamaModel),
+		LLM: llm.NewGigaChat(
+			cfg.GigaChatKey, cfg.GigaChatModel, cfg.GigaChatBaseURL, cfg.GigaChatAuthURL, cfg.GigaChatScope,
+		),
 		Mock:   repository.NewMockd(cfg.MockURL),
 		Policy: pol,
 		Logger: log,
@@ -37,7 +39,7 @@ func Run(cfg config.Config, log *slog.Logger) error {
 		return err
 	}
 
-	log.Info("service ready", "tools", uc.Health().Tools, "ollama", cfg.OllamaURL, "mock", cfg.MockURL)
+	log.Info("service ready", "tools", uc.Health().Tools, "gigachat", cfg.GigaChatModel, "mock", cfg.MockURL)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

@@ -2,7 +2,7 @@
 
 Минимальный сервис на Go, который показывает, как устроены инструменты и
 детерминированные workflow вокруг LLM. Это самостоятельный пример: у него своя
-реализация движка инструментов, свой workflow и свой клиент Ollama. Пакеты
+реализация движка инструментов, свой workflow и свой клиент GigaChat. Пакеты
 `github.com/KirillYuzh/Gobellim` в зависимостях нет.
 
 Демо не про безопасность: guard, gate и trace здесь намеренно отсутствуют.
@@ -33,7 +33,7 @@ sequenceDiagram
     participant C as Клиент
     participant H as controller
     	participant U as agent.session
-    participant L as Ollama
+    participant L as GigaChat
     participant T as tools.Set
 
     C->>H: POST /v1/chat
@@ -58,11 +58,8 @@ sequenceDiagram
 docker compose up -d --build
 ```
 
-Первый запуск скачивает `t-tech/T-lite-it-2.1:q4_K_M` в Ollama:
-
-```sh
-docker compose logs -f ollama-pull
-```
+Ключ `GIGACHAT_API_KEY` лежит в `lite-demo/.env`; compose передаёт его
+контейнеру через `env_file`.
 
 Запрос:
 
@@ -77,14 +74,15 @@ curl -s http://localhost:8080/v1/chat \
 
 ## Локально
 
-Нужны запущенные Ollama (`ollama serve`) и mockd:
+Нужны mockd и ключ `GIGACHAT_API_KEY` в `lite-demo/.env`:
 
 ```sh
+set -a; . ./.env; set +a
 go run ./cmd/mockd &
 go run ./cmd/lite-demo
 ```
 
-По умолчанию сервис ждёт `http://localhost:11434` и `http://localhost:8081`.
+По умолчанию сервис ждёт mock-сервис на `http://localhost:8081`.
 
 ## API
 
@@ -96,7 +94,7 @@ go run ./cmd/lite-demo
 | --- | ----------------------------------------- |
 | 400 | битый JSON, лишние поля, нет пользователя |
 | 403 | policy запретила действие                 |
-| 502 | не ответила Ollama или mock-сервис        |
+| 502 | не ответил GigaChat или mock-сервис       |
 | 504 | истёк дедлайн запроса                     |
 | 500 | внутренняя ошибка                         |
 
@@ -184,7 +182,7 @@ flow := workflow.New[researchState]("research").
 | `internal/controller` | HTTP-граница: разбор запроса, вызов usecase, ответ         |
 | `internal/entity`     | типы домена и ошибки-сентинелы                             |
 | `internal/errmap`     | ошибка → HTTP-код и безопасное сообщение                   |
-| `internal/llm`        | клиент Ollama `/api/chat`                                  |
+| `internal/llm`        | клиент GigaChat `/v1/chat/completions`                     |
 | `internal/policy`     | роли и права, deny by default                              |
 | `internal/repository` | клиент mock-сервиса                                        |
 | `internal/routes`     | таблица маршрутов и recover                                |
@@ -195,15 +193,18 @@ flow := workflow.New[researchState]("research").
 
 ## Настройки
 
-| Переменная        | По умолчанию                  | Зачем                  |
-| ----------------- | ----------------------------- | ---------------------- |
-| `APP_ENV`         | dev                           | `prod` отклоняется     |
-| `HTTP_ADDR`       | `:8080`                       | адрес сервера          |
-| `POLICY_PATH`     | `policy.json`                 | файл прав              |
-| `MOCK_BASE_URL`   | `http://localhost:8081`       | mock-сервис            |
-| `OLLAMA_URL`      | `http://localhost:11434`      | Ollama                 |
-| `OLLAMA_MODEL`    | `t-tech/T-lite-it-2.1:q4_K_M` | модель                 |
-| `REQUEST_TIMEOUT` | `3m`                          | дедлайн одного запроса |
+| Переменная          | По умолчанию                                        | Зачем                  |
+| ------------------- | --------------------------------------------------- | ---------------------- |
+| `APP_ENV`           | dev                                                 | `prod` отклоняется     |
+| `HTTP_ADDR`         | `:8080`                                             | адрес сервера          |
+| `POLICY_PATH`       | `policy.json`                                       | файл прав              |
+| `MOCK_BASE_URL`     | `http://localhost:8081`                             | mock-сервис            |
+| `GIGACHAT_API_KEY`  | из `.env`                                           | OAuth-ключ, обязателен |
+| `GIGACHAT_MODEL`    | `GigaChat-2`                                        | модель                 |
+| `GIGACHAT_BASE_URL` | `https://api.giga.chat`                             | API                    |
+| `GIGACHAT_AUTH_URL` | `https://ngw.devices.sberbank.ru:9443/api/v2/oauth` | OAuth                  |
+| `GIGACHAT_SCOPE`    | `GIGACHAT_API_PERS`                                 | скоуп OAuth            |
+| `REQUEST_TIMEOUT`   | `3m`                                                | дедлайн одного запроса |
 
 ## Проверки
 

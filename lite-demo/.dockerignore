@@ -2,3 +2,4 @@
 .gotmp
 .golangci-cache
 models
+.env

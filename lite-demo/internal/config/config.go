@@ -1,4 +1,4 @@
-// Package config читает окружение и отказывается стартовать с непригодной конфигурацией.
+// Package config читает окружение и отклоняет непригодный старт.
 package config
 
 import (
@@ -10,25 +10,31 @@ import (
 
 // Config — всё, что сервис читает из окружения.
 type Config struct {
-	Addr           string
-	PolicyPath     string
-	MockURL        string
-	OllamaURL      string
-	OllamaModel    string
-	RequestTimeout time.Duration
-	Env            string
+	Addr            string
+	PolicyPath      string
+	MockURL         string
+	GigaChatKey     string
+	GigaChatModel   string
+	GigaChatBaseURL string
+	GigaChatAuthURL string
+	GigaChatScope   string
+	RequestTimeout  time.Duration
+	Env             string
 }
 
-// Load читает окружение. Ошибка здесь отменяет старт, а не приводит
-// к тихому откату на дефолты.
+// Load читает окружение. Ошибка здесь отказывает в старте, а не подставляет
+// молчаливое значение.
 func Load() (Config, error) {
 	c := Config{
-		Addr:        env("HTTP_ADDR", ":8080"),
-		PolicyPath:  env("POLICY_PATH", "policy.json"),
-		MockURL:     env("MOCK_BASE_URL", "http://localhost:8081"),
-		OllamaURL:   env("OLLAMA_URL", "http://localhost:11434"),
-		OllamaModel: env("OLLAMA_MODEL", "t-tech/T-lite-it-2.1:q4_K_M"),
-		Env:         env("APP_ENV", "dev"),
+		Addr:            env("HTTP_ADDR", ":8080"),
+		PolicyPath:      env("POLICY_PATH", "policy.json"),
+		MockURL:         env("MOCK_BASE_URL", "http://localhost:8081"),
+		GigaChatKey:     os.Getenv("GIGACHAT_API_KEY"),
+		GigaChatModel:   env("GIGACHAT_MODEL", "GigaChat-2"),
+		GigaChatBaseURL: env("GIGACHAT_BASE_URL", "https://api.giga.chat"),
+		GigaChatAuthURL: env("GIGACHAT_AUTH_URL", "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"),
+		GigaChatScope:   env("GIGACHAT_SCOPE", "GIGACHAT_API_PERS"),
+		Env:             env("APP_ENV", "dev"),
 	}
 	var err error
 	if c.RequestTimeout, err = time.ParseDuration(env("REQUEST_TIMEOUT", "3m")); err != nil {
@@ -39,8 +45,10 @@ func Load() (Config, error) {
 		return Config{}, errors.New("lite-demo is a demo: APP_ENV=prod is not supported")
 	case c.RequestTimeout <= 0:
 		return Config{}, errors.New("REQUEST_TIMEOUT must be > 0")
-	case c.OllamaURL == "" || c.MockURL == "":
-		return Config{}, errors.New("OLLAMA_URL and MOCK_BASE_URL are required")
+	case c.MockURL == "":
+		return Config{}, errors.New("MOCK_BASE_URL is required")
+	case c.GigaChatKey == "":
+		return Config{}, errors.New("GIGACHAT_API_KEY is required: put it in lite-demo/.env")
 	}
 	return c, nil
 }
