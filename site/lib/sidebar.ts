@@ -55,6 +55,7 @@ const ORDER = [
   "reference/elasticsearch.md",
   "reference/errors.md",
   "internals",
+  "internals/developers.md",
   "internals/architecture.md",
   "internals/design.md",
   "internals/business-rules.md",

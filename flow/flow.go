@@ -132,7 +132,7 @@ func (s *Step[In, Out]) Run(ctx context.Context, st State, in In) Result[Out] {
 	}
 	out, err := s.r.run(ctx, st, raw)
 	if err != nil {
-		return failure[Out](err, st, raw)
+		return failure[Out](err, st, raw, s.r.id())
 	}
 	return success[Out](out, st)
 }
@@ -142,13 +142,26 @@ func (s *Step[In, Out]) Run(ctx context.Context, st State, in In) Result[Out] {
 // with core.ErrInvalidArgs when the step is not resumable or the snapshot is
 // malformed.
 func (s *Step[In, Out]) Resume(ctx context.Context, snapshotBytes []byte, data any) Result[Out] {
+	if err := ctx.Err(); err != nil {
+		return Result[Out]{Status: StatusFailed, Error: err}
+	}
 	var snap snapshot
 	if err := json.Unmarshal(snapshotBytes, &snap); err != nil {
 		return Result[Out]{Status: StatusFailed, Error: fmt.Errorf("flow: decode snapshot: %w: %w", err, core.ErrInvalidArgs)}
 	}
+	if snap.StepID != s.r.id() {
+		return Result[Out]{Status: StatusFailed, Error: fmt.Errorf("flow: snapshot belongs to step %q, not %q: %w", snap.StepID, s.r.id(), core.ErrInvalidArgs)}
+	}
 	st := State(snap.State)
 	if st == nil {
 		st = State{}
+	}
+	// The snapshot may have travelled through an external store, so its input
+	// is untrusted: validate it before the step sees it.
+	if r, ok := s.r.(*runner[In, Out]); ok {
+		if err := validate(r.in, snap.StepInput, s.r.id()+" input"); err != nil {
+			return Result[Out]{Status: StatusFailed, Error: err, State: st}
+		}
 	}
 	payload, err := json.Marshal(data)
 	if err != nil {
@@ -156,15 +169,15 @@ func (s *Step[In, Out]) Resume(ctx context.Context, snapshotBytes []byte, data a
 	}
 	out, err := s.r.resume(ctx, st, snap.StepInput, payload)
 	if err != nil {
-		return failure[Out](err, st, snap.StepInput)
+		return failure[Out](err, st, snap.StepInput, s.r.id())
 	}
 	return success[Out](out, st)
 }
 
-func failure[Out any](err error, st State, input json.RawMessage) Result[Out] {
+func failure[Out any](err error, st State, input json.RawMessage, stepID string) Result[Out] {
 	var susp *Suspension
 	if errors.As(err, &susp) {
-		snap, serr := json.Marshal(snapshot{State: st, StepInput: input})
+		snap, serr := json.Marshal(snapshot{StepID: stepID, State: st, StepInput: input})
 		if serr != nil {
 			return Result[Out]{Status: StatusFailed, Error: fmt.Errorf("flow: encode snapshot: %w", serr), State: st}
 		}
@@ -184,6 +197,7 @@ func success[Out any](out json.RawMessage, st State) Result[Out] {
 }
 
 type snapshot struct {
+	StepID    string          `json:"step_id"`
 	State     map[string]any  `json:"state"`
 	StepInput json.RawMessage `json:"step_input"`
 }
@@ -306,8 +320,16 @@ func reflectSchema(v any) (json.RawMessage, error) {
 	}
 	delete(m, "$schema")
 	delete(m, "$id")
-	if _, isObject := m["properties"]; isObject || m["type"] == "object" {
-		m["additionalProperties"] = false
+	// A struct gets a closed schema; a map keeps its value schema.
+	if m["type"] == "object" {
+		hasProps := false
+		if props, ok := m["properties"].(map[string]any); ok && len(props) > 0 {
+			hasProps = true
+		}
+		_, isMap := m["additionalProperties"].(map[string]any)
+		if hasProps && !isMap {
+			m["additionalProperties"] = false
+		}
 	}
 	out, err := json.Marshal(m)
 	if err != nil {

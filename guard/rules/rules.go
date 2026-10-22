@@ -3,6 +3,7 @@ package rules
 import (
 	"context"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -99,13 +100,13 @@ var (
 		"отмени", "отмените", "сбрось", "сбросьте",
 	}
 	ruAbandonFiller = []string{
-		"все", "всё", "всех", "всё", "предыдущие", "предыдущую",
+		"все", "всё", "всех", "предыдущие", "предыдущую",
 		"прежние", "выше", "указанные", "первоначальные", "данные",
 		"мои", "наши", "ваши", "текущие", "старые", "пожалуйста", "прошу",
 	}
 	ruAbandonQualifiers = []string{
 		"предыдущие", "предыдущую", "прежние", "выше", "первоначальные",
-		"исходные", "текущие", "данные", "мои", "наши", "ваши",
+		"исходные", "текущие", "мои", "наши", "ваши",
 	}
 	ruAbandonTargets = []string{
 		"инструкции", "инструкций", "указания", "указаний", "указаниям",
@@ -154,117 +155,58 @@ type injectionGrammar struct {
 	requireQualifier                   bool
 }
 
-func wordGrammar(g injectionGrammar, gaps bool) string {
-	sep := gapClass + `+`
-	_ = gaps
-	fillerRun := `(?:(?:` + strings.Join(g.filler, `|`) + `)` + sep + `)*`
-	qualifier := `(?:(?:` + strings.Join(g.qualifiers, `|`) + `)` + sep + `)?`
-	if g.requireQualifier {
-		qualifier = `(?:(?:` + strings.Join(g.qualifiers, `|`) + `)` + sep + `)+`
-	}
-	return `(?:(?:` + strings.Join(g.verbs, `|`) + `)` + sep + fillerRun +
-		qualifier + `(?:(?:` + strings.Join(g.targets, `|`) + `)))`
-}
-
-func spacedWords(words []string) string {
-	parts := make([]string, 0, len(words))
-	for _, w := range words {
-		var b strings.Builder
-		for i, r := range []rune(w) {
-			if i > 0 {
-				if unicode.IsSpace(r) {
-					b.WriteString(gapClass + `+`)
-				} else {
-					b.WriteString(gapClass + `*`)
-				}
-			}
-			b.WriteString(regexp.QuoteMeta(string(r)))
-		}
-		parts = append(parts, b.String())
-	}
-	return strings.Join(parts, "|")
-}
-
-func spacedWordGrammar(g injectionGrammar) string {
-	sep := gapClass + `+`
-	fillerRun := `(?:(?:` + spacedWords(g.filler) + `)` + sep + `)*`
-	qualifier := `(?:(?:` + spacedWords(g.qualifiers) + `)` + sep + `)?`
-	if g.requireQualifier {
-		qualifier = `(?:(?:` + spacedWords(g.qualifiers) + `)` + sep + `)+`
-	}
-	return `(?:(?:` + spacedWords(g.verbs) + `)` + sep + fillerRun +
-		qualifier + `(?:(?:` + spacedWords(g.targets) + `)))`
-}
-
-var injectionGrammarRes = compileInjectionGrammar()
-
-func compileInjectionGrammar() []*regexp.Regexp {
-	var out []*regexp.Regexp
-	for _, g := range injectionGrammars {
-		out = append(out, canonicalRe(`(?i)`+wordGrammar(g, false)))
-		out = append(out, canonicalRe(`(?i)`+spacedWordGrammar(g)))
+// canonicalizeWords applies canonicalization to each word in the slice.
+func canonicalizeWords(words []string) []string {
+	out := make([]string, len(words))
+	for i, w := range words {
+		out[i] = guard.Canonicalize(w)
 	}
 	return out
 }
 
-type matcher struct {
-	label        string
-	category     guard.Category
-	re           *regexp.Regexp
-	group        int
-	validate     func(string) bool
-	surroundings func(text string, start, end int) bool
-}
-
-var matchers = []matcher{
-	{label: "OPENAI_KEY", category: guard.CatSecret, re: canonicalRe(`(?i)sk-[A-Za-z0-9_\-]{16,}`)},
-	{label: "AWS_ACCESS_KEY_ID", category: guard.CatSecret, re: canonicalRe(`(?i)AKIA[0-9A-Z]{16}`)},
-	{label: "GITHUB_TOKEN", category: guard.CatSecret, re: canonicalRe(`(?i)gh[pousr]_[A-Za-z0-9]{20,}`)},
-	{label: "PRIVATE_KEY", category: guard.CatSecret, re: canonicalRe(`(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----`)},
-	{label: "JWT", category: guard.CatSecret, re: canonicalRe(`(?i)eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}`)},
-	{label: "BEARER", category: guard.CatSecret, re: canonicalRe(`(?i)Bearer\s+[A-Za-z0-9._\-]{20,}`)},
-	{label: "GOOGLE_API_KEY", category: guard.CatSecret, re: canonicalRe(`(?i)AIza[0-9A-Za-z_\-]{35}`)},
-	{label: "SLACK_TOKEN", category: guard.CatSecret, re: canonicalRe(`(?i)xox[baprs]-[0-9A-Za-z\-]{10,}`)},
-
-	{label: "BANK_CARD", category: guard.CatPII, re: canonicalRe(`(?i)\b(?:\d[ \-]?){11,18}\d\b`), validate: func(s string) bool { return validLuhn(digits(s)) }},
-	{label: "IBAN", category: guard.CatPII, re: canonicalRe(`\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b`), validate: validIBAN},
-	{label: "IBAN", category: guard.CatPII, re: canonicalRe(`\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]){11,30}\b`), validate: validIBAN},
-	{label: "CVV", category: guard.CatSecret, re: canonicalRe(`(?i)\b(?:cvv|cvc)\b(?:\s+[^\s\d:=#]{1,20})*[\s:=#]*(\d{3,4})\b`), group: 1},
-	{label: "PASSPORT", category: guard.CatPII, re: canonicalRe(`\b\d{2}` + dashClass + `\d{2}` + dashClass + `\d{6}\b`), surroundings: standaloneIdentifier},
-	{label: "PASSPORT", category: guard.CatPII, re: canonicalRe(`\b\d{2}\s+\d{2}\s*\d{6}\b`), surroundings: standaloneIdentifier},
-	{label: "PASSPORT", category: guard.CatPII, re: canonicalRe(`\b\d{4}\s+\d{6}\b`), surroundings: standaloneIdentifier},
-	{label: "PASSPORT", category: guard.CatPII, re: canonicalRe(`\b\d{4}` + dashClass + `\d{6}\b`), surroundings: standaloneIdentifier},
-	{label: "PASSPORT", category: guard.CatPII, re: canonicalRe(`\b\d{4}\s+(?:№|номер|number|no)\.?\s+\d{6}\b`), surroundings: standaloneIdentifier},
-
-	{label: "SNILS", category: guard.CatPII, re: regexp.MustCompile(`\b\d{3}` + dashClass + `\d{3}` + dashClass + `\d{3}\s\d{2}\b`), validate: func(s string) bool { return validSNILS(digits(s)) }},
-	{label: "INN", category: guard.CatPII, re: regexp.MustCompile(`\b\d{10}\b`), validate: validINN10, surroundings: nearTaxpayerLabel},
-	{label: "INN", category: guard.CatPII, re: regexp.MustCompile(`\b\d{12}\b`), validate: func(s string) bool { return validINN12(s) }},
-	{label: "OGRN", category: guard.CatPII, re: regexp.MustCompile(`\b\d{13}\b`), validate: func(s string) bool { return validOGRN(s, 13) }},
-	{label: "OGRNIP", category: guard.CatPII, re: regexp.MustCompile(`\b\d{15}\b`), validate: func(s string) bool { return validOGRN(s, 15) }},
-
-	{label: "EMAIL", category: guard.CatPII, re: regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)},
-	{label: "PHONE", category: guard.CatPII, re: regexp.MustCompile(`\+7[\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}`)},
-}
-
-func init() {
-	for _, re := range injectionGrammarRes {
-		matchers = append(matchers, matcher{
-			label:    "PATTERN",
-			category: guard.CatInjection,
-			re:       re,
-		})
+func spacedWords(words []string) string {
+	var b strings.Builder
+	b.WriteString("(?:")
+	firstWord := true
+	for _, w := range words {
+		if !firstWord {
+			b.WriteString("|")
+		}
+		firstWord = false
+		for i, r := range []rune(w) {
+			if i > 0 {
+				b.WriteString(gapClass + `*`)
+			}
+			b.WriteString(regexp.QuoteMeta(string(r)))
+		}
 	}
-	for _, p := range injectionPatterns {
-		matchers = append(matchers, matcher{
-			label:    "PATTERN",
-			category: guard.CatInjection,
-			re:       canonicalRe(p),
-		})
-	}
+	b.WriteString(")")
+	return b.String()
 }
 
-func canonicalRe(expr string) *regexp.Regexp {
-	return regexp.MustCompile(guard.Canonicalize(expr))
+const gapClass = `[\s\x0B\x{85}\x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}_.,;-]`
+
+const sep = `(?:` + gapClass + `*)`
+
+func wordGrammar(g injectionGrammar) string {
+	verbs := spacedWords(canonicalizeWords(g.verbs))
+
+	var fillerRun string
+	if len(g.filler) > 0 {
+		fillerRun = `(?:(?:` + spacedWords(canonicalizeWords(g.filler)) + `)` + sep + `)*`
+	} else {
+		fillerRun = `(?:` + gapClass + `+` + sep + `)*`
+	}
+
+	var qualifier string
+	if g.requireQualifier {
+		qualifier = `(?:(?:` + spacedWords(canonicalizeWords(g.qualifiers)) + `)` + sep + `)+`
+	} else if len(g.qualifiers) > 0 {
+		qualifier = `(?:(?:` + spacedWords(canonicalizeWords(g.qualifiers)) + `)` + sep + `)?`
+	}
+
+	return `(?:(?:` + verbs + `)` + sep + fillerRun +
+		qualifier + `(?:(?:` + spacedWords(canonicalizeWords(g.targets)) + `)))`
 }
 
 const dashClass = `[-\x{2010}-\x{2015}\x{2212}]`
@@ -274,7 +216,7 @@ const identifierJoiners = "-_./:|;"
 func standaloneIdentifier(text string, start, end int) bool {
 	before, _ := utf8.DecodeLastRuneInString(text[:start])
 	after, _ := utf8.DecodeRuneInString(text[end:])
-	return !joinsIdentifier(before) || !joinsIdentifier(after)
+	return !joinsIdentifier(before) && !joinsIdentifier(after)
 }
 
 func joinsIdentifier(r rune) bool {
@@ -309,66 +251,203 @@ func nearTaxpayerLabel(text string, start, end int) bool {
 	return taxpayerLabelRe.MatchString(text[lo:hi])
 }
 
-func foldPhrases(in []string) []string {
-	out := make([]string, len(in))
-	for i, s := range in {
-		out[i] = guard.Canonicalize(s)
+func validLuhn(s string) bool {
+	var sum int
+	alt := false
+	for i := len(s) - 1; i >= 0; i-- {
+		d := int(s[i] - '0')
+		if alt {
+			d *= 2
+			if d > 9 {
+				d -= 9
+			}
+		}
+		sum += d
+		alt = !alt
 	}
-	return out
+	return sum%10 == 0
 }
 
-const gapClass = `[\s\x0B\x{85}\x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}_.,;-]`
-
-func spacedPhraseRe(phrase string) *regexp.Regexp {
-	var b strings.Builder
-	b.Grow(len(phrase) * 8)
-	for i, r := range []rune(phrase) {
-		switch {
-		case unicode.IsSpace(r):
-			b.WriteString(gapClass + `+`)
-		default:
-			if i > 0 {
-				b.WriteString(gapClass + `*`)
-			}
-			b.WriteString(regexp.QuoteMeta(string(r)))
+func validSNILS(s string) bool {
+	// SNILS is 11 digits: 9 base + 2 check digits.
+	if len(s) != 11 {
+		return false
+	}
+	for i := 0; i < 11; i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
 		}
 	}
-	return regexp.MustCompile(b.String())
-}
-
-type injectionPhrase struct {
-	phrase string
-	re     *regexp.Regexp
-}
-
-var injectionPhraseRes = func() []injectionPhrase {
-	folded := foldPhrases(injectionPhrases)
-	out := make([]injectionPhrase, len(folded))
-	for i, p := range folded {
-		out[i] = injectionPhrase{phrase: p, re: spacedPhraseRe(p)}
+	// Weighted sum of first 9 digits using reverse positions (9 down to 1).
+	var sum int
+	for i := 0; i < 9; i++ {
+		sum += int(s[i]-'0') * (9 - i)
 	}
-	return out
-}()
+	check := sum % 101
+	if check == 100 {
+		check = 0
+	}
+	// Last 2 digits are the check digits.
+	expected := int(s[9]-'0')*10 + int(s[10]-'0')
+	return check == expected
+}
+
+func validINN10(s string) bool {
+	if len(s) != 10 {
+		return false
+	}
+	// Weights in forward position order: [2,4,10,3,5,9,4,6,8].
+	weights := []int{2, 4, 10, 3, 5, 9, 4, 6, 8}
+	var sum int
+	for i := 0; i < 9; i++ {
+		d := int(s[i] - '0')
+		sum += d * weights[i]
+	}
+	check := sum % 11 % 10
+	return check == int(s[9]-'0')
+}
+
+func validINN12(s string) bool {
+	if len(s) != 12 {
+		return false
+	}
+	w1 := []int{7, 2, 4, 10, 3, 5, 9, 4, 6, 8}
+	var sum1 int
+	for i := 0; i < 10; i++ {
+		sum1 += int(s[i]-'0') * w1[i]
+	}
+	check1 := sum1 % 11 % 10
+	if check1 != int(s[10]-'0') {
+		return false
+	}
+	// Second control digit: weights [3,7,2,4,10,3,5,9,4,6,8] over first 11 digits.
+	w2 := []int{3, 7, 2, 4, 10, 3, 5, 9, 4, 6, 8}
+	var sum2 int
+	for i := 0; i < 11; i++ {
+		sum2 += int(s[i]-'0') * w2[i]
+	}
+	check2 := sum2 % 11 % 10
+	return check2 == int(s[11]-'0')
+}
+
+func validOGRN(s string, n int) bool {
+	if len(s) != n {
+		return false
+	}
+	num := s[:n-1]
+	check := int(s[n-1] - '0')
+	var sum int
+	// Weights [n-1, n-2, ..., 2, 1] for the first n-1 digits.
+	for i := 0; i < len(num); i++ {
+		sum += int(num[i]-'0') * (n - 1 - i)
+	}
+	return sum%10 == check
+}
+
+type matcher struct {
+	label        string
+	category     guard.Category
+	re           *regexp.Regexp
+	group        int
+	validate     func(string) bool
+	surroundings func(text string, start, end int) bool
+}
 
 // Detector is the deterministic L1 layer: it matches injection phrases,
 // injection regexes, and PII/secret patterns with checksum validation.
-type Detector struct{}
+type Detector struct {
+	matchers []matcher
+}
 
-// New returns the L1 detector.
-func New() *Detector { return &Detector{} }
+// NewDetector returns the L1 detector with all patterns pre-compiled.
+// Returns an error if any regex fails to compile.
+func NewDetector() (*Detector, error) {
+	d := &Detector{}
+
+	matchers := []matcher{
+		{label: "OPENAI_KEY", category: guard.CatSecret, re: compileRegex(`(?i)sk-[A-Za-z0-9_\-]{16,}`)},
+		{label: "AWS_ACCESS_KEY_ID", category: guard.CatSecret, re: compileRegex(`(?i)AKIA[0-9A-Z]{16}`)},
+		{label: "GITHUB_TOKEN", category: guard.CatSecret, re: compileRegex(`(?i)gh[pousr]_[A-Za-z0-9]{20,}`)},
+		{label: "PRIVATE_KEY", category: guard.CatSecret, re: compileRegex(`(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----`)},
+		{label: "JWT", category: guard.CatSecret, re: compileRegex(`(?i)eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}`)},
+		{label: "BEARER", category: guard.CatSecret, re: compileRegex(`(?i)Bearer\s+[A-Za-z0-9._\-]{20,}`)},
+		{label: "GOOGLE_API_KEY", category: guard.CatSecret, re: compileRegex(`(?i)AIza[0-9A-Za-z_\-]{35}`)},
+		{label: "SLACK_TOKEN", category: guard.CatSecret, re: compileRegex(`(?i)xox[baprs]-[0-9A-Za-z\-]{10,}`)},
+
+		{label: "BANK_CARD", category: guard.CatPII, re: compileRegex(`(?i)\b(?:\d[ \-]?){11,18}\d\b`), validate: func(s string) bool { return validLuhn(digits(s)) }},
+		{label: "IBAN", category: guard.CatPII, re: compileRegex(`(?i)\b[A-Z]{2}\d{2}[\sA-Z0-9]{11,30}\b`), validate: func(s string) bool { return validIBAN(strings.ReplaceAll(s, " ", "")) }},
+		{label: "CVV", category: guard.CatSecret, re: compileRegex(`(?i)\b(?:cvv|cvc)\b(?:\s+[^\s\d:=#]{1,20})*[\s:=#]*(\d{3,4})\b`), group: 1},
+		{label: "PASSPORT", category: guard.CatPII, re: compileRegex(`\b\d{2}` + dashClass + `\d{2}` + dashClass + `\d{6}\b`), surroundings: standaloneIdentifier},
+		{label: "PASSPORT", category: guard.CatPII, re: compileRegex(`\b\d{2}\s+\d{2}\s*\d{6}\b`), surroundings: standaloneIdentifier},
+		{label: "PASSPORT", category: guard.CatPII, re: compileRegex(`\b\d{4}\s+\d{6}\b`), surroundings: standaloneIdentifier},
+		{label: "PASSPORT", category: guard.CatPII, re: compileRegex(`\b\d{4}` + dashClass + `\d{6}\b`), surroundings: standaloneIdentifier},
+		{label: "PASSPORT", category: guard.CatPII, re: compileRegex(canonicalRegex(`\b\d{4}\s+(?:№|номер|number|no)\.?\s+\d{6}\b`)), surroundings: standaloneIdentifier},
+
+		{label: "SNILS", category: guard.CatPII, re: compileRegex(`\b\d{3}` + dashClass + `\d{3}` + dashClass + `\d{3}\s\d{2}\b`), validate: func(s string) bool { return validSNILS(digits(s)) }},
+		{label: "INN", category: guard.CatPII, re: compileRegex(`\b\d{10}\b`), validate: validINN10, surroundings: nearTaxpayerLabel},
+		{label: "INN", category: guard.CatPII, re: compileRegex(`\b\d{12}\b`), validate: func(s string) bool { return validINN12(s) }},
+		{label: "OGRN", category: guard.CatPII, re: compileRegex(`\b\d{13}\b`), validate: func(s string) bool { return validOGRN(s, 13) }},
+		{label: "OGRNIP", category: guard.CatPII, re: compileRegex(`\b\d{15}\b`), validate: func(s string) bool { return validOGRN(s, 15) }},
+
+		{label: "EMAIL", category: guard.CatPII, re: compileRegex(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)},
+		{label: "PHONE", category: guard.CatPII, re: compileRegex(`\+7[\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}`)},
+	}
+
+	// Add injection grammar matchers
+	injectionGrammarRes := compileInjectionGrammar()
+	for _, re := range injectionGrammarRes {
+		matchers = append(matchers, matcher{
+			label:    "PATTERN",
+			category: guard.CatInjection,
+			re:       re,
+		})
+	}
+	for _, p := range injectionPatterns {
+		matchers = append(matchers, matcher{
+			label:    "PATTERN",
+			category: guard.CatInjection,
+			re:       compileRegex(canonicalRegex(p)),
+		})
+	}
+
+	d.matchers = matchers
+	return d, nil
+}
 
 // Name returns "L1".
-func (*Detector) Name() string { return "L1" }
+func (d *Detector) Name() string { return "L1" }
+
+// New is a compatibility wrapper around NewDetector.
+func New() *Detector {
+	d, _ := NewDetector()
+	return d
+}
 
 // Detect scans text for injection, PII, and secret findings, returning them in
 // rune offsets with score 1; empty text yields no findings.
-func (*Detector) Detect(_ context.Context, text string) ([]guard.Finding, error) {
+//
+// Rune positions are computed in a single pass over the text to avoid the
+// O(n·k) cost of calling utf8.RuneCountInString for every match.
+func (d *Detector) Detect(_ context.Context, text string) ([]guard.Finding, error) {
 	if text == "" {
 		return nil, nil
 	}
+
+	// Precompute rune start positions for every byte offset in a single O(n) pass.
+	runeStart := make([]int, len(text)+1)
+	rn := 0
+	pos := 0
+	for pos < len(text) {
+		runeStart[pos] = rn
+		_, size := utf8.DecodeRuneInString(text[pos:])
+		pos += size
+		rn++
+	}
+	runeStart[len(text)] = rn
+
 	var findings []guard.Finding
 	findings = append(findings, phrases(text)...)
-	for _, m := range matchers {
+	for _, m := range d.matchers {
 		for _, loc := range m.re.FindAllStringSubmatchIndex(text, -1) {
 			g := m.group * 2
 			if g+1 >= len(loc) || loc[g] < 0 {
@@ -385,8 +464,8 @@ func (*Detector) Detect(_ context.Context, text string) ([]guard.Finding, error)
 			findings = append(findings, guard.Finding{
 				Category: m.category,
 				Label:    m.label,
-				Start:    utf8.RuneCountInString(text[:start]),
-				End:      utf8.RuneCountInString(text[:end]),
+				Start:    runeStart[start],
+				End:      runeStart[end],
 				Score:    1,
 				Layer:    "L1",
 			})
@@ -422,119 +501,132 @@ func digits(s string) string {
 	return b.String()
 }
 
-func validLuhn(d string) bool {
-	if len(d) < 12 || len(d) > 19 {
-		return false
+// foldPhrases applies canonicalization to each phrase in the slice.
+func foldPhrases(in []string) []string {
+	out := make([]string, len(in))
+	for i, s := range in {
+		out[i] = guard.Canonicalize(s)
 	}
-	sum := 0
-	parity := len(d) % 2
-	for i := 0; i < len(d); i++ {
-		n := int(d[i] - '0')
-		if i%2 == parity {
-			if n *= 2; n > 9 {
-				n -= 9
+	return out
+}
+
+func spacedPhraseRe(phrase string) *regexp.Regexp {
+	var b strings.Builder
+	b.Grow(len(phrase) * 8)
+	for i, r := range []rune(phrase) {
+		switch {
+		case unicode.IsSpace(r):
+			b.WriteString(gapClass + `+`)
+		default:
+			if i > 0 {
+				b.WriteString(gapClass + `*`)
+			}
+			b.WriteString(regexp.QuoteMeta(string(r)))
+		}
+	}
+	return regexp.MustCompile(b.String())
+}
+
+var injectionPhraseRes = func() []struct {
+	phrase string
+	re     *regexp.Regexp
+} {
+	folded := foldPhrases(injectionPhrases)
+	out := make([]struct {
+		phrase string
+		re     *regexp.Regexp
+	}, len(folded))
+	for i, p := range folded {
+		out[i] = struct {
+			phrase string
+			re     *regexp.Regexp
+		}{phrase: p, re: spacedPhraseRe(p)}
+	}
+	return out
+}()
+
+func compileInjectionGrammar() []*regexp.Regexp {
+	var out []*regexp.Regexp
+	for _, g := range injectionGrammars {
+		out = append(out, compileRegex(`(?i)`+wordGrammar(g)))
+	}
+	return out
+}
+
+func compileRegex(pattern string) *regexp.Regexp {
+	return regexp.MustCompile(pattern)
+}
+
+// canonicalRegex canonicalizes the literal parts of a regex pattern while
+// leaving regex metacharacters (escapes, character classes, quantifiers)
+// untouched. The input text is canonicalized before matching, so the pattern
+// must be in the same canonical form to match homoglyph-obfuscated text.
+func canonicalRegex(pattern string) string {
+	var b strings.Builder
+	inClass := false
+	escaped := false
+	for _, r := range pattern {
+		switch {
+		case escaped:
+			b.WriteRune(r)
+			escaped = false
+		case r == '\\':
+			b.WriteRune(r)
+			escaped = true
+		case r == '[':
+			inClass = true
+			b.WriteRune(r)
+		case r == ']':
+			inClass = false
+			b.WriteRune(r)
+		default:
+			if inClass {
+				b.WriteRune(r)
+			} else {
+				b.WriteString(guard.Canonicalize(string(r)))
 			}
 		}
-		sum += n
 	}
-	return sum%10 == 0
+	return b.String()
 }
-
-var ibanRe = regexp.MustCompile(`^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$`)
 
 func validIBAN(s string) bool {
-	s = strings.ToUpper(strings.Join(strings.Fields(s), ""))
-	if !ibanRe.MatchString(s) {
+	// IBAN validation via mod-97.
+	if len(s) < 15 || len(s) > 34 {
 		return false
 	}
+	// Move first 4 chars to end and convert letters to numbers (A=10, B=11, ...)
 	rearranged := s[4:] + s[:4]
-	mod := 0
+	var num strings.Builder
 	for _, r := range rearranged {
-		var v int
-		switch {
-		case r >= '0' && r <= '9':
-			v = int(r - '0')
-		case r >= 'A' && r <= 'Z':
-			v = int(r-'A') + 10
-		default:
+		if r >= '0' && r <= '9' {
+			num.WriteRune(r)
+		} else if r >= 'A' && r <= 'Z' {
+			num.WriteString(strconv.Itoa(int(r - 'A' + 10)))
+		} else if r >= 'a' && r <= 'z' {
+			num.WriteString(strconv.Itoa(int(r - 'a' + 10)))
+		} else {
 			return false
 		}
-		if v < 10 {
-			mod = (mod*10 + v) % 97
-		} else {
-			mod = (mod*100 + v) % 97
-		}
 	}
-	return mod == 1
+	// Mod 97 check
+	remainder := 0
+	for _, d := range num.String() {
+		remainder = (remainder*10 + int(d-'0')) % 97
+	}
+	return remainder == 1
 }
 
-func validSNILS(d string) bool {
-	if len(d) != 11 {
-		return false
+func max(a, b int) int {
+	if a > b {
+		return a
 	}
-	sum := 0
-	for i := 0; i < 9; i++ {
-		sum += int(d[i]-'0') * (9 - i)
-	}
-	var cs int
-	switch {
-	case sum < 100:
-		cs = sum
-	case sum == 100 || sum == 101:
-		cs = 0
-	default:
-		cs = sum % 101
-		if cs == 100 {
-			cs = 0
-		}
-	}
-	control := int(d[9]-'0')*10 + int(d[10]-'0')
-	return cs == control
+	return b
 }
 
-func validINN10(d string) bool {
-	if len(d) != 10 {
-		return false
+func min(a, b int) int {
+	if a < b {
+		return a
 	}
-	w := [9]int{2, 4, 10, 3, 5, 9, 4, 6, 8}
-	sum := 0
-	for i := 0; i < 9; i++ {
-		sum += int(d[i]-'0') * w[i]
-	}
-	return sum%11%10 == int(d[9]-'0')
-}
-
-func validINN12(d string) bool {
-	if len(d) != 12 {
-		return false
-	}
-	w11 := [10]int{7, 2, 4, 10, 3, 5, 9, 4, 6, 8}
-	s11 := 0
-	for i := 0; i < 10; i++ {
-		s11 += int(d[i]-'0') * w11[i]
-	}
-	if s11%11%10 != int(d[10]-'0') {
-		return false
-	}
-	w12 := [11]int{3, 7, 2, 4, 10, 3, 5, 9, 4, 6, 8}
-	s12 := 0
-	for i := 0; i < 11; i++ {
-		s12 += int(d[i]-'0') * w12[i]
-	}
-	return s12%11%10 == int(d[11]-'0')
-}
-
-func validOGRN(d string, n int) bool {
-	if len(d) != n {
-		return false
-	}
-	body := d[:n-1]
-	var num int
-	for i := 0; i < len(body); i++ {
-		num = num*10 + int(body[i]-'0')
-		if num > 1<<62 {
-			num %= 11
-		}
-	}
-	return (num%11)%10 == int(d[n-1]-'0')
+	return b
 }

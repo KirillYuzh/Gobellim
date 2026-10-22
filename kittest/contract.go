@@ -3,15 +3,10 @@ package kittest
 import (
 	"context"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/KirillYuzh/Gobellim/guard"
-	"github.com/KirillYuzh/Gobellim/trace"
 )
-
-// Recorder is an in-memory trace.Sink a test can read back.
-func Recorder() *trace.Recorder { return trace.NewRecorder() }
 
 // DetectorContract checks the guard.Detector contract: a non-empty name, and an
 // empty input that neither fails nor reports anything.
@@ -30,33 +25,6 @@ func DetectorContract(t *testing.T, d guard.Detector) {
 	if len(found) != 0 {
 		t.Errorf("kittest: DetectorContract: Detect(\"\") reported %d findings; an empty input has nothing to find", len(found))
 	}
-}
-
-// SinkContract checks that a trace.Sink takes traces, observations and scores
-// without panicking and stays safe under the writer's concurrent calls. Run it
-// under -race.
-func SinkContract(t *testing.T, s trace.Sink) {
-	t.Helper()
-	if s == nil {
-		t.Fatal("kittest: SinkContract: sink is nil")
-	}
-	s.Enqueue(trace.Trace{ID: "t1", Name: "chat"})
-	s.EnqueueObservation(trace.Observation{ID: "o1", TraceID: "t1", Name: "step", Kind: trace.KindSpan})
-	s.EnqueueScore(trace.Score{TraceID: "t1", Name: "quality", Value: 1})
-
-	var wg sync.WaitGroup
-	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for range 16 {
-				s.Enqueue(trace.Trace{ID: "t1", Name: "chat"})
-				s.EnqueueObservation(trace.Observation{ID: "o1", TraceID: "t1", Name: "step"})
-				s.EnqueueScore(trace.Score{TraceID: "t1", Name: "quality"})
-			}
-		}()
-	}
-	wg.Wait()
 }
 
 // Scope is the neutral access scope a store plugin receives. It is

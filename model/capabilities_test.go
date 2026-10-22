@@ -31,7 +31,7 @@ func (c *capClient) SupportsNativeSchema() bool {
 }
 
 func (c *capClient) Chat(_ context.Context, req Request) (Response, error) {
-	msgs, native := schemaPlan(req)
+	msgs, native := SchemaPlan(req)
 	c.mu.Lock()
 	c.requests = append(c.requests, req)
 	c.planned = msgs
@@ -137,15 +137,10 @@ func TestChainCapabilitiesFoldThroughRealClients(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	giga, err := GigaChat(GigaChatConfig{BaseURL: "http://127.0.0.1:1", Model: "GigaChat-2", Credentials: "creds"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	if !SupportsNativeSchema(newChain(t, openai, ollama)) {
 		t.Fatal("a chain of two native clients must support native schema")
 	}
-	if SupportsNativeSchema(newChain(t, openai, giga)) {
+	if SupportsNativeSchema(newChain(t, openai, plainLink("plain"))) {
 		t.Fatal("a chain containing a link without native schema must not claim it")
 	}
 }

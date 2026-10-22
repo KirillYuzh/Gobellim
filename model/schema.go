@@ -7,9 +7,14 @@ import (
 
 const schemaInstruction = "Return only JSON that validates against this JSON Schema:\n"
 
-func schemaPlan(req Request) (msgs []Message, native bool) {
+// SchemaPlan applies Request.SchemaMode to the messages: SchemaInline and
+// SchemaSystem inject the schema as text and report native == false, while the
+// default leaves the messages untouched and reports native == true so the
+// provider can use its own structured-output field. A provider implementation
+// must call it before sending the request.
+func SchemaPlan(req Request) (msgs []Message, native bool) {
 	if len(req.JSONSchema) == 0 {
-		return req.Messages, false
+		return append([]Message(nil), req.Messages...), false
 	}
 	switch req.SchemaMode {
 	case SchemaInline:
@@ -17,7 +22,7 @@ func schemaPlan(req Request) (msgs []Message, native bool) {
 	case SchemaSystem:
 		return injectSystem(req.Messages, req.JSONSchema), false
 	default:
-		return req.Messages, true
+		return append([]Message(nil), req.Messages...), true
 	}
 }
 
@@ -43,31 +48,37 @@ func injectSystem(msgs []Message, schema json.RawMessage) []Message {
 	return append([]Message{{Role: RoleSystem, Content: schemaInstruction + string(schema)}}, out...)
 }
 
-func applyProviderOptions(req Request, v any) (map[string]any, error) {
+// ApplyProviderOptions encodes v as the request object and merges
+// Request.ProviderOptions into it, except for the protected contract keys
+// (model, messages, stream). A provider implementation uses it so arbitrary
+// per-provider options do not overwrite the request contract.
+func ApplyProviderOptions(req Request, v any) (map[string]any, error) {
+	m, err := toMap(v)
+	if err != nil {
+		return nil, fmt.Errorf("model: encode request: %w", err)
+	}
+	// ProviderOptions override any field except protected contract keys.
+	protected := map[string]bool{
+		"model": true, "messages": true, "stream": true,
+		"tools": true, "tool_choice": true, "response_format": true,
+		"format": true, "functions": true, "function_call": true,
+	}
+	for k, val := range req.ProviderOptions {
+		if !protected[k] {
+			m[k] = val
+		}
+	}
+	return m, nil
+}
+
+func toMap(v any) (map[string]any, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return nil, fmt.Errorf("model: encode request: %w", err)
 	}
-	m := map[string]any{}
+	var m map[string]any
 	if err := json.Unmarshal(b, &m); err != nil {
 		return nil, fmt.Errorf("model: encode request: %w", err)
-	}
-	protected := []string{"model", "messages", "stream"}
-	required := make(map[string]any, len(protected))
-	for _, k := range protected {
-		if val, ok := m[k]; ok {
-			required[k] = val
-		}
-	}
-	for k, val := range req.ProviderOptions {
-		m[k] = val
-	}
-	for _, k := range protected {
-		if val, ok := required[k]; ok {
-			m[k] = val
-		} else {
-			delete(m, k)
-		}
 	}
 	return m, nil
 }

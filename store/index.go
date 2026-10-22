@@ -20,27 +20,31 @@ func ChunksIndexBody(dims int) ([]byte, error) {
 		},
 		"mappings": map[string]any{
 			"properties": map[string]any{
-				"doc_id":      map[string]any{"type": "keyword"},
-				TenantField:   map[string]any{"type": "keyword"},
-				ACLField:      map[string]any{"type": "keyword"},
-				TextField:     textField(),
-				VectorField:   map[string]any{"type": "dense_vector", "dims": dims, "index": true, "similarity": "cosine"},
-				"position":    map[string]any{"type": "integer"},
-				"source":      map[string]any{"type": "keyword"},
-				"created_at":  map[string]any{"type": "date"},
-				"doc_version": map[string]any{"type": "long"},
-				"quarantined": map[string]any{"type": "boolean"},
+				"doc_id":        map[string]any{"type": "keyword"},
+				TenantField:     map[string]any{"type": "keyword"},
+				ACLField:        map[string]any{"type": "keyword"},
+				TextField:       textField(),
+				VectorField:     map[string]any{"type": "dense_vector", "dims": dims, "index": true, "similarity": "cosine"},
+				"position":      map[string]any{"type": "integer"},
+				"source":        map[string]any{"type": "keyword"},
+				"created_at":    map[string]any{"type": "date"},
+				"doc_version":   map[string]any{"type": "long"},
+				QuarantineField: map[string]any{"type": "boolean"},
 
 				EmbedModelField: map[string]any{"type": "keyword"},
 			},
 		},
 	}
-	return json.Marshal(body)
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("store: encode chunks index body: %w", err)
+	}
+	return raw, nil
 }
 
 // MemoryMessagesIndexBody returns the kit-memory-messages mapping; vector and
 // embed_model fields are added only when dims > 0.
-func MemoryMessagesIndexBody(dims int) []byte {
+func MemoryMessagesIndexBody(dims int) ([]byte, error) {
 	props := map[string]any{
 		ThreadField:    map[string]any{"type": "keyword"},
 		TenantField:    map[string]any{"type": "keyword"},
@@ -60,7 +64,7 @@ func MemoryMessagesIndexBody(dims int) []byte {
 
 // MemoryWorkingIndexBody returns the kit-memory-working mapping, where data is
 // an unindexed object.
-func MemoryWorkingIndexBody() []byte {
+func MemoryWorkingIndexBody() ([]byte, error) {
 	return indexBody(map[string]any{
 		ThreadField:  map[string]any{"type": "keyword"},
 		TenantField:  map[string]any{"type": "keyword"},
@@ -74,7 +78,7 @@ func textField() map[string]any {
 	return map[string]any{"type": "text", "analyzer": "russian"}
 }
 
-func indexBody(properties map[string]any) []byte {
+func indexBody(properties map[string]any) ([]byte, error) {
 	body := map[string]any{
 		"settings": map[string]any{
 			"number_of_shards":   1,
@@ -82,8 +86,11 @@ func indexBody(properties map[string]any) []byte {
 		},
 		"mappings": map[string]any{"properties": properties},
 	}
-	b, _ := json.Marshal(body)
-	return b
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("store: encode index body: %w", err)
+	}
+	return raw, nil
 }
 
 // ILMPolicyBody returns the kit-traces-30d ILM policy: rollover at 10 GB and
@@ -105,12 +112,16 @@ func ILMPolicyBody(days int) ([]byte, error) {
 			},
 		},
 	}
-	return json.Marshal(body)
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("store: encode ilm policy body: %w", err)
+	}
+	return raw, nil
 }
 
 // TracesTemplateBody returns the kit-traces data-stream template with the trace
 // mapping.
-func TracesTemplateBody() []byte {
+func TracesTemplateBody() ([]byte, error) {
 	return template(DataStreamTraces, map[string]any{
 		"@timestamp":    map[string]any{"type": "date"},
 		"trace_id":      map[string]any{"type": "keyword"},
@@ -142,7 +153,7 @@ func TracesTemplateBody() []byte {
 
 // ObservationsTemplateBody returns the kit-observations data-stream template
 // with the observation mapping.
-func ObservationsTemplateBody() []byte {
+func ObservationsTemplateBody() ([]byte, error) {
 	return template(DataStreamObservations, map[string]any{
 		"@timestamp":        map[string]any{"type": "date"},
 		"trace_id":          map[string]any{"type": "keyword"},
@@ -176,7 +187,7 @@ func ObservationsTemplateBody() []byte {
 	})
 }
 
-func template(name string, properties map[string]any) []byte {
+func template(name string, properties map[string]any) ([]byte, error) {
 	body := map[string]any{
 		"index_patterns": []string{name},
 		"data_stream":    map[string]any{},
@@ -189,6 +200,9 @@ func template(name string, properties map[string]any) []byte {
 			"mappings": map[string]any{"properties": properties},
 		},
 	}
-	b, _ := json.Marshal(body)
-	return b
+	b, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("store: encode template %s: %w", name, err)
+	}
+	return b, nil
 }

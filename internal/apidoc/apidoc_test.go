@@ -128,7 +128,7 @@ func rootOf(rel string) string {
 
 func unpublishedRoot(name string) bool {
 	switch name {
-	case "internal", "demo", "scripts", "cmd":
+	case "internal", "demo", "scripts", "cmd", "lite-demo", "reference":
 		return true
 	}
 	return false

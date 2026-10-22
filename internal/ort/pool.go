@@ -13,20 +13,27 @@ type Session interface {
 	Close() error
 }
 
-var ErrQueueTimeout = errors.New("kit: ort queue timeout")
+var (
+	ErrQueueTimeout = errors.New("kit: ort queue timeout")
+	ErrPoolClosed   = errors.New("kit: ort pool closed")
+)
 
 const DefaultWait = 2 * time.Second
 
 type Pool struct {
-	ch   chan Session
-	wait time.Duration
-	all  []Session
-	once sync.Once
+	ch     chan Session
+	done   chan struct{}
+	wait   time.Duration
+	all    []Session
+	mu     sync.Mutex
+	closed bool
 }
+
+var ErrNoSessions = errors.New("ort: no sessions")
 
 func NewPool(sessions []Session, wait time.Duration) (*Pool, error) {
 	if len(sessions) == 0 {
-		return nil, fmt.Errorf("ort: pool needs at least one session: %w", errors.New("no sessions"))
+		return nil, fmt.Errorf("ort: pool needs at least one session: %w", ErrNoSessions)
 	}
 	if wait <= 0 {
 		wait = DefaultWait
@@ -35,15 +42,24 @@ func NewPool(sessions []Session, wait time.Duration) (*Pool, error) {
 	for _, s := range sessions {
 		ch <- s
 	}
-	return &Pool{ch: ch, wait: wait, all: sessions}, nil
+	return &Pool{ch: ch, done: make(chan struct{}), wait: wait, all: append([]Session(nil), sessions...)}, nil
 }
 
 func (p *Pool) Acquire(ctx context.Context) (Session, error) {
+	if p.isClosed() {
+		return nil, ErrPoolClosed
+	}
 	timer := time.NewTimer(p.wait)
 	defer timer.Stop()
 	select {
 	case s := <-p.ch:
+		if p.isClosed() {
+			_ = s.Close()
+			return nil, ErrPoolClosed
+		}
 		return s, nil
+	case <-p.done:
+		return nil, ErrPoolClosed
 	case <-timer.C:
 		return nil, fmt.Errorf("ort: acquire: %w", ErrQueueTimeout)
 	case <-ctx.Done():
@@ -55,7 +71,19 @@ func (p *Pool) Release(s Session) {
 	if s == nil {
 		return
 	}
-	p.ch <- s
+	if p.isClosed() {
+		// Close already drained the pool; a session returned after it would
+		// never be closed, so close it here.
+		_ = s.Close()
+		return
+	}
+	select {
+	case p.ch <- s:
+	default:
+		// Double release or a session from another pool: close it instead of
+		// leaking the native arena.
+		_ = s.Close()
+	}
 }
 
 type Stats struct {
@@ -70,14 +98,35 @@ func (p *Pool) Stats() Stats {
 
 func (p *Pool) Close() error {
 	var err error
-	p.once.Do(func() {
-		for _, s := range p.all {
-			if cerr := s.Close(); cerr != nil && err == nil {
-				err = cerr
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return nil
+	}
+	p.closed = true
+	close(p.done)
+	p.mu.Unlock()
+
+	var sessions []Session
+	for {
+		select {
+		case s := <-p.ch:
+			sessions = append(sessions, s)
+		default:
+			for _, s := range sessions {
+				if cerr := s.Close(); cerr != nil && err == nil {
+					err = cerr
+				}
 			}
+			return err
 		}
-	})
-	return err
+	}
+}
+
+func (p *Pool) isClosed() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.closed
 }
 
 func Threads(numSessions int) int {

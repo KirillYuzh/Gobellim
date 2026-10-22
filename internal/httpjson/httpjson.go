@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -27,10 +28,7 @@ type StatusError struct {
 }
 
 func (e *StatusError) Error() string {
-	if e.Body == "" {
-		return fmt.Sprintf("status %d", e.StatusCode)
-	}
-	return fmt.Sprintf("status %d: %s", e.StatusCode, e.Body)
+	return fmt.Sprintf("status %d", e.StatusCode)
 }
 
 func (e *StatusError) IsRetryable() bool {
@@ -117,7 +115,7 @@ func Do(ctx context.Context, hc *http.Client, method, url string, headers map[st
 	)
 	for attempt := 0; attempt < attempts; attempt++ {
 		if attempt > 0 {
-			if err := wait(ctx, backoff(cfg.Backoff, attempt, retryAfter)); err != nil {
+			if err := wait(ctx, Backoff(cfg.Backoff, attempt, retryAfter)); err != nil {
 				return err
 			}
 		}
@@ -185,7 +183,8 @@ func IsRetryable(err error) bool {
 	if errors.As(err, &se) {
 		return se.IsRetryable()
 	}
-	return true
+	var ne net.Error
+	return errors.As(err, &ne)
 }
 
 func RetryAfter(err error) time.Duration {
@@ -212,7 +211,12 @@ func Snippet(b []byte) string {
 	return string(b)
 }
 
-func backoff(base time.Duration, attempt int, retryAfter time.Duration) time.Duration {
+func Backoff(base time.Duration, attempt int, retryAfter time.Duration) time.Duration {
+	// A hostile or broken upstream must not be able to pin a goroutine for
+	// arbitrary long: cap Retry-After at 30 seconds.
+	if retryAfter > 30*time.Second {
+		retryAfter = 30 * time.Second
+	}
 	if retryAfter > 0 {
 		return retryAfter
 	}

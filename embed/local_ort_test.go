@@ -3,8 +3,14 @@
 package embed
 
 import (
+	"errors"
 	"math"
+	"os"
+	"path/filepath"
+	"sync"
 	"testing"
+
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 func TestMeanPoolAveragesMaskedTokens(t *testing.T) {
@@ -75,5 +81,43 @@ func TestRestoreOrderInvertsPermutation(t *testing.T) {
 		if restored[i][0] != float32(i) {
 			t.Fatalf("restoreOrder[%d] = %v, want %d", i, restored[i][0], i)
 		}
+	}
+}
+
+func TestInitEnvironmentIsSafeUnderConcurrency(t *testing.T) {
+	const workers = 8
+	errs := make([]error, workers)
+	var wg sync.WaitGroup
+	for i := range workers {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = initEnvironment()
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if (err == nil) != (errs[0] == nil) {
+			t.Fatalf("caller %d got %v, caller 0 got %v: every caller must see the same result",
+				i, err, errs[0])
+		}
+	}
+}
+
+func TestNewLocalUsesTheSharedPresetRule(t *testing.T) {
+	root := t.TempDir()
+	const model = "unknown/model"
+	dir := writeModelDir(t, root, model)
+
+	if _, err := NewLocal(LocalConfig{Dir: root, Model: model}); !errors.Is(err, core.ErrInvalidConfig) {
+		t.Fatalf("err = %v, want %v: the model has no preset and no kit_embedder.json", err, core.ErrInvalidConfig)
+	}
+
+	broken := filepath.Join(dir, "kit_embedder.json")
+	if err := os.WriteFile(broken, []byte(`{"pooling":"weird"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewLocal(LocalConfig{Dir: root, Model: model}); !errors.Is(err, core.ErrInvalidConfig) {
+		t.Fatalf("err = %v, want %v: the preset file must be read by the shared rule", err, core.ErrInvalidConfig)
 	}
 }

@@ -63,7 +63,10 @@ func TestValidateMemoryMessage(t *testing.T) {
 }
 
 func TestMemoryHistoryBody(t *testing.T) {
-	body := MemoryHistoryBody("t1", "u1", "th1", 10)
+	body, err := MemoryHistoryBody("t1", "u1", "th1", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
 	raw := string(body)
 	for _, want := range []string{`"thread_id":"th1"`, `"tenant":"t1"`, `"user_id":"u1"`} {
 		if !strings.Contains(raw, want) {
@@ -80,7 +83,11 @@ func TestMemoryHistoryBody(t *testing.T) {
 	if parsed["size"].(float64) != 10 {
 		t.Fatalf("size = %v", parsed["size"])
 	}
-	if MemoryHistoryBody("t1", "u1", "th1", 0) != nil {
+	empty, err := MemoryHistoryBody("t1", "u1", "th1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty != nil {
 		t.Fatal("zero limit must return nil")
 	}
 }
@@ -105,7 +112,11 @@ func TestMemoryRecallBody(t *testing.T) {
 }
 
 func TestMemoryClearBody(t *testing.T) {
-	raw := string(MemoryClearBody("t1", "u1", "th1"))
+	body, err := MemoryClearBody("t1", "u1", "th1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := string(body)
 	for _, want := range []string{`"thread_id":"th1"`, `"tenant":"t1"`, `"user_id":"u1"`} {
 		if !strings.Contains(raw, want) {
 			t.Fatalf("clear body missing %s: %s", want, raw)
@@ -114,12 +125,12 @@ func TestMemoryClearBody(t *testing.T) {
 }
 
 func TestMemoryWorkingID(t *testing.T) {
-	id := MemoryWorkingID("t1", "th1")
-	if id != MemoryWorkingID("t1", "th1") {
+	id := MemoryWorkingID("t1", "u1", "th1")
+	if id != MemoryWorkingID("t1", "u1", "th1") {
 		t.Fatal("working id must be deterministic")
 	}
-	if id == MemoryWorkingID("t1", "th2") || id == MemoryWorkingID("t2", "th1") {
-		t.Fatal("working id must differ across tenants and threads")
+	if id == MemoryWorkingID("t1", "u1", "th2") || id == MemoryWorkingID("t2", "u1", "th1") || id == MemoryWorkingID("t1", "u2", "th1") {
+		t.Fatal("working id must differ across tenants, users, and threads")
 	}
 	if strings.ContainsAny(id, "/?# ") {
 		t.Fatalf("working id must be path-safe: %q", id)
@@ -147,8 +158,12 @@ func TestParseMemorySearch(t *testing.T) {
 }
 
 func TestMemoryMessagesIndexBody(t *testing.T) {
+	body, err := MemoryMessagesIndexBody(384)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var parsed map[string]any
-	if err := json.Unmarshal(MemoryMessagesIndexBody(384), &parsed); err != nil {
+	if err := json.Unmarshal(body, &parsed); err != nil {
 		t.Fatal(err)
 	}
 	props := parsed["mappings"].(map[string]any)["properties"].(map[string]any)
@@ -159,8 +174,12 @@ func TestMemoryMessagesIndexBody(t *testing.T) {
 		t.Fatalf("seq mapping = %v", props["seq"])
 	}
 
+	noVecBody, err := MemoryMessagesIndexBody(0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var noVec map[string]any
-	if err := json.Unmarshal(MemoryMessagesIndexBody(0), &noVec); err != nil {
+	if err := json.Unmarshal(noVecBody, &noVec); err != nil {
 		t.Fatal(err)
 	}
 	props = noVec["mappings"].(map[string]any)["properties"].(map[string]any)

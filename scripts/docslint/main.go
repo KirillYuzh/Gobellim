@@ -43,7 +43,7 @@ func main() {
 
 func defaultRoot() string {
 	for _, dir := range []string{".", ".."} {
-		if _, err := os.Stat(filepath.Join(dir, "docs", "internals", "design.md")); err == nil {
+		if _, err := os.Stat(filepath.Join(dir, "docs", "README.md")); err == nil {
 			return dir
 		}
 	}

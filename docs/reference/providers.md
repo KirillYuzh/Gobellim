@@ -1,15 +1,15 @@
 # Провайдеры
 
-kit не привязан к вендору. Клиент чата — интерфейс `model.Client` (`Chat`, `Model`); необязательные расширения — `model.Streamer` (стриминг; его реализует `*model.OpenAIClient`, то есть `openai`/`vllm`) и `model.Regional` (`Region()`, резидентность, BR-106). Эмбеддер — `embed.Embedder`. Реализации живут в пакетах `model` и `embed`.
+gobellim не привязан к вендору. Клиент чата — интерфейс `model.Client` (`Chat`, `Model`); необязательные расширения — `model.Streamer` (стриминг; его реализует `*model.OpenAIClient`, то есть `openai`/`vllm`) и `model.Regional` (`Region()`, резидентность, BR-106). Эмбеддер — `embed.Embedder`. Open-совместимые реализации и Ollama живут в `model`/`embed`; вендорские интеграции — отдельные модули в `plugins/` (`plugins/gigachat`, `plugins/elasticsearch`).
 
 ## Конструкторы LLM
 
-| Конструктор                          | Wire-формат                                          | Особенности                                                                                                                                             |
-| ------------------------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `model.OpenAI(apiKey, modelName)`    | `POST https://api.openai.com/v1/chat/completions`    | Ключ в `Authorization: Bearer`. Structured output — `response_format: json_schema` с именем схемы `output`.                                             |
-| `model.VLLM(baseURL, modelName)`     | OpenAI-совместимый `POST <baseURL>/chat/completions` | Обёртка над `model.NewOpenAI` без API-ключа. Хост вида `http://vllm:8000/v1`.                                                                           |
-| `model.Ollama(baseURL, modelName)`   | native `POST <baseURL>/api/chat`                     | `tools` и `format` (JSON Schema), аргументы инструмента — объект. `Temperature`/`MaxTokens`/`Seed`/`Stop` уходят в `options.*`.                         |
-| `model.GigaChat(cfg GigaChatConfig)` | OAuth + `POST <BaseURL>/v1/chat/completions`         | `functions` и `function_call`; structured output эмулируется функцией `structured_output`. Роль `tool` → `function`, берётся только первый `tool_call`. |
+| Конструктор                        | Wire-формат                                          | Особенности                                                                                                                                                                        |
+| ---------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model.OpenAI(apiKey, modelName)`  | `POST https://api.openai.com/v1/chat/completions`    | Ключ в `Authorization: Bearer`. Structured output — `response_format: json_schema` с именем схемы `output`.                                                                        |
+| `model.VLLM(baseURL, modelName)`   | OpenAI-совместимый `POST <baseURL>/chat/completions` | Обёртка над `model.NewOpenAI` без API-ключа. Хост вида `http://vllm:8000/v1`.                                                                                                      |
+| `model.Ollama(baseURL, modelName)` | native `POST <baseURL>/api/chat`                     | `tools` и `format` (JSON Schema), аргументы инструмента — объект. `Temperature`/`MaxTokens`/`Seed`/`Stop` уходят в `options.*`.                                                    |
+| `gigachat.New(gigachat.Config)`    | OAuth + `POST <BaseURL>/v1/chat/completions`         | Модуль `plugins/gigachat`. `functions` и `function_call`; structured output эмулируется функцией `structured_output`. Роль `tool` → `function`, берётся только первый `tool_call`. |
 
 `model.NewOpenAI(cfg OpenAIConfig)` — общий конструктор: `BaseURL` и `Model` обязательны, дополнительно `APIKey`, `Headers map[string]string`, `HTTPClient`. `model.NewOllama(cfg OllamaConfig)`: `BaseURL` по умолчанию `http://localhost:11434`, `Model` обязателен, `HTTPClient`.
 
@@ -41,12 +41,12 @@ kit не привязан к вендору. Клиент чата — инте�
 `model.SupportsNativeSchema(client)` сообщает, умеет ли провайдер нативную схему:
 `true` для OpenAI/vLLM и Ollama, `false` для GigaChat (эмулирует forced function).
 Клиент может переопределить таблицу, реализовав `SupportsNativeSchema() bool`.
-`kit.Generate` при `SchemaNative` без поддержки провайдера автоматически инлайнит
+`gobellim.Generate` при `SchemaNative` без поддержки провайдера автоматически инлайнит
 схему (D29).
 
 > [!NOTE]
 > `model.Chain` не форвардит `SupportsNativeSchema`, поэтому цепочка считается не
-> поддерживающей нативную схему: `kit.Generate`/`model.Structurer` инлайнят схему,
+> поддерживающей нативную схему: `gobellim.Generate`/`model.Structurer` инлайнят схему,
 > даже если нативную схему поддерживают все звенья.
 
 ## ToolChoice, Seed, Stop, ProviderOptions
@@ -108,16 +108,19 @@ func (h History) Trim(msgs []Message) []Message
 `nil` — обычный клиент с таймаутом 60 с: сам `internal/httpjson` при пользовательском
 клиенте ретраев не делает. Пользовательский механизм ретраев — `model.Chain`.
 
-## GigaChatConfig
+## gigachat.Config
 
-| Поле          | Тип            | По умолчанию                                                                   | Назначение                                        |
-| ------------- | -------------- | ------------------------------------------------------------------------------ | ------------------------------------------------- |
-| `BaseURL`     | `string`       | `https://api.giga.chat` (`GigaChatDefaultBaseURL`)                             | База для `/v1/chat/completions`.                  |
-| `AuthURL`     | `string`       | `https://ngw.devices.sberbank.ru:9443/api/v2/oauth` (`GigaChatDefaultAuthURL`) | OAuth-эндпоинт токена.                            |
-| `Credentials` | `string`       | — (обязательно)                                                                | base64 от `clientID:clientSecret`.                |
-| `Scope`       | `string`       | `GIGACHAT_API_PERS` (`GigaChatDefaultScope`)                                   | Скоуп OAuth-запроса.                              |
-| `Model`       | `string`       | `GigaChat-2` (`GigaChatDefaultModel`)                                          | Идентификатор модели.                             |
-| `HTTPClient`  | `*http.Client` | `nil`                                                                          | Свой клиент: корневой CA Сбера, таймауты, прокси. |
+GigaChat — отдельный модуль `github.com/KirillYuzh/Gobellim/plugins/gigachat`.
+
+| Поле            | Тип            | По умолчанию                                                                    | Назначение                                        |
+| --------------- | -------------- | ------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `BaseURL`       | `string`       | `https://api.giga.chat` (`gigachat.DefaultBaseURL`)                             | База для `/v1/chat/completions`.                  |
+| `AuthURL`       | `string`       | `https://ngw.devices.sberbank.ru:9443/api/v2/oauth` (`gigachat.DefaultAuthURL`) | OAuth-эндпоинт токена.                            |
+| `Credentials`   | `string`       | — (обязательно)                                                                 | base64 от `clientID:clientSecret`.                |
+| `Scope`         | `string`       | `GIGACHAT_API_PERS` (`gigachat.DefaultScope`)                                   | Скоуп OAuth-запроса.                              |
+| `Model`         | `string`       | `GigaChat-2` (`gigachat.DefaultModel`)                                          | Идентификатор модели.                             |
+| `HTTPClient`    | `*http.Client` | `nil`                                                                           | Свой клиент: корневой CA Сбера, таймауты, прокси. |
+| `ContextTokens` | `int`          | `0`                                                                             | Окно контекста; реализует `model.ContextWindow`.  |
 
 > [!WARNING]
 > OAuth-запрос GigaChat несёт заголовки `Authorization: Basic <Credentials>` и `RqUID` — UUIDv4. Без заголовка `RqUID` шлюз отвечает `400`. Тело запроса — `application/x-www-form-urlencoded` с `scope=<Scope>`. Токен кэшируется и обновляется за 30 секунд до `expires_at`; если поле не пришло, срок жизни берётся равным 25 минутам.
@@ -137,11 +140,17 @@ type Embedder interface {
 префикс пассажа. `Closer` (`Close() error`) опционален: локальный энкодер владеет
 пулом ORT-сессий, но `Embedder` его не требует.
 
-| Конструктор                               | Запрос                                 | Особенности                                                                                                                  |
-| ----------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `embed.NewOpenAI(embed.OpenAIConfig)`     | `POST <BaseURL>/embeddings`            | `BaseURL` и `Model` обязательны. `Dim` можно задать заранее; иначе берётся из первого ответа. `APIKey` необязателен.         |
-| `embed.NewGigaChat(embed.GigaChatConfig)` | OAuth + `POST <BaseURL>/v1/embeddings` | Тот же OAuth, что у чата (`Credentials` обязателен). `Model` по умолчанию `Embeddings`.                                      |
-| `embed.NewLocal(embed.LocalConfig)`       | локальный ONNX-энкодер                 | Доступен только в сборке с тегом `ort`; в обычной сборке возвращает `ErrInvalidConfig`. `LocalConfig{Dir, Model, Sessions}`. |
+| Конструктор                                  | Запрос                                 | Особенности                                                                                                                  |
+| -------------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `embed.NewOpenAI(embed.OpenAIConfig)`        | `POST <BaseURL>/embeddings`            | `BaseURL` и `Model` обязательны. `Dim` можно задать заранее; иначе берётся из первого ответа. `APIKey` необязателен. `BatchSize` ограничивает размер батча (по умолчанию `embed.DefaultRemoteBatchSize`). |
+| `gigachat.NewEmbedder(gigachat.EmbedConfig)` | OAuth + `POST <BaseURL>/v1/embeddings` | Модуль `plugins/gigachat`. Тот же OAuth, что у чата (`Credentials` обязателен). `Model` по умолчанию `Embeddings`. `BatchSize` ограничивает размер батча. |
+| `embed.NewLocal(embed.LocalConfig)`          | локальный ONNX-энкодер                 | Доступен только в сборке с тегом `ort`; в обычной сборке возвращает `ErrInvalidConfig`. `LocalConfig{Dir, Model, Sessions}`. |
+
+Удалённые эмбеддеры режут тексты на батчи (по умолчанию 64) и склеивают ответы
+в исходном порядке: один документ на тысячи чанков не уходит в провайдера одним
+мегабайтным запросом. Размерность вектора запоминается при первом ответе, и
+изменение под уже записанным индексом отвергается с `ErrProvider` — смена
+размерности требует переиндексации.
 
 Локальный энкодер (`embed.NewLocal` под `ort`) принимает графы с выходом
 `sentence_embedding`, `last_hidden_state` или `token_embeddings`; размерность
@@ -152,34 +161,42 @@ type Embedder interface {
 
 ## Пресеты
 
-`embed.PresetFor(model)` сопоставляет модель по подстроке имени:
+`embed.PresetFor(model)` сопоставляет модель по имени семейства: сегмент имени
+(path-сегмент, либо префикс, после которого идёт `-`, `_` или `.`) должен совпасть
+с семейством целиком.
 
 | Семейство          | `pooling` | `query_prefix` | `passage_prefix` | `normalize` | `max_len` |
 | ------------------ | --------- | -------------- | ---------------- | ----------- | --------- |
 | `multilingual-e5*` | `mean`    | `query: `      | `passage: `      | `true`      | `512`     |
 | `bge-m3`           | `cls`     | —              | —                | `true`      | `8192`    |
 
-Поля типа `embed.Preset`: `Name`, `Pooling` (`mean` или `cls`), `QueryPrefix`, `PassagePrefix`, `Normalize`, `MaxLen`. Пресет можно задать явно через поле `Preset *Preset` в `OpenAIConfig` / `GigaChatConfig`; иначе он выводится из имени модели. Неизвестная модель получает пустой пресет: без префиксов и без L2-нормы.
+Имя вроде `my-bge-m3-tuned` не называет семейство `bge-m3` (совпадение не по
+подстроке), поэтому пресет не выводится: молча взять pooling и нормализацию
+другой модели значило бы считать векторы, которые никто не ожидал. Имя, которое
+называет сразу два семейства, — ошибка конфигурации (`ErrInvalidConfig`), а не
+выбор одного из них.
+
+Поля типа `embed.Preset`: `Name`, `Pooling` (`mean` или `cls`), `QueryPrefix`, `PassagePrefix`, `Normalize`, `MaxLen`. Пресет можно задать явно через поле `Preset *Preset` в `OpenAIConfig` / `gigachat.EmbedConfig`; иначе он выводится из имени модели. Неизвестная модель получает пустой пресет: без префиксов и без L2-нормы.
 
 Неизвестную локальную модель описывают файлом `kit_embedder.json` рядом с весами: `embed.LoadFileConfig(path)` читает JSON в строгом режиме (`DisallowUnknownFields`) с полями `pooling`, `query_prefix`, `passage_prefix`, `normalize`, `max_len`. Значения по умолчанию: `pooling` = `mean`, `max_len` = `512`. Неизвестный `pooling`, неизвестное поле или ошибка разбора дают `ErrInvalidConfig`. Если `NewLocal` не находит ни пресет, ни `kit_embedder.json`, он также возвращает `ErrInvalidConfig`.
 
 Каталог весов — `<models_dir>/<org>__<name>/` (`embed.ModelDir`; `/` в имени модели заменяется на `__`); `models_dir` берётся из опции `embed.LocalConfig.Dir`, переменной `KIT_MODELS_DIR` или `./models`.
 
 > [!NOTE]
-> `Embedder` обязателен только операциям `Ingest` и `Search`. Чат-приложению он не нужен: `kit.New` принимает `Embedder: nil`, а `App.Setup` в этом случае пропускает индекс чанков.
+> `Embedder` обязателен только операциям `Ingest` и `Search`. Чат-приложению он не нужен: `gobellim.New` принимает `Embedder: nil`, а `App.Setup` в этом случае пропускает индекс чанков.
 
 > [!WARNING]
-> **Размерность индекса чанков фиксируется при `App.Setup`.** `Setup` вызывает `store.EnsureSchema(ctx, es, Embedder.Dim())`, а индекс `kit-chunks` создаётся только когда `Dim() > 0`. У удалённых эмбеддеров (`embed.NewOpenAI`, `embed.NewGigaChat`) до первого вызова `Dim()` возвращает сконфигурированное `Dim`, а при `Dim == 0` — `0`; размерность из ответа подставляется уже в рантайме, при первом `embed`. Поэтому с удалённым эмбеддером и без явного `Dim` `App.Setup` **не создаёт** индекс `kit-chunks`, и первый `Ingest` падает на отсутствующем индексе — задайте `Dim` заранее. `EnsureSchema` идемпотентен и **не сверяет** размерности, поэтому смена размерности эмбеддера требует переиндексации: пересоздайте индекс и повторите `Ingest`.
+> **Размерность индекса чанков фиксируется при `App.Setup`.** `Setup` вызывает `store.EnsureSchema(ctx, es, Embedder.Dim())`, а индекс `kit-chunks` создаётся только когда `Dim() > 0`. У удалённых эмбеддеров (`embed.NewOpenAI`, `gigachat.NewEmbedder`) до первого вызова `Dim()` возвращает сконфигурированное `Dim`, а при `Dim == 0` — `0`; размерность из ответа подставляется уже в рантайме, при первом `embed`. Поэтому с удалённым эмбеддером и без явного `Dim` `App.Setup` **не создаёт** индекс `kit-chunks`, и первый `Ingest` падает на отсутствующем индексе — задайте `Dim` заранее. `EnsureSchema` идемпотентен и **не сверяет** размерности, поэтому смена размерности эмбеддера требует переиндексации: пересоздайте индекс и повторите `Ingest`.
 
 ## Смотрите также
 
-- [Справочник kit](./kit.md) — поля `Config`, операции `Ingest` и `Search`
+- [Справочник gobellim](./gobellim.md) — поля `Config`, операции `Ingest` и `Search`
 - [Конфигурация](./configuration.md) — `KIT_MODELS_DIR`, `KIT_ORT_LIB` и лимиты эмбеддера
-- [Поиск](../concepts/retrieval.md) — как эмбеддер используется при ingest и search
-- [Установка](../getting-started/installation.md) — сборка с `-tags ort`
+- [Поиск](../retrieval/README.md) — как эмбеддер используется при ingest и search
+- [Установка](../installation.md) — сборка с `-tags ort`
 
 Руководства (how-to):
 
-- [Как подключить провайдера](../guides/providers/overview.md) — выбор, матрица возможностей, `kit.Config{LLM: …}`, `model.Chain`
-- [OpenAI-совместимые](../guides/providers/openai-compatible.md), [Ollama](../guides/providers/ollama.md), [vLLM](../guides/providers/vllm.md), [GigaChat](../guides/providers/gigachat.md) — пошаговая настройка, рецепты и troubleshooting
-- [Эмбеддеры](../guides/providers/embeddings.md) — `Query`/`Passages`, пресеты, `Dim()` и переиндексация
+- [Как подключить провайдера](../providers/README.md) — выбор, матрица возможностей, `gobellim.Config{LLM: …}`, `model.Chain`
+- [OpenAI-совместимые, Ollama, vLLM, GigaChat](../providers/README.md) — пошаговая настройка, рецепты и troubleshooting
+- [Эмбеддеры](../providers/README.md) — `Query`/`Passages`, пресеты, `Dim()` и переиндексация

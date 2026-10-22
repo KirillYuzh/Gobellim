@@ -32,7 +32,7 @@ JSON-структуры, чанкинг и attribute groups сознательн
 Нужны Python, `gliner2`, `torch`, `numpy`, `onnx`, `onnxruntime`.
 
 > `hivetrace/gliner-guard-omni` на HF содержит `model.safetensors`, а не
-> `model.onnx`; `kitctl model pull` для неё не подходит — ONNX-граф создаёт этот
+> `model.onnx`; `gobellimctl model pull` для неё не подходит — ONNX-граф создаёт этот
 > скрипт.
 
 ```sh
@@ -155,7 +155,7 @@ richer export is a **separate local step**.
    [Пересборка модели](#пересборка-модели) above.
 6. **Re-verify parity.** The recorded fixtures pin the previous decode, so a new
    export needs its fixtures regenerated and the gate re-run:
-   `kitctl verify parity --dir models --fixtures guard/gliner/testdata`
+   `gobellimctl verify parity --dir models --fixtures guard/gliner/testdata`
    (equivalently `go test -tags ort ./guard/gliner/ -run TestFixturesParity`) must
    report `12/12` — or the new fixture count — before the export is trusted.
 
@@ -208,4 +208,4 @@ full` export).
 
 - [`SPEC.md`](./SPEC.md) — спецификация пайплайна, контракта графа и подводных камней
 - [Guardrails](../../docs/concepts/guardrails.md) — слой L2 в конвейере
-- [Устройство: архитектура](../../docs/internals/architecture.md) — ORT-сессии, каталог моделей, сборка
+- [Устройство: архитектура](../../docs/reference/gobellim.md) — ORT-сессии, каталог моделей, сборка

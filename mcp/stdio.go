@@ -48,6 +48,7 @@ type stdioTransport struct {
 
 	errMu   sync.Mutex
 	exitErr error
+	readErr error
 
 	closeOnce sync.Once
 }
@@ -119,7 +120,7 @@ func (t *stdioTransport) Call(ctx context.Context, method string, params any) (j
 		return nil, t.closedErr()
 	case resp := <-ch:
 		if resp.Error != nil {
-			return nil, resp.Error.unwrap()
+			return nil, resp.Error.wrap()
 		}
 		return resp.Result, nil
 	}
@@ -191,6 +192,13 @@ func (t *stdioTransport) readLoop(r io.Reader) {
 		default:
 		}
 	}
+	// The stream ended, so no further response can arrive. A scanner error —
+	// a message over the size limit, for one — must reach the caller instead
+	// of leaving every later call waiting for a reply that never comes.
+	if err := sc.Err(); err != nil {
+		t.setReadErr(fmt.Errorf("mcp: %s: read loop: %w: %w", t.cfg.Name, err, core.ErrProvider))
+	}
+	t.markDone(nil)
 }
 
 func (t *stdioTransport) logStderr(r io.Reader) {
@@ -203,11 +211,18 @@ func (t *stdioTransport) logStderr(r io.Reader) {
 
 func (t *stdioTransport) markDone(err error) {
 	t.errMu.Lock()
-	if t.exitErr == nil && err != nil {
+	if err != nil && t.exitErr == nil {
 		t.exitErr = err
 	}
 	t.errMu.Unlock()
 	t.doneOnce.Do(func() { close(t.done) })
+}
+
+// setReadErr records a reader failure, such as a message over the size limit.
+func (t *stdioTransport) setReadErr(err error) {
+	t.errMu.Lock()
+	t.readErr = err
+	t.errMu.Unlock()
 }
 
 func (t *stdioTransport) closedErr() error {
@@ -215,6 +230,9 @@ func (t *stdioTransport) closedErr() error {
 	defer t.errMu.Unlock()
 	if t.exitErr != nil {
 		return t.exitErr
+	}
+	if t.readErr != nil {
+		return t.readErr
 	}
 	return fmt.Errorf("mcp: %s: transport is closed: %w", t.cfg.Name, core.ErrProvider)
 }

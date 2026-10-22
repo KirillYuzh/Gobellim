@@ -1,0 +1,4 @@
+.gocache
+.gotmp
+.golangci-cache
+models

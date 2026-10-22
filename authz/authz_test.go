@@ -38,17 +38,19 @@ func TestAuthorize(t *testing.T) {
 	ghost := core.Principal{UserID: "u3", Roles: []string{"other"}, Tenant: "t1"}
 
 	cases := []struct {
-		name string
-		pr   core.Principal
-		perm string
-		want bool
+		name    string
+		pr      core.Principal
+		perm    string
+		want    bool
+		wantErr error
 	}{
-		{"support search", support, PermSearch, true},
-		{"support tool", support, ToolPermission("get_ticket"), true},
-		{"support delete denied", support, PermDelete, false},
-		{"admin wildcard", admin, PermDelete, true},
-		{"unknown role denied", ghost, PermSearch, false},
-		{"empty permission allowed", ghost, "", true},
+		{name: "support search", pr: support, perm: PermSearch, want: true},
+		{name: "support tool", pr: support, perm: ToolPermission("get_ticket"), want: true},
+		{name: "support delete denied", pr: support, perm: PermDelete, wantErr: core.ErrUnauthorized},
+		{name: "admin wildcard", pr: admin, perm: PermDelete, want: true},
+		{name: "unknown role denied", pr: ghost, perm: PermSearch, wantErr: core.ErrUnauthorized},
+		{name: "empty permission denied", pr: ghost, perm: "", wantErr: core.ErrInvalidConfig},
+		{name: "empty permission denied for admin too", pr: admin, perm: "", wantErr: core.ErrInvalidConfig},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -59,10 +61,20 @@ func TestAuthorize(t *testing.T) {
 			if !tc.want && err == nil {
 				t.Fatal("want deny, got nil")
 			}
-			if !tc.want && !errors.Is(err, core.ErrUnauthorized) {
-				t.Fatalf("want ErrUnauthorized, got %v", err)
+			if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+				t.Fatalf("want %v, got %v", tc.wantErr, err)
 			}
 		})
+	}
+}
+
+// An empty permission is a configuration mistake, not a granted capability:
+// it must never mean "allowed".
+func TestAllowsRejectsEmptyPermission(t *testing.T) {
+	p := mustParse(t, sample)
+	admin := core.Principal{UserID: "u2", Roles: []string{"admin"}, Tenant: "t1"}
+	if p.Allows(admin, "") {
+		t.Fatal("an empty permission must not be allowed, not even for a wildcard role")
 	}
 }
 
@@ -108,6 +120,17 @@ func TestParseRejectsBadDefault(t *testing.T) {
 
 func TestParseRejectsBadVersion(t *testing.T) {
 	_, err := Parse(strings.NewReader("version: 2\ndefault: deny\n"))
+	if !errors.Is(err, core.ErrInvalidConfig) {
+		t.Fatalf("want ErrInvalidConfig, got %v", err)
+	}
+}
+
+// A policy file must hold exactly one document. A second document would be
+// silently ignored, so the operator would see a successful policy check while
+// half the roles never apply.
+func TestParseRejectsSecondDocument(t *testing.T) {
+	doc := "version: 1\ndefault: deny\nroles:\n  a:\n    permissions: [search]\n---\nversion: 1\ndefault: deny\nroles:\n  b:\n    permissions: [delete]\n"
+	_, err := Parse(strings.NewReader(doc))
 	if !errors.Is(err, core.ErrInvalidConfig) {
 		t.Fatalf("want ErrInvalidConfig, got %v", err)
 	}

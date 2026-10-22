@@ -9,6 +9,11 @@ run:
   timeout: 5m
   tests: true
   relative-path-mode: gomod
+  # The ORT layer is behind the `ort` build tag. Without the tag the linter
+  # cannot see its users and reports the whole ONNX path as unused, so both
+  # build variants are analysed.
+  build-tags:
+    - ort
 
 linters:
   default: none
@@ -24,6 +29,8 @@ linters:
     - revive # golint successor, minimal ruleset below
     - staticcheck # staticcheck
     - unused # unused code
+    - noctx # find missing context.Context
+    - contextcheck # check context propagation
   settings:
     gosec:
       severity: medium
@@ -33,7 +40,6 @@ linters:
         # library takes a filesystem path from untrusted input. G703 is gosec's
         # taint-analysis variant of the same G304 class.
         - G304
-        - G204
         - G404
         - G115
         - G301
@@ -204,8 +210,6 @@ linters:
               desc: "internal leaves may import only internal/** (I-13)"
             - pkg: github.com/KirillYuzh/Gobellim/cmd
               desc: "internal leaves may import only internal/** (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/demo
-              desc: "internal leaves may import only internal/** (I-13)"
 
         internal-no-facade:
           files:
@@ -232,6 +236,21 @@ linters:
         linters:
           - gosec
         text: "G704"
+      # G204: the MCP stdio transport spawns the server binary the operator
+      # names in their own configuration. The path is module-relative, so
+      # inside the mcp module the file is `stdio.go`; every other exec call
+      # stays covered by gosec.
+      - path: '(^|/)stdio\.go$'
+        linters:
+          - gosec
+        text: "G204"
+      # noctx: the MCP stdio transport owns the server process for the whole
+      # life of the transport, not for the life of one call: a per-call
+      # context would kill the server as soon as the first call returned. The
+      # process is stopped by Close.
+      - path: '(^|/)stdio\.go$'
+        linters:
+          - noctx
 
 formatters:
   enable:

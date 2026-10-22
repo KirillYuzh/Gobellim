@@ -33,29 +33,37 @@ func verifyDir(dir, model string) error {
 			return fmt.Errorf("embed: model file %s: %w: %w", path, err, core.ErrInvalidConfig)
 		}
 	}
-	preset, err := verifyPreset(d, model)
-	if err != nil {
-		return err
-	}
-	if err := preset.Validate(); err != nil {
+	if _, err := resolvePresetFromDir(d, model); err != nil {
 		return err
 	}
 	return nil
 }
 
-func verifyPreset(dir, model string) (Preset, error) {
+// resolvePresetFromDir resolves the preset of a model directory: the
+// kit_embedder.json file next to the weights when it exists, otherwise the
+// built-in preset of the family the model name identifies. It is the single
+// rule shared by VerifyDir and NewLocal, so a directory that verifies also
+// loads and a directory that loads also verifies.
+func resolvePresetFromDir(dir, model string) (Preset, error) {
 	fileCfg := filepath.Join(dir, "kit_embedder.json")
 	if _, err := os.Stat(fileCfg); err == nil {
 		p, lerr := LoadFileConfig(fileCfg)
 		if lerr != nil {
 			return Preset{}, lerr
 		}
+		if verr := p.Validate(); verr != nil {
+			return Preset{}, verr
+		}
 		return p, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return Preset{}, fmt.Errorf("embed: stat %s: %w: %w", fileCfg, err, core.ErrInvalidConfig)
 	}
-	if p, ok := PresetFor(model); ok {
-		return p, nil
+	p, err := presetForModel(model)
+	if err != nil {
+		return Preset{}, fmt.Errorf("embed: preset: %w: %w (no kit_embedder.json in %s)", err, core.ErrInvalidConfig, dir)
 	}
-	return Preset{}, fmt.Errorf("embed: no preset for model %q and no kit_embedder.json in %s: %w", model, dir, core.ErrInvalidConfig)
+	if verr := p.Validate(); verr != nil {
+		return Preset{}, verr
+	}
+	return p, nil
 }

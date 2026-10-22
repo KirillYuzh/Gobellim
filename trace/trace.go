@@ -1,223 +1,116 @@
+// Package trace creates the spans that describe a Gobellim operation.
+//
+// The package owns the signal, not the transport: it defines the Span and
+// Provider interfaces and the typed attribute constructors, while the
+// application supplies the provider that exports the spans. The core package
+// has no external dependencies — the OpenTelemetry adapter lives in
+// plugins/otel.
+//
+// A span is a child of the span in the context it was started with, and a root
+// span when the context carries none. That keeps an operation inside the
+// trace the caller already opened.
+//
+// Without a provider the operations still run: the spans simply go nowhere.
+// Use Noop for that case.
 package trace
 
-import "time"
+import "context"
 
-// Kind classifies an observation and is written to the "kind" keyword.
-type Kind string
+// Span is one operation inside a trace. A span is created by a Provider and
+// must be ended by the caller.
+type Span interface {
+	// End finishes the span and records its end time.
+	End()
 
-const (
-	// KindSpan is a span around an operation.
-	KindSpan Kind = "SPAN"
-	// KindGeneration is a model generation.
-	KindGeneration Kind = "GENERATION"
-	// KindEvent is a point-in-time event such as a guard verdict.
-	KindEvent Kind = "EVENT"
-)
+	// SetAttributes sets one or more attributes on the span.
+	// Attribute keys should follow OpenTelemetry semantic conventions where applicable.
+	SetAttributes(attrs ...Attribute)
 
-// Level is the severity of an observation; empty is treated as LevelDefault.
-type Level string
+	// SetError marks the span as having an error status.
+	SetError()
 
-const (
-	// LevelDefault is the normal level.
-	LevelDefault Level = "DEFAULT"
-	// LevelError marks an observation as failed.
-	LevelError Level = "ERROR"
-)
+	// RecordError records an error on the span with optional attributes.
+	// The error text should not contain secrets, PII, or full prompts.
+	RecordError(err error, attrs ...Attribute)
 
-// Usage carries token counts and monetary cost for a trace or observation.
-type Usage struct {
-	PromptTokens     int
-	CompletionTokens int
-	TotalTokens      int
-	Cost             float64
+	// Event adds a timestamped event to the span with optional attributes.
+	// Events are point-in-time facts within the span's lifetime.
+	Event(name string, attrs ...Attribute)
+
+	// SetTokens records token usage for LLM operations.
+	// Maps to the OpenTelemetry GenAI semantic conventions.
+	SetTokens(inputTokens, outputTokens int)
 }
 
-// Observation is a single timed operation or event inside a Trace; spans,
-// generations and events are all modeled here. Guard fields record the rail,
-// action and detector that produced the observation.
-type Observation struct {
-	ID              string
-	TraceID         string
-	ParentID        string
-	Name            string
-	Kind            Kind
-	Level           Level
-	ErrorKind       string
-	Model           string
-	Input           string
-	Output          string
-	StatusMessage   string
-	GuardRail       string
-	GuardAction     string
-	GuardCategories []string
-	Tags            []string
-	StartTime       time.Time
-	EndTime         time.Time
-	Usage           Usage
-	Metadata        map[string]any
-
-	GuardVersion string
-	GuardModel   string
-	PolicyHash   string
-	TextPolicy   TextPolicy
-
-	GuardDegraded bool
+// Attribute represents a key-value pair for span attributes.
+// Keys should follow OpenTelemetry semantic conventions where applicable.
+//
+// The value is one of string, int, int64, int32, float64, float32, bool or
+// []string. A value of any other type is dropped by the provider instead of
+// being recorded as an empty string.
+type Attribute struct {
+	Key   string
+	Value any
 }
 
-// Trace is the root record of one user-facing operation such as chat, ingest,
-// search, generate or memory.
-type Trace struct {
-	ID        string
-	Name      string
-	UserID    string
-	SessionID string
-	Tenant    string
-	Input     string
-	Output    string
-	Tags      []string
-	StartTime time.Time
-	EndTime   time.Time
-	Usage     Usage
-	Metadata  map[string]any
-
-	GuardVersion string
-	GuardModel   string
-	PolicyHash   string
-	TextPolicy   TextPolicy
+// Attr creates an attribute. The value is used as it is: use Int, Int64,
+// Float64, String or Bool to pick the type explicitly.
+func Attr(key string, value any) Attribute {
+	return Attribute{Key: key, Value: value}
 }
 
-// Score is a numeric evaluation attached to a trace by TraceID.
-type Score struct {
-	TraceID   string
-	Name      string
-	Value     float64
-	Comment   string
-	Timestamp time.Time
+// Int creates an integer attribute.
+func Int(key string, value int) Attribute {
+	return Attr(key, value)
 }
 
-func usageDoc(u Usage) map[string]any {
-	return map[string]any{
-		"prompt_tokens":     u.PromptTokens,
-		"completion_tokens": u.CompletionTokens,
-		"total_tokens":      u.TotalTokens,
-		"cost":              u.Cost,
-	}
+// Int64 creates an int64 attribute.
+func Int64(key string, value int64) Attribute {
+	return Attr(key, value)
 }
 
-func putAudit(doc map[string]any, version, model, policyHash string) {
-	if version != "" {
-		doc["guard_version"] = version
-	}
-	if model != "" {
-		doc["guard_model"] = model
-	}
-	if policyHash != "" {
-		doc["policy_hash"] = policyHash
-	}
+// Float64 creates a float64 attribute.
+func Float64(key string, value float64) Attribute {
+	return Attr(key, value)
 }
 
-func (t Trace) document(cfg exportConfig) map[string]any {
-	start := t.StartTime
-	if start.IsZero() {
-		start = time.Now().UTC()
-	}
-	end := t.EndTime
-	if end.IsZero() {
-		end = start
-	}
-
-	input := cfg.clip(t.Input)
-	output := cfg.clip(t.Output)
-	if cfg.hideInput {
-		input = ""
-	}
-	if cfg.hideOutput {
-		output = ""
-	}
-
-	doc := map[string]any{
-		"@timestamp":  end.UTC().Format(time.RFC3339Nano),
-		"trace_id":    t.ID,
-		"name":        t.Name,
-		"user_id":     t.UserID,
-		"session_id":  t.SessionID,
-		"tenant":      t.Tenant,
-		"input":       input,
-		"output":      output,
-		"metadata":    cfg.truncate(t.Metadata),
-		"usage":       usageDoc(t.Usage),
-		"text_policy": t.TextPolicy.String(),
-	}
-	if len(t.Tags) > 0 {
-		doc["tags"] = t.Tags
-	}
-	putAudit(doc, t.GuardVersion, t.GuardModel, t.PolicyHash)
-	return doc
+// String creates a string attribute.
+func String(key string, value string) Attribute {
+	return Attr(key, value)
 }
 
-func (o Observation) document(cfg exportConfig) map[string]any {
-	start := o.StartTime
-	if start.IsZero() {
-		start = time.Now().UTC()
-	}
-	end := o.EndTime
-	if end.IsZero() {
-		end = start
-	}
-	level := o.Level
-	if level == "" {
-		level = LevelDefault
-	}
+// Bool creates a boolean attribute.
+func Bool(key string, value bool) Attribute {
+	return Attr(key, value)
+}
 
-	input := cfg.clip(o.Input)
-	output := cfg.clip(o.Output)
-	if cfg.hideInput {
-		input = ""
-	}
-	if cfg.hideOutput {
-		output = ""
-	}
+// Provider creates spans. The application owns the provider: it decides where
+// the spans go, how they are batched and how many of them are kept.
+type Provider interface {
+	// Start creates a span named name. The returned context carries the span
+	// and must be passed to the operations it covers, so that they become its
+	// children. The span must be ended by the caller.
+	Start(ctx context.Context, name string, attrs ...Attribute) (context.Context, Span)
+}
 
-	doc := map[string]any{
-		"@timestamp":        end.UTC().Format(time.RFC3339Nano),
-		"trace_id":          o.TraceID,
-		"observation_id":    o.ID,
-		"parent_id":         o.ParentID,
-		"name":              o.Name,
-		"kind":              string(o.Kind),
-		"level":             string(level),
-		"model":             o.Model,
-		"input":             input,
-		"output":            output,
-		"status_message":    cfg.clip(o.StatusMessage),
-		"start_time":        start.UTC().Format(time.RFC3339Nano),
-		"end_time":          end.UTC().Format(time.RFC3339Nano),
-		"latency_ms":        float64(end.Sub(start)) / float64(time.Millisecond),
-		"prompt_tokens":     o.Usage.PromptTokens,
-		"completion_tokens": o.Usage.CompletionTokens,
-		"total_tokens":      o.Usage.TotalTokens,
-		"cost":              o.Usage.Cost,
-		"metadata":          cfg.truncate(o.Metadata),
-		"text_policy":       o.TextPolicy.String(),
-	}
-	if len(o.Tags) > 0 {
-		doc["tags"] = o.Tags
-	}
-	if o.ErrorKind != "" {
-		doc["error_kind"] = o.ErrorKind
-	}
-	if o.GuardRail != "" {
-		doc["guard_rail"] = o.GuardRail
-	}
-	if o.GuardAction != "" {
-		doc["guard_action"] = o.GuardAction
-	}
-	if o.GuardDegraded {
-		doc["guard_degraded"] = true
-	}
-	if len(o.GuardCategories) > 0 {
-		doc["guard_categories"] = o.GuardCategories
-	}
-	putAudit(doc, o.GuardVersion, o.GuardModel, o.PolicyHash)
-	return doc
+// Noop returns a Provider that records nothing. It is the provider an
+// application uses when no tracing backend is configured.
+func Noop() Provider { return noopProvider{} }
+
+// noopSpan is a Span implementation that does nothing.
+type noopSpan struct{}
+
+func (n noopSpan) End()                                      {}
+func (n noopSpan) SetAttributes(attrs ...Attribute)          {}
+func (n noopSpan) SetError()                                 {}
+func (n noopSpan) RecordError(err error, attrs ...Attribute) {}
+func (n noopSpan) Event(name string, attrs ...Attribute)     {}
+func (n noopSpan) SetTokens(input, output int)               {}
+
+// noopProvider is a Provider that returns noop spans.
+type noopProvider struct{}
+
+// Start returns the context unchanged and a span that records nothing.
+func (n noopProvider) Start(ctx context.Context, name string, attrs ...Attribute) (context.Context, Span) {
+	return ctx, noopSpan{}
 }

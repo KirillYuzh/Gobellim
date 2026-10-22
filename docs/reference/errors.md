@@ -1,12 +1,12 @@
 # Ошибки
 
-Sentinel-ошибки kit объявлены в `internal/core` и переэкспортированы из пакета `kit` (`errors.go`). Все они оборачиваются с сохранением причины через `%w` и `errors.Join`, поэтому проверяются только через `errors.Is`.
+Sentinel-ошибки gobellim объявлены в `internal/core` и переэкспортированы из пакета `gobellim` (`internal/app/errors.go`). Все они оборачиваются с сохранением причины через `%w` и `errors.Join`, поэтому проверяются только через `errors.Is`.
 
 ## Sentinel-ошибки
 
 | Sentinel              | Когда возвращается                                                                                                                                                                                                                                                                                                                                                                                                             | Что видит клиент                         | `error_kind` в трейсе |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------- | --------------------- |
-| `ErrInvalidConfig`    | `kit.New`: нет `ES`, `LLM`, `Policy` или `GuardL2`; невалидный `policy.yaml`; ошибка сборки guard, чанкера или trace-писателя; инструмент без имени, обработчика или с невалидной схемой. Также неполный конфиг провайдера, `Ingest` без `Embedder` или с пустым `ID`, `Search` без `Embedder`, `Generate` со стратегией `Fallback` без `Fallback`, `NewLocal` без тега `ort` или без пресета, невалидный `kit_embedder.json`. | падение на старте, сервис не поднимается | —                     |
+| `ErrInvalidConfig`    | `gobellim.New`: нет `ES`, `LLM`, `Policy` или `GuardL2`; невалидный `policy.yaml`; ошибка сборки guard, чанкера или trace-писателя; инструмент без имени, обработчика или с невалидной схемой. Также неполный конфиг провайдера, `Ingest` без `Embedder` или с пустым `ID`, `Search` без `Embedder`, `Generate` со стратегией `Fallback` без `Fallback`, `NewLocal` без тега `ort` или без пресета, невалидный `kit_embedder.json`. | падение на старте, сервис не поднимается | —                     |
 | `ErrUnauthorized`     | Нет или пустого принципала в контексте; `Ingest`/`Search`/`Delete` без `Tenant`; RBAC отказал (`authz.Authorize`); эгресс заблокирован «Rule of Two» или host-allowlist.                                                                                                                                                                                                                                                       | 401 без деталей политики                 | `unauthorized`        |
 | `ErrInvalidArgs`      | Аргументы не разобрались как JSON или не прошли JSON Schema; пустой `SearchRequest.Query`; нет сообщений ролей `user`/`assistant` в `Chat`; пустой `doc_id` в `Delete`; пустой `Doc.ACL` в `Ingest`. Для инструмента невалидные или слишком большие аргументы возвращаются модели результатом-ошибкой, а не этим sentinel’ом.                                                                                                  | 400 с перечнем нарушенных полей          | `invalid_args`        |
 | `ErrMaxSteps`         | Исчерпан `MaxSteps` цикла (модель не дала финального ответа).                                                                                                                                                                                                                                                                                                                                                                  | 422, признак «слишком длинный tool-цикл» | `max_steps`           |
@@ -25,7 +25,7 @@ Sentinel-ошибки kit объявлены в `internal/core` и переэк�
 | Sentinel          | Назначение                                                                                          | Сайт возврата                      | `error_kind` в трейсе |
 | ----------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------- | --------------------- |
 | `ErrToolNotFound` | Неизвестный инструмент в `App.CallTool`. В `Chat` неизвестный инструмент — результат-ошибка модели. | `calltool.go:29` (BR-96)           | `tool_not_found`      |
-| `ErrTool`         | Сбой, помеченный как падение внутри инструмента: ошибка хука или сбой MCP-инструмента.              | `kit.go:989`, `mcp/register.go:70` | `tool`                |
+| `ErrTool`         | Сбой, помеченный как падение внутри инструмента: ошибка хука или сбой MCP-инструмента.              | `gobellim.go:989`, `mcp/register.go:70` | `tool`                |
 | `ErrNotFound`     | Запрошенный объект не найден: в `eval` — трейс, который рекордер не получил.                        | `eval/eval.go:103`                 | `not_found`           |
 
 > [!NOTE]
@@ -39,18 +39,18 @@ Sentinel-ошибки kit объявлены в `internal/core` и переэк�
 
 ## GuardRejectError и tripwire
 
-Отказ guard несут значения `*kit.GuardRejectError` — это алиас типа из
+Отказ guard несут значения `*gobellim.GuardRejectError` — это алиас типа из
 `internal/call`, так что `errors.As` доступен и внешним сервисам:
 
 ```go
-var reject *kit.GuardRejectError
+var reject *gobellim.GuardRejectError
 // reject.Rail     guard.Rail
 // reject.Tripwire *guard.Tripwire  // Reason, RuleID, Metadata
 // reject.Version  string           // версия guard (I-08)
 // reject.Kind, reject.Name — внутренние типы, нужны только для диагностики.
 ```
 
-`Unwrap` возвращает `core.ErrGuardReject`, поэтому `errors.Is(err, kit.ErrGuardReject)`
+`Unwrap` возвращает `core.ErrGuardReject`, поэтому `errors.Is(err, gobellim.ErrGuardReject)`
 остаётся верным. `Tripwire` объясняет решение (`Reason`, `RuleID`, `Metadata`), а
 `Version` — версия guard.
 
@@ -63,11 +63,11 @@ var reject *kit.GuardRejectError
 ## Матчинг
 
 ```go
-if errors.Is(err, kit.ErrGuardReject) {
+if errors.Is(err, gobellim.ErrGuardReject) {
     // отклонил guard
 }
 
-var reject *kit.GuardRejectError
+var reject *gobellim.GuardRejectError
 if errors.As(err, &reject) {
     // reject.Rail, reject.Tripwire, reject.Version
 }
@@ -81,7 +81,7 @@ if errors.As(err, &reject) {
 
 Пример перевода sentinel-ошибок в статусы (адаптер приложения):
 
-| Ошибка kit                         | HTTP              |
+| Ошибка gobellim                         | HTTP              |
 | ---------------------------------- | ----------------- |
 | `ErrInvalidArgs`, `ErrGuardReject` | 400               |
 | `ErrUnauthorized`                  | 401               |
@@ -98,8 +98,7 @@ if errors.As(err, &reject) {
 
 ## Смотрите также
 
-- [Справочник kit](./kit.md) — где возвращается каждая ошибка
-- [Обработка ошибок (how-to)](../guides/errors.md) — таксономия, ретраи и маппинг в HTTP
+- [Справочник gobellim](./gobellim.md) — где возвращается каждая ошибка
 - [policy.yaml](./policy.md) — `ErrUnauthorized` и `ErrInvalidConfig`
-- [Наблюдаемость](../concepts/observability.md) — `error_kind` в observations
-- [Chat](../concepts/chat.md) — guard входа и выхода в цикле
+- [Наблюдаемость](../tracing/README.md) — `error_kind` в observations
+- [Chat](../overview.md) — guard входа и выхода в цикле

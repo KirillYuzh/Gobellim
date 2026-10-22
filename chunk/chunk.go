@@ -16,9 +16,9 @@ const (
 )
 
 // Token is a tokenizer unit with rune offsets into the original text; Start is
-// inclusive and End is exclusive.
+// inclusive and End is exclusive. Only the offsets are needed to cut the text,
+// so a tokenizer does not have to allocate the token text itself.
 type Token struct {
-	Text  string
 	Start int
 	End   int
 }
@@ -68,11 +68,19 @@ func (c *Chunker) Split(text string) []string {
 		}
 		from := toks[start].Start
 		to := toks[end-1].End
+		// Tokenizer is a public interface, so its offsets can be wrong. Clamp
+		// them into the text instead of slicing out of range.
 		if from < 0 {
 			from = 0
 		}
+		if from > len(runes) {
+			from = len(runes)
+		}
 		if to > len(runes) {
 			to = len(runes)
+		}
+		if to < from {
+			to = from
 		}
 		out = append(out, string(runes[from:to]))
 		if end == len(toks) {
@@ -102,7 +110,7 @@ func (WhitespaceTokenizer) Tokens(text string) []Token {
 		for i < len(runes) && !unicode.IsSpace(runes[i]) {
 			i++
 		}
-		toks = append(toks, Token{Text: string(runes[start:i]), Start: start, End: i})
+		toks = append(toks, Token{Start: start, End: i})
 	}
 	return toks
 }

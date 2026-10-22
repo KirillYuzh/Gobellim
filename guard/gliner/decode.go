@@ -1,5 +1,3 @@
-//go:build ort
-
 package gliner
 
 import (
@@ -7,7 +5,6 @@ import (
 	"math"
 	"sort"
 	"strings"
-	"unicode/utf8"
 )
 
 const (
@@ -21,32 +18,6 @@ const (
 		`|[^` + pySpace + `]`
 )
 
-type word struct {
-	token string
-	start int
-	end   int
-}
-
-type span struct {
-	text  string
-	start int
-	end   int
-	score float64
-}
-
-type decodedClass struct {
-	group int
-	label string
-	score float64
-}
-
-type decodeResult struct {
-	entities        map[string][]span
-	classifications []decodedClass
-	safety          string
-	score           float64
-}
-
 func normalizeText(text string) string {
 	runes := []rune(text)
 	if len(runes) == 0 {
@@ -57,21 +28,6 @@ func normalizeText(text string) string {
 		return text
 	}
 	return text + "."
-}
-
-func (d *Detector) splitWords(text string) []word {
-	matches := d.wordRe.FindAllStringIndex(text, -1)
-	out := make([]word, 0, len(matches))
-	for _, m := range matches {
-		raw := text[m[0]:m[1]]
-		start := utf8.RuneCountInString(text[:m[0]])
-		out = append(out, word{
-			token: strings.ToLower(raw),
-			start: start,
-			end:   start + utf8.RuneCountInString(raw),
-		})
-	}
-	return out
 }
 
 func decode(cfg *modelConfig, p *prepared, probs, countLogits []float32, clsLogits [][]float32) decodeResult {

@@ -2,10 +2,12 @@ package model
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/KirillYuzh/Gobellim/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/httpjson"
 )
 
 const defaultChainBackoff = 500 * time.Millisecond
@@ -60,7 +62,7 @@ func (c *chainClient) SupportsNativeSchema() bool { return c.nativeSchema }
 // Chat tries each client in order, retrying retryable errors up to MaxRetries
 // per client, and returns the last error if every client fails.
 func (c *chainClient) Chat(ctx context.Context, req Request) (Response, error) {
-	var lastErr error
+	var errs []error
 	for _, client := range c.clients {
 		linkReq := requestForLink(req, client)
 		for attempt := 0; ; attempt++ {
@@ -68,16 +70,24 @@ func (c *chainClient) Chat(ctx context.Context, req Request) (Response, error) {
 			if err == nil {
 				return resp, nil
 			}
-			lastErr = err
+			errs = append(errs, err)
 			if attempt >= c.cfg.MaxRetries || !Retryable(err) {
 				break
 			}
-			if werr := sleepBackoff(ctx, c.cfg.Backoff, attempt, RetryAfter(err)); werr != nil {
-				return Response{}, werr
+			delay := httpjson.Backoff(c.cfg.Backoff, attempt, RetryAfter(err))
+			if delay <= 0 {
+				return Response{}, ctx.Err()
+			}
+			t := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				return Response{}, ctx.Err()
+			case <-t.C:
 			}
 		}
 	}
-	return Response{}, lastErr
+	return Response{}, errors.Join(errs...)
 }
 
 func requestForLink(req Request, client Client) Request {
@@ -89,22 +99,4 @@ func requestForLink(req Request, client Client) Request {
 	}
 	req.SchemaMode = SchemaInline
 	return req
-}
-
-func sleepBackoff(ctx context.Context, base time.Duration, attempt int, retryAfter time.Duration) error {
-	delay := retryAfter
-	if delay <= 0 {
-		delay = base * time.Duration(attempt+1)
-	}
-	if delay <= 0 {
-		return ctx.Err()
-	}
-	t := time.NewTimer(delay)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-t.C:
-		return nil
-	}
 }

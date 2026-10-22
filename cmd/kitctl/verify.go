@@ -79,11 +79,15 @@ func runVerifyWindow(args []string) int {
 		fmt.Printf("guard window %d chars: I-06 context check skipped (no --model-context; the client reports its context window at runtime)\n", effective)
 		return 0
 	}
-	if effective > *modelContext {
-		fmt.Fprintf(os.Stderr, "kitctl verify window: guard window %d chars exceeds the model context window %d tokens (I-06); set GuardMaxChars <= %d or use a model with a wider context\n", effective, *modelContext, *modelContext)
+	// GuardMaxChars is in characters; the model window is in tokens. Convert
+	// with a conservative chars/3 estimate so the check is not fooled by the
+	// unit mismatch (8000 chars ~= 2700 tokens).
+	estimatedTokens := effective / 3
+	if estimatedTokens > *modelContext {
+		fmt.Fprintf(os.Stderr, "kitctl verify window: guard window %d chars (~%d tokens) exceeds the model context window %d tokens (I-06); set GuardMaxChars <= %d or use a model with a wider context\n", effective, estimatedTokens, *modelContext, *modelContext*3)
 		return 1
 	}
-	fmt.Printf("guard window %d chars fits the model context window %d tokens: ok\n", effective, *modelContext)
+	fmt.Printf("guard window %d chars (~%d tokens) fits the model context window %d tokens: ok\n", effective, estimatedTokens, *modelContext)
 	return 0
 }
 

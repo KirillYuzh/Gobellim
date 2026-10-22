@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/KirillYuzh/Gobellim/internal/core"
 )
@@ -59,7 +60,11 @@ func TestPruneBody(t *testing.T) {
 			} `json:"range"`
 		} `json:"query"`
 	}
-	if err := json.Unmarshal(PruneBody(time.Hour), &parsed); err != nil {
+	body, err := PruneBody(time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
 		t.Fatal(err)
 	}
 	cutoff, err := time.Parse(time.RFC3339Nano, parsed.Query.Range["@timestamp"].LT)
@@ -68,5 +73,25 @@ func TestPruneBody(t *testing.T) {
 	}
 	if cutoff.Before(before) || cutoff.After(after) {
 		t.Fatalf("cutoff %s not within [%s, %s]", cutoff, before, after)
+	}
+}
+
+func TestSnippetCutsOnRuneBoundary(t *testing.T) {
+	body := []byte(strings.Repeat("\u20ac", 70)) // 210 bytes, three bytes per rune
+	got := Snippet(body)
+	if !utf8.ValidString(got) {
+		t.Fatalf("snippet must be valid UTF-8: %q", got)
+	}
+	if len(got) > 200 {
+		t.Fatalf("snippet too long: %d bytes", len(got))
+	}
+	if len(got)%3 != 0 {
+		t.Fatalf("snippet must end on a rune boundary, got %d bytes", len(got))
+	}
+	if !strings.HasPrefix(string(body), got) {
+		t.Fatalf("snippet must be a prefix of the body")
+	}
+	if s := Snippet([]byte{0xff, 0xfe}); s != "" {
+		t.Fatalf("invalid bytes must be dropped, got %q", s)
 	}
 }

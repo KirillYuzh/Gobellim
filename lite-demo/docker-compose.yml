@@ -1,0 +1,68 @@
+x-app: &app
+  image: some-project:local
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: "http://ollama:11434"
+    entrypoint: ["ollama", "pull", "t-tech/T-lite-it-2.1:q4_K_M"]
+    restart: "no"
+
+  mockd:
+    <<: *app
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["/usr/local/bin/mockd"]
+    environment:
+      MOCK_ADDR: ":8081"
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    <<: *app
+    depends_on:
+      mockd:
+        condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
+    environment:
+      HTTP_ADDR: ":8080"
+      POLICY_PATH: "/policy.json"
+      MOCK_BASE_URL: "http://mockd:8081"
+      OLLAMA_URL: "http://ollama:11434"
+      OLLAMA_MODEL: "t-tech/T-lite-it-2.1:q4_K_M"
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+volumes:
+  ollama:
+    name: lite-demo_ollama

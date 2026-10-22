@@ -4,9 +4,11 @@ import (
 	"container/list"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -249,6 +251,9 @@ func (p *Pipeline) Check(ctx context.Context, rail Rail, text string) (Verdict, 
 	if !ValidRail(rail) {
 		return Verdict{}, fmt.Errorf("guard: unknown rail %q: %w", string(rail), core.ErrInvalidConfig)
 	}
+	if err := ctx.Err(); err != nil {
+		return Verdict{}, err
+	}
 	started := time.Now()
 	total := utf8.RuneCountInString(text)
 	if text == "" {
@@ -287,6 +292,22 @@ func (p *Pipeline) finish(rail Rail, text string, findings []Finding, degraded [
 	v.DegradedReason = strings.Join(degraded, "; ")
 	v.Truncated = inspected < total
 	v.InspectedRunes = inspected
+
+	// Fail closed on truncation for input rail: if the text was truncated,
+	// we cannot guarantee the uninspected portion is safe.
+	if rail == RailInput && v.Truncated {
+		v.Action = Reject
+		v.Tripwire = &Tripwire{
+			Reason: "input truncated, uninspected content may contain PII or injection",
+			RuleID: "truncation",
+			Metadata: map[string]any{
+				"rail":            string(rail),
+				"inspected_runes": inspected,
+				"total_runes":     total,
+			},
+		}
+	}
+
 	p.count(rail, v)
 	if v.Degraded {
 		p.warner.warn(rail, v.Version, v.DegradedReason)
@@ -321,6 +342,9 @@ func (p *Pipeline) detect(ctx context.Context, r Rail, inspected, canonical stri
 
 	for _, l := range p.layers {
 		for _, d := range l.detectors {
+			if err := ctx.Err(); err != nil {
+				return nil, nil, err
+			}
 			raw := usesNaturalText(d)
 			stream := canonical
 			if raw {
@@ -330,10 +354,10 @@ func (p *Pipeline) detect(ctx context.Context, r Rail, inspected, canonical stri
 				fs, err := d.Detect(ctx, w.text)
 				if err != nil {
 					if p.optionalOn(r, l, d) {
-						degraded = append(degraded, degradedLabel(l, d)+": "+err.Error())
+						degraded = append(degraded, degradedLabel(l, d, err))
 						break
 					}
-					return nil, nil, fmt.Errorf("guard: layer %s: %w", degradedLabel(l, d), err)
+					return nil, nil, fmt.Errorf("guard: layer %s: %w", degradedLabel(l, d, err), err)
 				}
 				for _, f := range fs {
 					if raw {
@@ -361,10 +385,10 @@ func (p *Pipeline) detect(ctx context.Context, r Rail, inspected, canonical stri
 				fs, err := d.Detect(ctx, decoded)
 				if err != nil {
 					if p.optionalOn(r, l, d) {
-						degraded = append(degraded, degradedLabel(l, d)+" (decoded): "+err.Error())
+						degraded = append(degraded, degradedLabel(l, d, err)+" (decoded)")
 						continue
 					}
-					return nil, nil, fmt.Errorf("guard: layer %s (decoded): %w", degradedLabel(l, d), err)
+					return nil, nil, fmt.Errorf("guard: layer %s (decoded): %w", degradedLabel(l, d, err), err)
 				}
 				for _, f := range fs {
 					f.Start = 0
@@ -378,11 +402,24 @@ func (p *Pipeline) detect(ctx context.Context, r Rail, inspected, canonical stri
 	return dedupe(findings), degraded, nil
 }
 
-func degradedLabel(l layer, d Detector) string {
-	if l.name == d.Name() || len(l.detectors) == 1 {
-		return l.name
+func degradedLabel(l layer, d Detector, err ...error) string {
+	name := l.name
+	if l.name != d.Name() || len(l.detectors) > 1 {
+		name = l.name + "/" + d.Name()
 	}
-	return l.name + "/" + d.Name()
+	if len(err) > 0 && err[0] != nil {
+		switch {
+		case errors.Is(err[0], context.Canceled):
+			name += ":canceled"
+		case errors.Is(err[0], context.DeadlineExceeded):
+			name += ":deadline"
+		case errors.Is(err[0], core.ErrGuardUnavailable):
+			name += ":unavailable"
+		default:
+			name += ":error"
+		}
+	}
+	return name
 }
 
 func remapSpan(sp runeSpans, start, end, total int) (int, int) {
@@ -567,6 +604,7 @@ func maskRunes(text string, spans []Finding) (string, []Substitution) {
 	var b strings.Builder
 	var subs []Substitution
 	prev := 0
+	counters := make(map[string]int)
 	for _, s := range spans {
 		if s.Start < prev {
 			continue
@@ -582,7 +620,9 @@ func maskRunes(text string, spans []Finding) (string, []Substitution) {
 			continue
 		}
 		b.WriteString(string(runes[prev:s.Start]))
-		placeholder := "[" + string(s.Category) + ":" + s.Label + "]"
+		key := string(s.Category) + ":" + s.Label
+		counters[key]++
+		placeholder := "[" + key + ":" + strconv.Itoa(counters[key]) + "]"
 		b.WriteString(placeholder)
 		if value := string(runes[s.Start:end]); value != "" {
 			subs = append(subs, Substitution{Placeholder: placeholder, Category: s.Category, Value: value})
@@ -616,7 +656,10 @@ func (c *lru) get(key string) ([]Finding, bool) {
 	defer c.mu.Unlock()
 	if el, ok := c.item[key]; ok {
 		c.ll.MoveToFront(el)
-		return el.Value.(*lruEntry).val, true
+		val := el.Value.(*lruEntry).val
+		out := make([]Finding, len(val))
+		copy(out, val)
+		return out, true
 	}
 	return nil, false
 }
@@ -624,12 +667,16 @@ func (c *lru) get(key string) ([]Finding, bool) {
 func (c *lru) put(key string, v []Finding) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// get returns a copy, so put must store a copy too: a caller mutating the
+	// slice it got from a Verdict must not poison the next verdict.
+	cp := make([]Finding, len(v))
+	copy(cp, v)
 	if el, ok := c.item[key]; ok {
 		c.ll.MoveToFront(el)
-		el.Value.(*lruEntry).val = v
+		el.Value.(*lruEntry).val = cp
 		return
 	}
-	el := c.ll.PushFront(&lruEntry{key: key, val: v})
+	el := c.ll.PushFront(&lruEntry{key: key, val: cp})
 	c.item[key] = el
 	if c.ll.Len() > c.cap {
 		oldest := c.ll.Back()

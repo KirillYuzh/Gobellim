@@ -14,7 +14,11 @@ func httpClient(hc *http.Client) *http.Client { return httpjson.Client(hc) }
 
 func joinURL(base, path string) string { return httpjson.JoinURL(base, path) }
 
-func doJSON(ctx context.Context, hc *http.Client, method, url string, headers map[string]string, body, out any) error {
+// DoJSON sends a JSON request and decodes the JSON response into out; any
+// transport, status or decoding failure is joined with core.ErrProvider so a
+// caller can classify it with errors.Is. A provider implementation uses it to
+// keep the error contract uniform.
+func DoJSON(ctx context.Context, hc *http.Client, method, url string, headers map[string]string, body, out any) error {
 	if err := httpjson.Do(ctx, hc, method, url, headers, body, out); err != nil {
 		return errors.Join(err, core.ErrProvider)
 	}

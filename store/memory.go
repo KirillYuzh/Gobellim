@@ -26,6 +26,9 @@ type MemoryMessage struct {
 	CreatedAt  time.Time
 }
 
+// GetID returns the message identifier.
+func (m MemoryMessage) GetID() string { return m.ID }
+
 // Document returns the message's Elasticsearch source map, defaulting CreatedAt
 // to now when zero and adding vector and embed_model only when set.
 func (m MemoryMessage) Document() map[string]any {
@@ -77,22 +80,19 @@ func ValidateMemoryMessage(m MemoryMessage, dims int) error {
 // MemoryBulkBody validates every message and encodes them into a _bulk body for
 // IndexMemoryMessages.
 func MemoryBulkBody(msgs []MemoryMessage, dims int) ([]byte, error) {
-	docs := make([]Doc, 0, len(msgs))
-	for _, m := range msgs {
-		if err := ValidateMemoryMessage(m, dims); err != nil {
-			return nil, err
-		}
-		docs = append(docs, Doc{ID: m.ID, Source: m.Document()})
+	docs, err := validateAndBuildDocs(msgs, ValidateMemoryMessage, dims, func(m MemoryMessage) map[string]any { return m.Document() }, func(m MemoryMessage) string { return m.ID })
+	if err != nil {
+		return nil, err
 	}
 	return BulkBody(IndexMemoryMessages, docs)
 }
 
 // MemoryHistoryBody returns a search body for the newest limit messages of a
-// tenant, user, and thread, sorted by seq descending; it returns nil when
-// limit <= 0.
-func MemoryHistoryBody(tenant, userID, threadID string, limit int) []byte {
+// tenant, user, and thread, sorted by seq descending; it returns a nil body
+// when limit <= 0.
+func MemoryHistoryBody(tenant, userID, threadID string, limit int) ([]byte, error) {
 	if limit <= 0 {
-		return nil
+		return nil, nil
 	}
 	body := map[string]any{
 		"size": limit,
@@ -108,8 +108,11 @@ func MemoryHistoryBody(tenant, userID, threadID string, limit int) []byte {
 		"sort":    []any{map[string]any{"seq": map[string]any{"order": "desc"}}},
 		"_source": []string{RoleField, ContentField, UntrustedField, "created_at"},
 	}
-	raw, _ := json.Marshal(body)
-	return raw
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("store: encode memory history: %w", err)
+	}
+	return raw, nil
 }
 
 // MemoryRecallBody returns a kNN search body over all threads of a tenant and
@@ -147,13 +150,11 @@ func MemoryRecallBody(tenant, userID string, vector []float32, topK, numCandidat
 	}
 	body := map[string]any{
 		"size": topK,
-		"query": map[string]any{
-			"knn": map[string]any{
-				"field":          VectorField,
-				"query_vector":   vector,
-				"num_candidates": numCandidates,
-				"filter":         filter,
-			},
+		"knn": map[string]any{
+			"field":          VectorField,
+			"query_vector":   vector,
+			"num_candidates": numCandidates,
+			"filter":         filter,
 		},
 		"_source": []string{RoleField, ContentField, UntrustedField, "created_at"},
 	}
@@ -166,7 +167,7 @@ func MemoryRecallBody(tenant, userID string, vector []float32, topK, numCandidat
 
 // MemoryClearBody returns a delete-by-query body matching the given tenant,
 // user, and thread.
-func MemoryClearBody(tenant, userID, threadID string) []byte {
+func MemoryClearBody(tenant, userID, threadID string) ([]byte, error) {
 	body := map[string]any{
 		"query": map[string]any{
 			"bool": map[string]any{
@@ -178,8 +179,11 @@ func MemoryClearBody(tenant, userID, threadID string) []byte {
 			},
 		},
 	}
-	raw, _ := json.Marshal(body)
-	return raw
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("store: encode memory clear: %w", err)
+	}
+	return raw, nil
 }
 
 // WorkingMemory is the single structured working-memory document stored per
@@ -213,10 +217,14 @@ func (w WorkingMemory) Document() map[string]any {
 }
 
 // MemoryWorkingID returns the document ID for a thread's working memory: the hex
-// SHA-256 of tenant, a NUL byte, and threadID.
-func MemoryWorkingID(tenant, threadID string) string {
+// SHA-256 of tenant, a NUL byte, userID, a NUL byte, and threadID. The user ID
+// is part of the digest, so two users of one tenant never share a working
+// memory document even when they use the same thread ID.
+func MemoryWorkingID(tenant, userID, threadID string) string {
 	h := sha256.New()
 	h.Write([]byte(tenant))
+	h.Write([]byte{0})
+	h.Write([]byte(userID))
 	h.Write([]byte{0})
 	h.Write([]byte(threadID))
 	return hex.EncodeToString(h.Sum(nil))

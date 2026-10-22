@@ -58,7 +58,7 @@ func TestPipelineScansTheWholeText(t *testing.T) {
 		if v.Findings[0].Start != 200 || v.Findings[0].End != 204 {
 			t.Fatalf("offset = %d..%d, want 200..204", v.Findings[0].Start, v.Findings[0].End)
 		}
-		want := strings.Repeat("x", 200) + "[PII:MARK]" + strings.Repeat("y", 200)
+		want := strings.Repeat("x", 200) + "[PII:MARK:1]" + strings.Repeat("y", 200)
 		if v.Action != Mask || v.Text != want {
 			t.Fatalf("action = %v, text = %q", v.Action, v.Text)
 		}

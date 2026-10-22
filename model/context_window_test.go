@@ -11,12 +11,8 @@ func TestClientsImplementContextWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gigachat, err := GigaChat(GigaChatConfig{Credentials: "id:secret"})
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	for name, c := range map[string]Client{"openai": openai, "ollama": ollama, "gigachat": gigachat} {
+	for name, c := range map[string]Client{"openai": openai, "ollama": ollama} {
 		cw, ok := c.(ContextWindow)
 		if !ok {
 			t.Fatalf("%s: client does not implement ContextWindow", name)
@@ -43,14 +39,6 @@ func TestContextTokensReportsTheConfiguredWindow(t *testing.T) {
 	if got := ollama.ContextTokens(); got != 8192 {
 		t.Fatalf("ollama ContextTokens() = %d, want 8192", got)
 	}
-
-	gigachat, err := GigaChat(GigaChatConfig{Credentials: "id:secret", ContextTokens: 131072})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := gigachat.ContextTokens(); got != 131072 {
-		t.Fatalf("gigachat ContextTokens() = %d, want 131072", got)
-	}
 }
 
 func TestContextTokensRejectsNegativeWindow(t *testing.T) {
@@ -59,8 +47,5 @@ func TestContextTokensRejectsNegativeWindow(t *testing.T) {
 	}
 	if _, err := NewOllama(OllamaConfig{BaseURL: "http://x", Model: "m", ContextTokens: -1}); err == nil {
 		t.Fatal("NewOllama accepted a negative ContextTokens")
-	}
-	if _, err := GigaChat(GigaChatConfig{Credentials: "id:secret", ContextTokens: -1}); err == nil {
-		t.Fatal("GigaChat accepted a negative ContextTokens")
 	}
 }

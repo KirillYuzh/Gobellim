@@ -68,15 +68,23 @@ type Chunk struct {
 	Quarantine bool
 }
 
+// GetID returns the chunk identifier.
+func (c Chunk) GetID() string { return c.ID }
+
 // Document returns the chunk's Elasticsearch source map. Quarantined chunks
 // omit text, vector, and embed_model, and CreatedAt defaults to now when zero.
+// A nil ACL is written as an empty list so the field is never null.
 func (c Chunk) Document() map[string]any {
+	acl := c.ACL
+	if acl == nil {
+		acl = []string{}
+	}
 	doc := map[string]any{
-		"doc_id":      c.DocID,
-		TenantField:   c.Tenant,
-		ACLField:      c.ACL,
-		"position":    c.Position,
-		"quarantined": c.Quarantine,
+		"doc_id":        c.DocID,
+		TenantField:     c.Tenant,
+		ACLField:        acl,
+		"position":      c.Position,
+		QuarantineField: c.Quarantine,
 	}
 	if !c.Quarantine {
 		doc[TextField] = c.Text
@@ -101,10 +109,23 @@ func (c Chunk) Document() map[string]any {
 	return doc
 }
 
-// ValidateChunk rejects a quarantined chunk that carries text or a vector, and a
-// non-quarantined chunk without a vector or with a vector length that differs
+// ValidateChunk requires the chunk identity (ID, DocID, Tenant and a non-empty
+// ACL), rejects a quarantined chunk that carries text or a vector, and rejects
+// a non-quarantined chunk without a vector or with a vector length that differs
 // from dims when dims > 0. Errors wrap core.ErrInvalidArgs.
 func ValidateChunk(c Chunk, dims int) error {
+	if c.ID == "" {
+		return fmt.Errorf("store: chunk has no id: %w", core.ErrInvalidArgs)
+	}
+	if c.DocID == "" {
+		return fmt.Errorf("store: chunk %q has no doc id: %w", c.ID, core.ErrInvalidArgs)
+	}
+	if c.Tenant == "" {
+		return fmt.Errorf("store: chunk %q has no tenant: %w", c.ID, core.ErrInvalidArgs)
+	}
+	if len(c.ACL) == 0 {
+		return fmt.Errorf("store: chunk %q has no acl: %w", c.ID, core.ErrInvalidArgs)
+	}
 	if c.Quarantine {
 		if c.Text != "" {
 			return fmt.Errorf("store: quarantined chunk %q must not carry text: %w", c.ID, core.ErrInvalidArgs)
@@ -123,15 +144,24 @@ func ValidateChunk(c Chunk, dims int) error {
 	return nil
 }
 
+// validateAndBuildDocs validates items and builds Doc slice for bulk requests.
+func validateAndBuildDocs[V any](items []V, validate func(V, int) error, dims int, docFunc func(V) map[string]any, idFunc func(V) string) ([]Doc, error) {
+	docs := make([]Doc, 0, len(items))
+	for _, item := range items {
+		if err := validate(item, dims); err != nil {
+			return nil, err
+		}
+		docs = append(docs, Doc{ID: idFunc(item), Source: docFunc(item)})
+	}
+	return docs, nil
+}
+
 // ChunksBulkBody validates every chunk and encodes them into a _bulk body for
 // IndexChunks.
 func ChunksBulkBody(chunks []Chunk, dims int) ([]byte, error) {
-	docs := make([]Doc, 0, len(chunks))
-	for _, c := range chunks {
-		if err := ValidateChunk(c, dims); err != nil {
-			return nil, err
-		}
-		docs = append(docs, Doc{ID: c.ID, Source: c.Document()})
+	docs, err := validateAndBuildDocs(chunks, ValidateChunk, dims, func(c Chunk) map[string]any { return c.Document() }, func(c Chunk) string { return c.ID })
+	if err != nil {
+		return nil, err
 	}
 	return BulkBody(IndexChunks, docs)
 }

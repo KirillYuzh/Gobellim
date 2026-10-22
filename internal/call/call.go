@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/KirillYuzh/Gobellim/guard"
 	"github.com/KirillYuzh/Gobellim/internal/core"
-	"github.com/KirillYuzh/Gobellim/internal/id"
 	"github.com/KirillYuzh/Gobellim/trace"
 )
 
@@ -35,23 +35,30 @@ type Guarder interface {
 }
 
 type Tracer interface {
-	Observe(ctx context.Context, obs trace.Observation)
+	Observe(ctx context.Context, span trace.Span)
 }
 
 type Deps struct {
 	Authz  Authorizer
 	Guard  Guarder
 	Tracer Tracer
+	// Provider creates the span of the call and of the operations it covers.
+	// A nil provider records nothing.
+	Provider trace.Provider
 
 	GuardVersion string
 	GuardModel   string
 	PolicyHash   string
-	TextPolicy   trace.TextPolicy
+	TextPolicy   string
 }
 
 type Req struct {
-	Kind       Kind
-	Name       string
+	Kind Kind
+	Name string
+	// Permission is the RBAC permission the caller must hold. Every Do call
+	// names one: an empty permission is a configuration error, never a free
+	// pass. A guard probe uses Guard, which authorizes nothing because it runs
+	// inside an operation that already did.
 	Permission string
 	Rail       guard.Rail
 	Text       string
@@ -59,15 +66,6 @@ type Req struct {
 	TraceID    string
 	ParentID   string
 	Tags       []string
-}
-
-type Span struct {
-	Verdict  guard.Verdict
-	Text     string
-	Kind     trace.Kind
-	Output   string
-	Usage    trace.Usage
-	Metadata map[string]any
 }
 
 type GuardRejectError struct {
@@ -88,151 +86,134 @@ func (e *GuardRejectError) Error() string {
 
 func (e *GuardRejectError) Unwrap() error { return core.ErrGuardReject }
 
-func Do[T any](ctx context.Context, deps Deps, req Req, fn func(ctx context.Context, span *Span) (T, error)) (T, error) {
-	span := &Span{Text: req.Text}
+func Do[T any](ctx context.Context, deps Deps, req Req, fn func(ctx context.Context, span trace.Span) (T, error)) (T, error) {
+	ctx, span := startSpan(ctx, deps.Provider, req.Name, trace.Attr("call.kind", string(req.Kind)))
+	defer span.End()
+
 	start := time.Now()
 
-	out, err := run(ctx, deps, req, span, fn)
+	out, err := run(ctx, deps, req, fn, span)
+
+	span.SetAttributes(
+		trace.Int("call.duration_ms", int(time.Since(start).Milliseconds())),
+		trace.String("call.model", req.Model),
+	)
+
+	if err != nil {
+		span.RecordError(err)
+		span.SetError()
+		span.SetAttributes(trace.String("call.error_kind", errorKindOf(err)))
+	}
 
 	if deps.Tracer != nil {
-		kind := span.Kind
-		if kind == "" {
-			kind = trace.KindSpan
-			if req.Kind == KindGuard {
-				kind = trace.KindEvent
-			}
-		}
-		level := trace.LevelDefault
-		status := ""
-		errorKind := ""
-		if err != nil {
-			level = trace.LevelError
-			status = err.Error()
-			errorKind = errorKindOf(err)
-		}
-		deps.Tracer.Observe(ctx, trace.Observation{
-			ID:              id.New(),
-			TraceID:         req.TraceID,
-			ParentID:        req.ParentID,
-			Name:            req.Name,
-			Kind:            kind,
-			Level:           level,
-			ErrorKind:       errorKind,
-			Model:           req.Model,
-			Input:           obsInput(deps, req, span),
-			Output:          span.Output,
-			StatusMessage:   status,
-			StartTime:       start,
-			EndTime:         time.Now(),
-			Usage:           span.Usage,
-			GuardRail:       string(span.Verdict.Rail),
-			GuardAction:     span.Verdict.Action.String(),
-			GuardCategories: categories(span.Verdict.Findings),
-			Tags:            req.Tags,
-			Metadata:        observationMetadata(ctx, span),
-			GuardVersion:    deps.GuardVersion,
-			GuardModel:      deps.GuardModel,
-			PolicyHash:      deps.PolicyHash,
-			TextPolicy:      deps.TextPolicy,
-			GuardDegraded:   span.Verdict.Degraded,
-		})
+		span.Event("call.complete",
+			trace.Bool("call.success", err == nil),
+		)
+		deps.Tracer.Observe(ctx, span)
 	}
 
 	return out, err
 }
 
-func observationMetadata(ctx context.Context, span *Span) map[string]any {
-	base := core.SpanMetadataFrom(ctx)
-	if len(base) == 0 {
-		return span.Metadata
-	}
-	if len(span.Metadata) == 0 {
-		out := make(map[string]any, len(base))
-		for k, v := range base {
-			out[k] = v
-		}
-		return out
-	}
-	out := make(map[string]any, len(base)+len(span.Metadata))
-	for k, v := range base {
-		out[k] = v
-	}
-	for k, v := range span.Metadata {
-		out[k] = v
-	}
-	return out
-}
-
-func obsInput(deps Deps, req Req, span *Span) string {
-	if deps.TextPolicy.IsRaw() {
-		return req.Text
-	}
-	return span.Text
-}
-
-func Guard(ctx context.Context, deps Deps, req Req) (guard.Verdict, error) {
-	var verdict guard.Verdict
-	_, err := Do(ctx, deps, req, func(_ context.Context, span *Span) (struct{}, error) {
-		verdict = span.Verdict
-		return struct{}{}, nil
-	})
-	if err != nil {
-		return guard.Verdict{}, err
-	}
-	return verdict, nil
-}
-
-func run[T any](ctx context.Context, deps Deps, req Req, span *Span, fn func(ctx context.Context, span *Span) (T, error)) (T, error) {
+func run[T any](ctx context.Context, deps Deps, req Req, fn func(ctx context.Context, span trace.Span) (T, error), span trace.Span) (T, error) {
 	var zero T
 
+	if req.Permission == "" {
+		return zero, fmt.Errorf("call: %s %s: permission is required: %w", req.Kind, req.Name, core.ErrInvalidConfig)
+	}
 	pr, ok := core.PrincipalFrom(ctx)
 	if !ok {
 		return zero, fmt.Errorf("call: %s %s: no principal: %w", req.Kind, req.Name, core.ErrUnauthorized)
 	}
-	if deps.Authz != nil {
-		if err := deps.Authz.Authorize(pr, req.Permission); err != nil {
-			return zero, err
-		}
+	if deps.Authz == nil {
+		return zero, fmt.Errorf("call: %s %s: no authorizer configured: %w", req.Kind, req.Name, core.ErrUnauthorized)
+	}
+	if err := deps.Authz.Authorize(pr, req.Permission); err != nil {
+		return zero, err
 	}
 
-	if req.Rail != "" && deps.Guard != nil {
-		verdict, err := deps.Guard.Check(ctx, req.Rail, req.Text)
-		if err != nil {
-			return zero, err
-		}
-		span.Verdict = verdict
-		span.Text = verdict.Text
-		span.Metadata = mergeSpanMetadata(span.Metadata, verdict.ObservationMetadata())
-		if verdict.Action == guard.Reject {
-			return zero, &GuardRejectError{
-				Kind: req.Kind, Name: req.Name, Rail: verdict.Rail,
-				Tripwire: verdict.Tripwire, Version: verdict.Version,
-			}
-		}
-		if verdict.Tripwire != nil {
-			if span.Metadata == nil {
-				span.Metadata = map[string]any{}
-			}
-			span.Metadata["tripwire_rule"] = verdict.Tripwire.RuleID
-			span.Metadata["tripwire_reason"] = verdict.Tripwire.Reason
-		}
+	ctx, _, err := checkRail(ctx, deps, req)
+	if err != nil {
+		return zero, err
 	}
 
 	return fn(ctx, span)
 }
 
-func mergeSpanMetadata(own, fromGuard map[string]any) map[string]any {
-	if len(fromGuard) == 0 {
-		return own
+// checkRail runs the guard rail of req and returns the context carrying the
+// masked text together with the verdict.
+func checkRail(ctx context.Context, deps Deps, req Req) (context.Context, guard.Verdict, error) {
+	if req.Rail == "" {
+		return ctx, guard.Verdict{Action: guard.Allow}, nil
 	}
-	out := make(map[string]any, len(own)+len(fromGuard))
-	for k, v := range own {
-		out[k] = v
+	if deps.Guard == nil {
+		return ctx, guard.Verdict{}, fmt.Errorf("call: %s %s: rail %s without a guard: %w", req.Kind, req.Name, req.Rail, core.ErrInvalidConfig)
 	}
-	for k, v := range fromGuard {
-		out[k] = v
+	verdict, err := deps.Guard.Check(ctx, req.Rail, req.Text)
+	if err != nil {
+		return ctx, guard.Verdict{}, err
 	}
-	return out
+
+	_, guardSpan := startSpan(ctx, deps.Provider, "guard.check",
+		trace.Attr("guard.rail", string(req.Rail)),
+	)
+
+	if verdict.Action == guard.Reject {
+		guardSpan.Event("guard.rejected",
+			trace.String("guard.action", "reject"),
+			trace.String("guard.categories", categoriesToString(verdict.Findings)),
+		)
+		guardSpan.End()
+		return ctx, guard.Verdict{}, &GuardRejectError{
+			Kind: req.Kind, Name: req.Name, Rail: verdict.Rail,
+			Tripwire: verdict.Tripwire, Version: verdict.Version,
+		}
+	}
+
+	if verdict.Tripwire != nil {
+		guardSpan.SetAttributes(
+			trace.String("tripwire_rule", verdict.Tripwire.RuleID),
+			trace.String("tripwire_reason", verdict.Tripwire.Reason),
+		)
+	}
+
+	guardSpan.End()
+	return ctx, verdict, nil
+}
+
+// startSpan creates a span with the provider, or a span that records nothing
+// when no provider is configured.
+func startSpan(ctx context.Context, p trace.Provider, name string, attrs ...trace.Attribute) (context.Context, trace.Span) {
+	if p == nil {
+		return trace.Noop().Start(ctx, name, attrs...)
+	}
+	return p.Start(ctx, name, attrs...)
+}
+
+// Guard checks text against a guard rail and returns the verdict. It runs no
+// RBAC check of its own: a guard probe always sits inside an operation that
+// already authorized the caller, and it exposes no capability on its own. Use
+// Do for anything the caller must be authorized for.
+func Guard(ctx context.Context, deps Deps, req Req) (guard.Verdict, error) {
+	if _, ok := core.PrincipalFrom(ctx); !ok {
+		return guard.Verdict{}, fmt.Errorf("call: %s %s: no principal: %w", req.Kind, req.Name, core.ErrUnauthorized)
+	}
+	ctx, span := startSpan(ctx, deps.Provider, req.Name, trace.Attr("call.kind", string(req.Kind)))
+	defer span.End()
+
+	_, verdict, err := checkRail(ctx, deps, req)
+	if err != nil {
+		span.RecordError(err)
+		span.SetError()
+		return guard.Verdict{}, err
+	}
+	if deps.Tracer != nil {
+		span.Event("call.complete",
+			trace.Bool("call.success", true),
+		)
+		deps.Tracer.Observe(ctx, span)
+	}
+	return verdict, nil
 }
 
 func errorKindOf(err error) string {
@@ -278,4 +259,8 @@ func categories(findings []guard.Finding) []string {
 		out = append(out, cat)
 	}
 	return out
+}
+
+func categoriesToString(findings []guard.Finding) string {
+	return strings.Join(categories(findings), ",")
 }

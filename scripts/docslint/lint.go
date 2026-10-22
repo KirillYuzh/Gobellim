@@ -92,9 +92,18 @@ func Run(root string) (Report, error) {
 
 	for _, f := range files {
 		lines := contents[f]
+		inFence := false
 		for i, line := range lines {
 			n := i + 1
-			if !isDefinitionLine(line) {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "```") {
+				inFence = !inFence
+				continue
+			}
+			if inFence {
+				continue
+			}
+			if !isDefinitionLine(line) && len(defined) > 0 {
 				for _, id := range idsIn(line) {
 					if defined.has(id) {
 						continue
@@ -108,7 +117,7 @@ func Run(root string) (Report, error) {
 					})
 				}
 			}
-			for _, l := range linksIn(line) {
+			for _, l := range linksIn(stripInlineCode(line)) {
 				if bad, detail := checkLink(root, f, contents, l); bad {
 					rep.Failed = append(rep.Failed, Finding{
 						Rule:   ruleBrokenLink,
@@ -201,6 +210,24 @@ func sortedKeys[V any](m map[string]V) []string {
 }
 
 func splitLines(s string) []string { return strings.Split(s, "\n") }
+
+// stripInlineCode blanks the text between backticks, so Go generics such as
+// View[Out](f) are not mistaken for Markdown links.
+func stripInlineCode(s string) string {
+	var b strings.Builder
+	in := false
+	for _, r := range s {
+		if r == '`' {
+			in = !in
+			b.WriteRune(r)
+			continue
+		}
+		if !in {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
 
 func docFiles(root string) ([]string, error) {
 	var out []string

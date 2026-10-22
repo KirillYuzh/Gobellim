@@ -16,7 +16,6 @@ type Request struct {
 	Body        []byte
 	ContentType string
 	Refresh     string
-	Idempotent  bool
 }
 
 // EffectivePath returns Path with a refresh=<v> query parameter appended when
@@ -113,4 +112,6 @@ const (
 	ContentField = "content"
 	// UntrustedField is the Elasticsearch field marking a message as untrusted.
 	UntrustedField = "untrusted"
+	// QuarantineField is the Elasticsearch field marking a chunk as quarantined.
+	QuarantineField = "quarantined"
 )

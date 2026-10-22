@@ -112,12 +112,12 @@ type Request struct {
 	ProviderOptions map[string]any
 }
 
-// Usage reports token counts and cost for one call.
+// Usage reports token counts for one call. Cost is not part of the port: the
+// application computes it from model.Pricing and stores it in its own usage.
 type Usage struct {
 	PromptTokens     int
 	CompletionTokens int
 	TotalTokens      int
-	Cost             float64
 }
 
 // Pricing holds per-million-token input and output prices.

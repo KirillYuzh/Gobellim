@@ -10,8 +10,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 func TestMCPStdioHelperProcess(t *testing.T) {
@@ -106,6 +110,79 @@ func TestStdioCallUnknownMethodIsProviderError(t *testing.T) {
 	if !errors.As(err, &rpc) || rpc.Code != -32601 {
 		t.Fatalf("err = %v", err)
 	}
+}
+
+// TestMCPStdioOversizedHelperProcess writes one message larger than the
+// reader's limit, so the reader fails instead of delivering it.
+func TestMCPStdioOversizedHelperProcess(t *testing.T) {
+	if os.Getenv("KIT_MCP_BIG") != "1" {
+		return
+	}
+	big := strings.Repeat("x", maxMessageBytes+1024)
+	_, _ = fmt.Fprintf(os.Stdout, "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"%s\"}\n", big)
+	_ = os.Stdout.Sync()
+	time.Sleep(30 * time.Second)
+	os.Exit(0)
+}
+
+// A reader failure must reach the caller: the transport is done, so a later
+// call fails at once instead of waiting for its deadline.
+func TestStdioReadErrorFailsLaterCalls(t *testing.T) {
+	c, err := New(Config{
+		Name:    "big",
+		Command: os.Args[0],
+		Args:    []string{"-test.run=TestMCPStdioOversizedHelperProcess"},
+		Env:     []string{"KIT_MCP_BIG=1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	_, err = c.transport.Call(ctx, "initialize", nil)
+	if err == nil {
+		t.Fatal("want an error when the reader fails")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("the call waited %s for a reply that could never come", elapsed)
+	}
+	if !errors.Is(err, core.ErrProvider) {
+		t.Fatalf("err = %v, want a provider error", err)
+	}
+}
+
+// The transport owns goroutines for the life of the connection: they must be
+// gone once the client is closed, or every connection leaks three of them.
+func TestStdioTransportGoroutinesEndWithTheClient(t *testing.T) {
+	before := runtime.NumGoroutine()
+	c, err := New(Config{
+		Name:    "fake",
+		Command: os.Args[0],
+		Args:    []string{"-test.run=TestMCPStdioHelperProcess"},
+		Env:     []string{"KIT_MCP_HELPER=1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.ListTools(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// The goroutines wind down asynchronously, so give them a moment.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if runtime.NumGoroutine() <= before {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("goroutines leaked: %d before, %d after", before, runtime.NumGoroutine())
 }
 
 func TestNewRequiresExactlyOneTransport(t *testing.T) {
@@ -247,6 +324,57 @@ func TestHTTPClientEchoesSessionHeader(t *testing.T) {
 	}
 	if gotSession != "sess-123" {
 		t.Fatalf("session header = %q, want sess-123", gotSession)
+	}
+}
+
+// A streamable HTTP server may hold the stream open after it has answered.
+// The call must return as soon as the reply arrives, so a slow stream does not
+// look like a broken one.
+func TestHTTPClientReturnsWhileTheStreamStaysOpen(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		_ = json.Unmarshal(body, &req)
+		if len(req.ID) == 0 {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		payload := fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"tools":[]}}`, req.ID)
+		_, _ = fmt.Fprintf(w, "event: message\ndata: %s\n\n", payload)
+		if fl, ok := w.(http.Flusher); ok {
+			fl.Flush()
+		}
+		<-release
+	}))
+	t.Cleanup(func() {
+		close(release)
+		srv.Close()
+	})
+
+	c, err := New(Config{Name: "sse-open", URL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.ListTools(context.Background())
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the call waited for the stream to end instead of the reply")
 	}
 }
 

@@ -22,7 +22,11 @@ type remoteResponse struct {
 	} `json:"data"`
 }
 
-func postEmbeddings(ctx context.Context, hc *http.Client, url string, headers map[string]string, model string, input []string) ([][]float32, error) {
+// PostEmbeddings sends the OpenAI-compatible /embeddings request and returns
+// one vector per input, in input order. Transport and shape errors are joined
+// with core.ErrProvider. Remote embedder implementations use it to keep the
+// request shape and error contract consistent.
+func PostEmbeddings(ctx context.Context, hc *http.Client, url string, headers map[string]string, model string, input []string) ([][]float32, error) {
 	var out remoteResponse
 	if err := httpjson.Do(ctx, hc, http.MethodPost, url, headers, remoteRequest{Model: model, Input: input}, &out); err != nil {
 		return nil, fmt.Errorf("embed: %w: %w", err, core.ErrProvider)

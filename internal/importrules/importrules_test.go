@@ -61,20 +61,21 @@ var skipDirs = map[string]bool{
 
 // optionalPackages are the non-core packages this repository ships: MCP (client
 // and server), the webfetch tool, the flow primitive, the eval harness, the
-// rerank adapter, the test kit and the tooling (cmd, demo, scripts). The core
-// must not depend on them — the dependency runs the other way, or not at all
-// (docs/internals/architecture.md, «Границы ядра»).
+// rerank adapter, the test kit, the vendor plugins and the tooling (cmd, demo,
+// scripts). The core must not depend on them — the dependency runs the other
+// way, or not at all (docs/internals/architecture.md, «Границы ядра»).
 var optionalPackages = []string{
 	"mcp", "webfetch", "flow", "eval", "kittest", "rerank",
-	"cmd", "demo", "scripts",
+	"cmd", "demo", "scripts", "plugins",
 }
 
 // coreOptionalExceptions is the honest list of edges where the compiled core
-// still depends on an optional package. It holds one edge: the façade exposes
-// Config.Reranker and SearchRequest.Rerank, so it imports rerank. The core rule
-// asserts this list is exactly the observed edges, so it cannot grow silently.
+// still depends on an optional package. It holds one edge: the façade (now
+// internal/app, re-exported by package gobellim) exposes Config.Reranker and
+// SearchRequest.Rerank, so it imports rerank. The core rule asserts this list is
+// exactly the observed edges, so it cannot grow silently.
 var coreOptionalExceptions = map[[2]string]bool{
-	{"", "rerank"}: true,
+	{"internal/app", "rerank"}: true,
 }
 
 var rules = []rule{
@@ -128,7 +129,7 @@ var rules = []rule{
 			if !isOptionalPackage(imported) {
 				return true
 			}
-			return coreOptionalExceptions[[2]string{rootOf(pkg), rootOf(imported)}]
+			return coreOptionalExceptions[[2]string{pkg, rootOf(imported)}]
 		},
 	},
 }
@@ -378,10 +379,10 @@ func TestCoreHasNoOptionalDependency(t *testing.T) {
 				t.Errorf("the core must not import %q", dir)
 			}
 		}
-		if !r.allows("", "rerank") {
+		if !r.allows("internal/app", "rerank") {
 			t.Error("the recorded façade → rerank edge must be allowed")
 		}
-		if r.allows("store", "rerank") || r.allows("model", "rerank") {
+		if r.allows("store", "rerank") || r.allows("model", "rerank") || r.allows("internal/ort", "rerank") {
 			t.Error("rerank is optional: only the façade may import it")
 		}
 	})
@@ -405,7 +406,7 @@ func TestCoreHasNoOptionalDependency(t *testing.T) {
 					t.Errorf("%s:%d imports %s, which %s forbids", im.file, im.line, display(modulePath, im.dir), r.name)
 				}
 				if isOptionalPackage(im.dir) {
-					observed[[2]string{rootOf(pkg), rootOf(im.dir)}] = true
+					observed[[2]string{pkg, rootOf(im.dir)}] = true
 				}
 			}
 		}

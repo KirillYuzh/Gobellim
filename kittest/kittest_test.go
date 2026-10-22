@@ -128,7 +128,6 @@ func TestDetectorHelpers(t *testing.T) {
 func TestContractsAcceptTheFakes(t *testing.T) {
 	DetectorContract(t, guardtest.AllowAll())
 	DetectorContract(t, Findings("L1"))
-	SinkContract(t, Recorder())
 	ScopeIsolation(t, &memoryIndex{})
 }
 

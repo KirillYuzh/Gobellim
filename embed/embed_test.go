@@ -3,6 +3,7 @@ package embed
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,7 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
+
+	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
 func TestPresetFor(t *testing.T) {
@@ -151,29 +153,42 @@ func TestOpenAIEmbedderAppliesPrefixAndNormalizes(t *testing.T) {
 	}
 }
 
-func TestGigaChatEmbedder(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/oauth", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = fmt.Fprintf(w, `{"access_token":"tok","expires_at":%d}`, time.Now().Add(time.Hour).UnixMilli())
-	})
-	mux.HandleFunc("/v1/embeddings", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer tok" {
-			t.Errorf("bearer = %q", r.Header.Get("Authorization"))
+func TestPresetForIdentifiesFamilyBySegment(t *testing.T) {
+	matched := map[string]string{
+		"bge-m3":                         "bge-m3",
+		"BAAI/bge-m3":                    "bge-m3",
+		"bge-m3-tuned":                   "bge-m3",
+		"intfloat/multilingual-e5-small": "e5",
+		"multilingual-e5":                "e5",
+	}
+	for model, want := range matched {
+		p, ok := PresetFor(model)
+		if !ok || p.Name != want {
+			t.Fatalf("PresetFor(%q) = %+v ok=%v, want preset %q", model, p, ok, want)
 		}
-		_, _ = io.WriteString(w, `{"data":[{"index":0,"embedding":[1,0]}]}`)
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
+	}
+	guessed := []string{
+		"my-bge-m3-tuned",
+		"custom-multilingual-e5-copy",
+		"bge-m3x",
+		"xmultilingual-e5",
+	}
+	for _, model := range guessed {
+		if p, ok := PresetFor(model); ok {
+			t.Fatalf("PresetFor(%q) = %+v, want no preset: the name does not identify the family", model, p)
+		}
+	}
+}
 
-	e, err := NewGigaChat(GigaChatConfig{BaseURL: srv.URL, AuthURL: srv.URL + "/oauth", Credentials: "creds"})
-	if err != nil {
-		t.Fatal(err)
+func TestPresetForModelReportsAmbiguity(t *testing.T) {
+	ambiguous := []string{"my-bge-m3-tuned", "custom-multilingual-e5-copy", "bge-m3/multilingual-e5"}
+	for _, model := range ambiguous {
+		_, err := presetForModel(model)
+		if !errors.Is(err, core.ErrInvalidConfig) {
+			t.Fatalf("presetForModel(%q) err = %v, want %v", model, err, core.ErrInvalidConfig)
+		}
 	}
-	vecs, err := e.Passages(context.Background(), []string{"doc"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(vecs) != 1 || len(vecs[0]) != 2 {
-		t.Fatalf("vectors = %v", vecs)
+	if _, err := presetForModel("unknown/model"); !errors.Is(err, errNoFamily) {
+		t.Fatalf("presetForModel(unknown) err = %v, want %v", err, errNoFamily)
 	}
 }

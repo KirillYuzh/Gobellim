@@ -24,7 +24,9 @@ type Closer interface {
 	Close() error
 }
 
-func normalizeL2(v []float32) {
+// NormalizeL2 scales v to unit length in place; a zero vector is left as is.
+// Remote embedder implementations apply it when the preset requests it.
+func NormalizeL2(v []float32) {
 	var sum float64
 	for _, x := range v {
 		sum += float64(x) * float64(x)

@@ -43,7 +43,7 @@ func TestEnsembleMergesDetectorFindings(t *testing.T) {
 	if v.Action != Mask {
 		t.Fatalf("action = %v, want Mask", v.Action)
 	}
-	if want := "[PII:EMAIL] secret and [PII:PHONE]"; v.Text != want {
+	if want := "[PII:EMAIL:1] secret and [PII:PHONE:1]"; v.Text != want {
 		t.Fatalf("masked = %q, want %q", v.Text, want)
 	}
 }
@@ -211,7 +211,7 @@ func TestFlatLayersStillWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v.Action != Mask || v.Text != "[PII:SNILS] 00" {
+	if v.Action != Mask || v.Text != "[PII:SNILS:1] 00" {
 		t.Fatalf("verdict = %v %q", v.Action, v.Text)
 	}
 }

@@ -126,3 +126,138 @@ func TestTEIRerankServerErrorIsProviderError(t *testing.T) {
 		t.Fatalf("err = %v, want core.ErrProvider", err)
 	}
 }
+
+func TestTEIRerankPicksScoreByKeyPresence(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want float64
+	}{
+		{name: "score wins when present", body: `[{"index":0,"score":0,"relevance_score":0.42}]`, want: 0},
+		{name: "relevance score used when score absent", body: `[{"index":0,"relevance_score":0.42}]`, want: 0.42},
+		{name: "score used when relevance absent", body: `[{"index":0,"score":0.7}]`, want: 0.7},
+		{name: "missing scores default to zero", body: `[{"index":0}]`, want: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			c, _ := NewTEI(TEIConfig{BaseURL: srv.URL})
+			ranks, err := c.Rerank(context.Background(), "q", []string{"a"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(ranks) != 1 {
+				t.Fatalf("ranks = %+v", ranks)
+			}
+			if ranks[0].Score != tc.want {
+				t.Fatalf("score = %v, want %v", ranks[0].Score, tc.want)
+			}
+		})
+	}
+}
+
+func TestTEIRerankRejectsOutOfRangeIndex(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{name: "index beyond document count", body: `[{"index":2,"score":0.9}]`},
+		{name: "negative index", body: `[{"index":-1,"score":0.9}]`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			c, _ := NewTEI(TEIConfig{BaseURL: srv.URL})
+			ranks, err := c.Rerank(context.Background(), "q", []string{"a", "b"})
+			if err == nil || !errors.Is(err, core.ErrProvider) {
+				t.Fatalf("err = %v, want core.ErrProvider", err)
+			}
+			if ranks != nil {
+				t.Fatalf("ranks = %+v, want none", ranks)
+			}
+		})
+	}
+}
+
+// teiStub serves a fixed response body and reports the "truncate" flag the
+// client sent.
+func teiStub(t *testing.T, body string) (*httptest.Server, <-chan *bool) {
+	t.Helper()
+	sent := make(chan *bool, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Truncate *bool `json:"truncate"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode: %v", err)
+		}
+		select {
+		case sent <- req.Truncate:
+		default: // never block the handler
+		}
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, sent
+}
+
+func TestTEIRerankTruncatePolicy(t *testing.T) {
+	noTruncate := false
+	cases := []struct {
+		name string
+		cfg  TEIConfig
+		want bool
+	}{
+		{name: "unset defaults to true", cfg: TEIConfig{}, want: true},
+		{name: "explicit false disables truncation", cfg: TEIConfig{Truncate: &noTruncate}, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, sent := teiStub(t, `[{"index":0,"score":0.1}]`)
+
+			cfg := tc.cfg
+			cfg.BaseURL = srv.URL
+			c, err := NewTEI(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.Rerank(context.Background(), "q", []string{"a"}); err != nil {
+				t.Fatal(err)
+			}
+			got := <-sent
+			if got == nil {
+				t.Fatal("truncate is missing from the request body")
+			}
+			if *got != tc.want {
+				t.Fatalf("truncate = %v, want %v", *got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTEITruncatePolicyIsFixedAtConstruction(t *testing.T) {
+	truncate := false
+	srv, sent := teiStub(t, `[{"index":0,"score":0.1}]`)
+
+	c, err := NewTEI(TEIConfig{BaseURL: srv.URL, Truncate: &truncate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	truncate = true // the caller mutates its own variable after construction
+
+	if _, err := c.Rerank(context.Background(), "q", []string{"a"}); err != nil {
+		t.Fatal(err)
+	}
+	got := <-sent
+	if got == nil || *got {
+		t.Fatalf("truncate = %v, want false", got)
+	}
+}

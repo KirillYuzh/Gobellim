@@ -1,6 +1,6 @@
 # Elasticsearch
 
-Elasticsearch — единственное хранилище kit: он держит чанки документов и трейсы вызовов. Клиент пишет пользователь; kit формирует `store.Request` и разбирает ответы.
+Elasticsearch — единственное хранилище gobellim: он держит чанки документов и трейсы вызовов. Клиент пишет пользователь; gobellim формирует `store.Request` и разбирает ответы.
 
 > [!NOTE]
 > Требования: Elasticsearch ≥ 8.14 на basic-лицензии. Нужны data streams и `dense_vector`; гибридное слияние считается в Go, поэтому платный retriever не требуется.
@@ -17,7 +17,6 @@ type Request struct {
     Body        []byte
     ContentType string // "" -> application/json
     Refresh     string // "", "true", "wait_for" -> ?refresh=<v>
-    Idempotent  bool   // можно ретраить без последствий
 }
 
 func (r Request) EffectivePath() string
@@ -31,11 +30,11 @@ func NDJSONRequest(method, path string, body []byte) Request
 func RawRequest(method, path string, body []byte, contentType string) Request
 ```
 
-**Тип контента и refresh применяет клиент вызывающего, а не kit.** `EffectivePath`
+**Тип контента и refresh применяет клиент вызывающего, а не gobellim.** `EffectivePath`
 добавляет `?refresh=<v>` (или `&`, если в пути уже есть `?`); клиент обязан
 отправить запрос именно по этому пути и подставить `Content-Type`
 (`application/json`, если поле пустое). Пример минимального клиента —
-[demo/internal/adapter/elastic](../../demo/internal/adapter/elastic/es.go).
+[plugins/elasticsearch](../../plugins/elasticsearch/elasticsearch.go).
 
 ## Индексы и потоки
 
@@ -67,6 +66,11 @@ func RawRequest(method, path string, body []byte, contentType string) Request
 Настройки индекса: `number_of_shards` = 1, `number_of_replicas` = 0. Карантинный
 чанк хранится маркером `quarantined: true` **без** `text` и без `vector`
 (BR-31, D19), поэтому его нельзя ни найти, ни использовать.
+
+`store.ValidateChunk` требует непустые `id`, `doc_id`, `tenant` и `acl` для любого
+чанка, карантинного тоже. Пустой `tenant` сделал бы чанк невидимым для всех
+запросов, а пустой `doc_id` — неудаляемым, поэтому такая запись отвергается на
+стороне записи, а не теряется молча. `acl` пишется списком (`[]`), а не `null`.
 
 Текстовые поля (`text`, `content`) создаются с анализатором **`russian`** (модуль
 `analysis-common`, плагин не нужен). Это под русский корпус, и это известная
@@ -105,8 +109,9 @@ func RawRequest(method, path string, body []byte, contentType string) Request
 | `data`       | `object` (`enabled: false`) | Структурная рабочая память. |
 | `updated_at` | `date`                      | Время записи.               |
 
-Документ адресуется по `_id` = sha256(tenant, thread_id) (одинаковый для чтения и
-записи, `PUT` идемпотентен).
+Документ адресуется по `_id` = sha256(tenant, NUL, user_id, NUL, thread_id)
+(одинаковый для чтения и записи, `PUT` идемпотентен). `user_id` входит в адрес,
+поэтому рабочая память разных пользователей одного тенанта не смешивается.
 
 ## kit-traces
 
@@ -185,11 +190,15 @@ Score пишется сюда же: `kind: SCORE`, `trace_id`, `name`, `score`, 
 | 5   | `PUT /kit-memory-working`                                   |
 | 6   | `PUT /kit-chunks` — только если размерность эмбеддера `> 0` |
 
-Шаблоны data stream задают 1 shard, 0 replicas и lifecycle `kit-traces-30d`. Вызов идемпотентен: ответы `resource_already_exists_exception` и `already_exists_exception` считаются успехом. Если `Embedder` не задан, `Dim()` не даёт размерности и шаг 6 пропускается. Каждый шаг ограничен `store.EnsureStepTimeout` (по умолчанию 30 с).
+Шаблоны data stream задают 1 shard, 0 replicas и lifecycle `kit-traces-30d`. Вызов идемпотентен: ответы `resource_already_exists_exception` и `already_exists_exception` считаются успехом. Если `Embedder` не задан, `Dim()` не даёт размерности и шаг 6 пропускается. Каждый шаг ограничен 30 с.
 
 ## Поиск
 
 `App.Search` вызывает `_msearch` с двумя подзапросами — kNN и BM25, — каждый со своим фильтром (ACL, карантин и модель эмбеддера). `_source` ограничен полями `doc_id`, `text`, `position`. `k` задаётся top-level `size`, в самом `knn`-запросе поля `k` нет; `num_candidates` по умолчанию — максимум из `topK * 10` и 100.
+
+Ответ с `timed_out: true` или `terminated_early: true` — это неполный список:
+`store.ParseMSearch` возвращает ошибку с `core.ErrProvider`, чтобы RRF не собрал
+ранжирование по обрезанным выдачам молча.
 
 ```json
 {"index":"kit-chunks"}
@@ -250,8 +259,8 @@ store.Filter{"doc_id": "1", "position": map[string]any{"$gte": 2}}
 
 ## Смотрите также
 
-- [Справочник kit](./kit.md) — `App.Setup`, `Search`, `Ingest`, `Delete`, `Prune`
-- [Поиск](../concepts/retrieval.md) — гибридный поиск и слияние RRF
-- [Как индексировать и искать](../guides/retrieval.md) — рецепты записи и чтения
-- [Наблюдаемость](../concepts/observability.md) — трейсы и оценки
+- [Справочник gobellim](./gobellim.md) — `App.Setup`, `Search`, `Ingest`, `Delete`, `Prune`
+- [Поиск и индексация](../retrieval/README.md) — гибридный поиск и слияние RRF
+- [Как индексировать и искать](../retrieval/README.md) — рецепты записи и чтения
+- [Наблюдаемость](../tracing/README.md) — трейсы и оценки
 - [Конфигурация](./configuration.md) — лимиты и значения по умолчанию трейсинга

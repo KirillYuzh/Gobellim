@@ -34,14 +34,11 @@ models/
 
 # Local Go build cache
 .gotmp/
+.gocache/
+
+# macOS metadata
+.DS_Store
 
 # Editor/IDE
 # .idea/
 # .vscode/
-
-# Built tool binaries
-/docslint
-/guardqual
-
-# Turbopack cache at the repository root, written by site/next.config.mjs
-/.next/

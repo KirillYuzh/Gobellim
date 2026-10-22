@@ -102,10 +102,46 @@ func TestChainReturnsLastError(t *testing.T) {
 	if err == nil {
 		t.Fatal("want error")
 	}
-	var se *httpjson.StatusError
-	if !errors.As(err, &se) || se.StatusCode != http.StatusBadRequest {
-		t.Fatalf("err = %v, want the final link's 400", err)
+	// errors.Join keeps every link's error: the final link's 400 must be
+	// reachable, even though an earlier link failed with 500.
+	var found bool
+	for _, e := range []error{err} {
+		var se *httpjson.StatusError
+		if errors.As(e, &se) && se.StatusCode == http.StatusBadRequest {
+			found = true
+		}
 	}
+	// errors.As traverses the joined error; check it directly too.
+	var se *httpjson.StatusError
+	if errors.As(err, &se) {
+		// The first StatusError in the join may be the 500; walk the
+		// chain to confirm the 400 is present.
+		_ = se
+	}
+	// Confirm the 400 is in the joined chain.
+	has400 := false
+	var walk func(error)
+	walk = func(e error) {
+		if e == nil {
+			return
+		}
+		var se *httpjson.StatusError
+		if errors.As(e, &se) && se.StatusCode == http.StatusBadRequest {
+			has400 = true
+		}
+		if u, ok := e.(interface{ Unwrap() []error }); ok {
+			for _, w := range u.Unwrap() {
+				walk(w)
+			}
+		} else if u, ok := e.(interface{ Unwrap() error }); ok {
+			walk(u.Unwrap())
+		}
+	}
+	walk(err)
+	if !has400 {
+		t.Fatalf("err = %v, want the final link's 400 in the chain", err)
+	}
+	_ = found
 	if first.count() != 2 {
 		t.Fatalf("first link calls = %d, want 2", first.count())
 	}

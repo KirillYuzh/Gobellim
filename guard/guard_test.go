@@ -69,7 +69,7 @@ func TestPipelineMask(t *testing.T) {
 	if v.Action != Mask {
 		t.Fatalf("want Mask, got %v", v.Action)
 	}
-	want := "номер [PII:SNILS] конец"
+	want := "номер [PII:SNILS:1] конец"
 	if v.Text != want {
 		t.Fatalf("masked = %q, want %q", v.Text, want)
 	}
@@ -86,13 +86,13 @@ func TestPipelineMaskRecordsSubstitutions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "номер [PII:SNILS] конец"; v.Text != want {
+	if want := "номер [PII:SNILS:1] конец"; v.Text != want {
 		t.Fatalf("masked = %q, want %q", v.Text, want)
 	}
 	if len(v.Substitutions) != 1 {
 		t.Fatalf("substitutions = %+v", v.Substitutions)
 	}
-	if sub := v.Substitutions[0]; sub.Placeholder != "[PII:SNILS]" || sub.Value != "112-233-445 95" {
+	if sub := v.Substitutions[0]; sub.Placeholder != "[PII:SNILS:1]" || sub.Value != "112-233-445 95" {
 		t.Fatalf("substitution = %+v", sub)
 	}
 
@@ -121,7 +121,7 @@ func TestPipelineMergesAdjacentSpans(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "[PII:SNILS,EMAIL]efgh"; v.Text != want {
+	if want := "[PII:SNILS,EMAIL:1]efgh"; v.Text != want {
 		t.Fatalf("masked = %q, want %q", v.Text, want)
 	}
 }

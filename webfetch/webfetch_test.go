@@ -115,11 +115,12 @@ func TestHostAllowed(t *testing.T) {
 	}{
 		{"example.com", true},
 		{"EXAMPLE.COM", true},
-		{"cdn.example.com", true},
-		{"a.b.example.com", true},
+		{"cdn.example.com", false},
+		{"a.b.example.com", false},
 		{"example.com.", true},
 		{"internal.example.org", true},
-		{"api.internal.example.org", true},
+		{"*.example.com", false},
+		{"api.internal.example.org", false},
 		{"notexample.com", false},
 		{"example.com.evil.com", false},
 		{"example.org", false},
@@ -153,7 +154,7 @@ func TestNewRejectsNegativeConfig(t *testing.T) {
 		{MaxRedirects: -1},
 	}
 	for _, cfg := range cases {
-		_, err := New(nil, "web_fetch", cfg)
+		_, err := New("web_fetch", cfg)
 		if err == nil {
 			t.Fatalf("New(%+v) = nil error, want ErrInvalidConfig", cfg)
 		}
@@ -248,8 +249,8 @@ func TestFetchRejectsSchemeAndHost(t *testing.T) {
 		t.Errorf("transport reached %d times for rejected requests, want 0", reached)
 	}
 
-	if _, err := f.fetch(context.Background(), "https://cdn.example.com/"); err != nil {
-		t.Errorf("allowed subdomain error = %v, want nil", err)
+	if _, err := f.fetch(context.Background(), "https://example.com/"); err != nil {
+		t.Errorf("allowed host error = %v, want nil", err)
 	}
 	if reached != 1 {
 		t.Errorf("transport reached %d times for the allowed request, want 1", reached)

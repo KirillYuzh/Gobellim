@@ -1,8 +1,8 @@
 # Конфигурация
 
-Конфигурация приложения — один `kit.Config`, который передаётся в `kit.New`. Значения по умолчанию применяются при сборке `App`, если поле оставлено нулевым.
+Конфигурация приложения — один `gobellim.Config`, который передаётся в `gobellim.New`. Значения по умолчанию применяются при сборке `App`, если поле оставлено нулевым.
 
-## kit.Config
+## gobellim.Config
 
 | Поле       | Тип              | По умолчанию            | Назначение                                                                                                              |
 | ---------- | ---------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------- |
@@ -30,27 +30,22 @@
 | `TopK` | `int` | `10` (`DefaultTopK`) | Хитов поиска по умолчанию. |
 | `Logger` | `*slog.Logger` | `slog.Default()` | Логи; тексты сообщений в них не попадают. |
 | `AuditLog` | `*slog.Logger` | `nil` (выключен) | Структурный аудит операций: principal, tenant, действие, результат. Отдельно от логов. |
-| `TraceText` | `trace.TextPolicy` | `trace.TextMasked` | Политика текста трейсов: `masked` (по умолчанию) или `full` (opt-in). |
-| `Sampler` | `trace.Sampler` | `nil` (значит «всегда») | Решение о записи трейса по `trace_id`. |
-| `HideInput` | `bool` | `false` | Обнулять поле `input` во всех документах. |
-| `HideOutput` | `bool` | `false` | Обнулять поле `output` во всех документах. |
-| `Sinks` | `[]trace.Sink` | `nil` | Дополнительные приёмники документов (например, `trace.NewRecorder`). |
+| `TraceContent` | `trace.ContentMode` | `trace.ContentRedacted` | Что попадает в трейс: маскированный текст (по умолчанию), только метаданные или исходный текст (opt-in). |
+| `TracerProvider` | `trace.Provider` | `nil` (операции не трассируются) | Провайдер, создающий спаны; адаптер OpenTelemetry — `plugins/otel`. |
 | `MaxTotalTokens` | `int` | `0` (без лимита) | Бюджет токенов хода; при превышении — `ErrBudget`. |
 | `Egress` | `EgressPolicy` | нулевое (Rule of Two **включён**) | Правила эгресса инструментов (`AllowEgressAfterUntrusted`). |
 <!-- derived: BR-51 -->
 
-| `Approver` | `Approver` | `nil` | Кто решает по инструментам с `RequireApproval`; без него — `ErrApprovalRequired`. |
-| `BeforeToolCall` | `BeforeToolHook` | `nil` | App-level before-хук; хук инструмента заменяет его. |
-| `AfterToolCall` | `AfterToolHook` | `nil` | App-level after-хук; хук инструмента заменяет его. |
-| `Spotlight` | `kit.SpotlightMode` | `kit.SpotlightOn` | Помечать результаты инструментов как недоверенные данные (I-18). |
-| `RateLimit` | `kit.RateLimit` | нулевое (выключено) | Лимит операций на тенанта; исчерпание — `ErrRateLimited`. |
-| `ResponseCache` | `kit.ResponseCache` | нулевое (выключено) | LRU+TTL кэш ответов модели без tools. |
+| `Approver` | `Approver` | `nil` | Кто решает по инструментам с `Approve`; без него — `ErrApprovalRequired`. |
+| `Middleware` | `[]Middleware` | `nil` | App-level middleware: оборачивает каждый вызов инструмента перед авторизацией и политикой. |
+| `Spotlight` | `gobellim.SpotlightMode` | `gobellim.SpotlightOn` | Помечать результаты инструментов как недоверенные данные (I-18). |
+| `RateLimit` | `gobellim.RateLimit` | нулевое (выключено) | Лимит операций на тенанта; исчерпание — `ErrRateLimited`. |
+| `ResponseCache` | `gobellim.ResponseCache` | нулевое (выключено) | LRU+TTL кэш ответов модели без tools. |
 | `Reranker` | `rerank.Reranker` | `nil` | Реранкер для `SearchRequest.Rerank`. |
 | `RerankCandidates` | `int` | `0` → `TopK × DefaultRerankMultiplier` | Кандидатов брать до реранкинга. |
-| `ToolSearch` | `kit.ToolSearch` | нулевое (выключено) | Лексический отбор инструментов при большом каталоге. |
-| `TraceProcessors` | `[]func(*trace.Observation)` | `nil` | Обработчики наблюдений перед записью: правят или отбрасывают (`Name = ""`). |
+| `ToolSearch` | `gobellim.ToolSearch` | нулевое (выключено) | Лексический отбор инструментов при большом каталоге. |
 
-`DefaultMaxSteps`, `DefaultMaxCallsPerTool`, `DefaultToolTimeout`, `DefaultArgsMaxBytes` и `DefaultTopK` — константы пакета `kit`. `GuardMaxChars`, `GuardCacheSize`, `ChunkSize` и `ChunkOverlap` добираются конструкторами `guard.New` и `chunk.New` из констант `guard.*` и `chunk.*`.
+`DefaultMaxSteps`, `DefaultMaxCallsPerTool`, `DefaultToolTimeout`, `DefaultArgsMaxBytes` и `DefaultTopK` — константы пакета `gobellim`. `GuardMaxChars`, `GuardCacheSize`, `ChunkSize` и `ChunkOverlap` добираются конструкторами `guard.New` и `chunk.New` из констант `guard.*` и `chunk.*`.
 
 ### Лимит операций (`RateLimit`)
 
@@ -70,42 +65,35 @@ type RateLimit struct {
 к провайдеру, хранилищу и guard, поэтому отказ не стоит ни одного внешнего запроса. Ключ
 бакета — `Principal.Tenant`.
 
-> Производное от BR-86 (`docs/internals/business-rules.md`).
-
 ### Слои guard: L1 в сборке по умолчанию, L2 — плагин
 
 Детерминированный **L1** (фразы, regex, `Canonicalize`, `DecodedVariants`) работает
-всегда. **L2** — ML-слой (`Config.GuardL2`) — обязателен: `kit.New` возвращает
+всегда.
+
+<!-- derived: BR-26 --> **L2** — ML-слой (`Config.GuardL2`) — обязателен: `gobellim.New` возвращает
+
 `ErrInvalidConfig` при `nil` (D80, BR-109). Поставляемый ML-детектор — `guard/gliner`
 (сборка с `-tags ort`); для намеренно L1-only развёртывания передают `guard.L1Only()`.
-Плагины `guard-remote`, `store-es` и `trace-otel` не реализованы — существуют только
-контракты (`kittest.DetectorContract`, `kittest.SinkContract`). Состав слоёв отдают
-`Health.GuardLayers` и `Health.GuardL1Only`.
+Плагин `guard-remote` не реализован — существует только контракт
+`kittest.DetectorContract`. Состав слоёв отдают `Health.GuardLayers` и
+`Health.GuardL1Only`.
 
-> Производное от BR-27 и BR-109 (`docs/internals/business-rules.md`) и I-13.
+### Политика содержимого трейса
 
-### Политика текста трейса
+`TraceContent` — явная политика (`trace.ContentMode`):
 
-`TraceText` — явная политика (`trace.TextPolicy`):
+| Значение                | Что попадает в трейс                                                          |
+| ----------------------- | ----------------------------------------------------------------------------- |
+| `trace.ContentRedacted` | Только текст, прошедший guard (по умолчанию, I-07).                           |
+| `trace.ContentNone`     | Только метаданные: ни входа, ни выхода, ни содержимого инструментов.          |
+| `trace.ContentFull`     | Необработанный текст; требует явного opt-in и печатает `slog.Warn` при `New`. |
 
-| Значение           | Что попадает в ES                                                             |
-| ------------------ | ----------------------------------------------------------------------------- |
-| `trace.TextMasked` | Только текст, прошедший guard (по умолчанию, I-07).                           |
-| `trace.TextFull`   | Необработанный текст; требует явного opt-in и печатает `slog.Warn` при `New`. |
+Политика выбирает, _что_ записывать, а не маскирует сама: маскирование делает guard,
+и в трейс попадает уже замаскированный текст. В режиме `ContentFull` записывается
+исходный текст. Значение вне перечисленных — `ErrInvalidConfig`.
 
-### Sampling
-
-`Sampler` — функция `func(traceID string) bool`. Готовые значения и парсинг:
-
-| Значение                                   | Смысл                                       |
-| ------------------------------------------ | ------------------------------------------- |
-| `trace.SamplerAlways`                      | Писать все трейсы (по умолчанию при `nil`). |
-| `trace.SamplerNever`                       | Не писать ничего.                           |
-| `trace.SamplerRatio(p)`                    | Детерминированная доля `p` по `trace_id`.   |
-| `"always"` / `"never"` / `"ratio:<float>"` | Синтаксис `trace.SamplerFromString`.        |
-
-Решение детерминировано по `trace_id`, поэтому одинаково во всех процессах и
-перезапусках, а trace и его observations сэмплируются вместе (D24, BR-54).
+Сэмплирование — не задача библиотеки. Библиотека создаёт спаны, а экспортёр,
+батчинг и сэмплер — забота OpenTelemetry SDK, который настраивает приложение.
 
 Слой L2 (`GuardL2`) конструируется отдельно — `gliner.New(gliner.Config{...})` в ORT-сборке. `Dir` по умолчанию берётся из `KIT_MODELS_DIR`, затем `./models`; `Model` — `hivetrace__gliner-guard-omni`; `Sessions` — 2, `Wait` — 2 с, `MaxTokens` — `DefaultMaxTokens` = 512 (кламп до `max_sequence_length` модели). Метки, пороги, `prefix_ids`, позиции маркеров и `category_map` детектор читает из `<dir>/<model>/config.json`, а не из Go-конфига.
 
@@ -118,13 +106,13 @@ type RateLimit struct {
 | `KIT_MODELS_DIR` | `./models`                                  | Каталог моделей: `<dir>/<org>__<name>/` (guard L2 и эмбеддер).     |
 | `KIT_ORT_LIB`    | `.ort/lib/libonnxruntime.dylib` (или `.so`) | Путь к разделяемой библиотеке ONNX Runtime; читается в ORT-сборке. |
 
-Переменные примера `demo` (не библиотеки):
+Переменные примера `lite-demo` (не библиотеки):
 
 | Переменная             | По умолчанию                                                                | Назначение                         |
 | ---------------------- | --------------------------------------------------------------------------- | ---------------------------------- |
 | `KIT_ADDR`             | `:8080`                                                                     | Адрес HTTP-сервера.                |
 | `KIT_ES_URL`           | `http://localhost:9200`                                                     | URL Elasticsearch.                 |
-| `KIT_POLICY`           | `demo/policy.yaml`                                                          | Путь к `policy.yaml`.              |
+| `KIT_POLICY`           | `lite-demo/policy.yaml`                                                     | Путь к `policy.yaml`.              |
 | `WEATHER_BASE_URL`     | `https://wttr.in`                                                           | Keyless-провайдер погоды.          |
 | `GIGACHAT_CREDENTIALS` | — (обязательно)                                                             | base64 от `clientID:clientSecret`. |
 | `GIGACHAT_MODEL`       | `GigaChat-2`                                                                | Имя модели.                        |
@@ -136,35 +124,35 @@ type RateLimit struct {
 
 ## Лимиты и значения по умолчанию
 
-| Ключ                                                             | Значение                                                                                             | Где применяется        |
-| ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------- |
-| `ort.sessions_per_model`                                         | `2`                                                                                                  | пулы ORT guard/embed   |
-| `ort.intra_op_threads`                                           | `NumCPU / (число сессий всех пулов)`, минимум `1`                                                    | ORT-сессии             |
-| `ort.queue_wait`                                                 | `2s`                                                                                                 | ожидание сессии ORT    |
-| `ort.quantization`                                               | `fp32`                                                                                               | модели guard/embed     |
-| `guard.max_chars`                                                | `8000`                                                                                               | `guard.Pipeline`       |
-| `guard.mode`                                                     | `strict` (по умолчанию) или `degraded`                                                               | `guard.Pipeline`       |
-| `guard.fail_closed`                                              | `true` в `strict`; в `degraded` падение ML-слоя не фатально                                          | `guard.Pipeline`       |
-| `guard.verdict_cache`                                            | LRU на `4096`                                                                                        | `guard.Pipeline`       |
-| `guard.l2.dir`                                                   | `KIT_MODELS_DIR` или `./models`                                                                      | `gliner.Config.Dir`    |
-| `guard.l2.model`                                                 | `hivetrace__gliner-guard-omni`                                                                       | `gliner.Config.Model`  |
-| `guard.l2.sessions`                                              | `2` (`gliner.DefaultSessions`)                                                                       | пул ORT L2             |
-| `guard.l2.wait`                                                  | `2s` (`ort.DefaultWait`)                                                                             | ожидание сессии L2     |
-| `guard.l2.max_tokens` (`gliner.Config.MaxTokens`)                | `512` (`gliner.DefaultMaxTokens`), кламп до `max_sequence_length` модели (= 2048)                    | окно токенов L2        |
-| `guard.l2.thresholds`                                            | из `<model>/config.json` (`0.4` на метку, общий `0.5`)                                               | декодирование спанов   |
-| `chat.max_steps`                                                 | `8`                                                                                                  | `App.Chat`             |
-| `chat.max_calls_per_tool`                                        | `3`                                                                                                  | исполнение инструмента |
-| `chat.max_total_tokens` (`MaxTotalTokens`)                       | `0` (без лимита) → `ErrBudget`                                                                       | бюджет хода            |
-| `pricing.input_per_mtok` / `pricing.output_per_mtok` (`Pricing`) | `0` (стоимость не считается)                                                                         | `kit.Config.Pricing`   |
-| `memory.limit` (`MemoryLimit`)                                   | `20` (`DefaultMemoryLimit`)                                                                          | `App.Chat`             |
-| `memory.recall` (`MemoryRecall`)                                 | `0` (выключено; нужен `Embedder`)                                                                    | `App.Chat`             |
-| `chat.spotlight` (`Spotlight`)                                   | `on` (`SpotlightOn`, по умолчанию) / `off` (`SpotlightOff`)                                          | `App.Chat`             |
-| `rate_limit.per_second` / `rate_limit.burst` (`RateLimit`)       | `0` / `0` — лимит выключен; `PerSecond > 0` — token bucket на тенанта; отказ `ErrRateLimited` до I/O | все операции фасада    |
+| Ключ                                                             | Значение                                                                                             | Где применяется           |
+| ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------- |
+| `ort.sessions_per_model`                                         | `2`                                                                                                  | пулы ORT guard/embed      |
+| `ort.intra_op_threads`                                           | `NumCPU / (число сессий всех пулов)`, минимум `1`                                                    | ORT-сессии                |
+| `ort.queue_wait`                                                 | `2s`                                                                                                 | ожидание сессии ORT       |
+| `ort.quantization`                                               | `fp32`                                                                                               | модели guard/embed        |
+| `guard.max_chars`                                                | `8000`                                                                                               | `guard.Pipeline`          |
+| `guard.mode`                                                     | `strict` (по умолчанию) или `degraded`                                                               | `guard.Pipeline`          |
+| `guard.fail_closed`                                              | `true` в `strict`; в `degraded` падение ML-слоя не фатально                                          | `guard.Pipeline`          |
+| `guard.verdict_cache`                                            | LRU на `4096`                                                                                        | `guard.Pipeline`          |
+| `guard.l2.dir`                                                   | `KIT_MODELS_DIR` или `./models`                                                                      | `gliner.Config.Dir`       |
+| `guard.l2.model`                                                 | `hivetrace__gliner-guard-omni`                                                                       | `gliner.Config.Model`     |
+| `guard.l2.sessions`                                              | `2` (`gliner.DefaultSessions`)                                                                       | пул ORT L2                |
+| `guard.l2.wait`                                                  | `2s` (`ort.DefaultWait`)                                                                             | ожидание сессии L2        |
+| `guard.l2.max_tokens` (`gliner.Config.MaxTokens`)                | `512` (`gliner.DefaultMaxTokens`), кламп до `max_sequence_length` модели (= 2048)                    | окно токенов L2           |
+| `guard.l2.thresholds`                                            | из `<model>/config.json` (`0.4` на метку, общий `0.5`)                                               | декодирование спанов      |
+| `chat.max_steps`                                                 | `8`                                                                                                  | `App.Chat`                |
+| `chat.max_calls_per_tool`                                        | `3`                                                                                                  | исполнение инструмента    |
+| `chat.max_total_tokens` (`MaxTotalTokens`)                       | `0` (без лимита) → `ErrBudget`                                                                       | бюджет хода               |
+| `pricing.input_per_mtok` / `pricing.output_per_mtok` (`Pricing`) | `0` (стоимость не считается)                                                                         | `gobellim.Config.Pricing` |
+| `memory.limit` (`MemoryLimit`)                                   | `20` (`DefaultMemoryLimit`)                                                                          | `App.Chat`                |
+| `memory.recall` (`MemoryRecall`)                                 | `0` (выключено; нужен `Embedder`)                                                                    | `App.Chat`                |
+| `chat.spotlight` (`Spotlight`)                                   | `on` (`SpotlightOn`, по умолчанию) / `off` (`SpotlightOff`)                                          | `App.Chat`                |
+| `rate_limit.per_second` / `rate_limit.burst` (`RateLimit`)       | `0` / `0` — лимит выключен; `PerSecond > 0` — token bucket на тенанта; отказ `ErrRateLimited` до I/O | все операции фасада       |
 
 <!-- derived: BR-86 -->
 
 | `response_cache.size` / `response_cache.ttl` (`ResponseCache`) | `0` / `0` (кэш выключен); кэшируются только ответы без tools | `App.Chat` |
-| `stream.window` / `stream.holdback` | `400` / `96` рун (константы пакета `kit`) | `App.ChatStream` |
+| `stream.window` / `stream.holdback` | `400` / `96` рун (константы пакета `gobellim`) | `App.ChatStream` |
 | `search.rerank` (`Reranker`, `SearchRequest.Rerank`) | выключено; при `Rerank=true` без `Reranker` — `ErrInvalidConfig` | `App.Search` |
 | `search.rerank_candidates` (`RerankCandidates`) | `TopK × 4` (`DefaultRerankMultiplier`) | `App.Search` |
 | `tools.search` (`ToolSearch`) | выключено; `Threshold` — 20, `TopK` — 8 | выбор инструментов |
@@ -188,22 +176,11 @@ type RateLimit struct {
 | `search.max_top_k` / `search.max_num_candidates` | `1000` / `10000` | клампы kNN |
 | `authz.policy` | `policy.yaml`, режим `KnownFields(true)` | `authz` |
 | `es.version` | `≥ 8.14`, basic-лицензия | Elasticsearch |
-| `trace.text` (`TraceText`) | `masked` (по умолчанию) / `full` (opt-in) | trace-писатель |
-| `trace.sampler` (`Sampler`) | `always` (при `nil`) | trace-писатель |
-| `trace.max_string_length` | `131072` (`trace.DefaultMaxStringLength`) | export-фильтр |
-| `trace.max_depth` | `8` (`trace.DefaultMaxDepth`) | export-фильтр |
-| `trace.max_array_length` | `50` (`trace.DefaultMaxArrayLength`) | export-фильтр |
-| `trace.max_object_keys` | `50` (`trace.DefaultMaxObjectKeys`) | export-фильтр |
-| `trace.queue` | `4096` (`trace.DefaultQueueSize`) | trace-писатель |
-| `trace.batch` | `500` (`trace.DefaultBatchSize`), или `2s` (`DefaultFlushInterval`), или `5 MB` (`DefaultMaxBatchBytes`) | trace-писатель |
-| `trace.retries` | `3` (`trace.DefaultMaxRetries`), backoff `200ms` (`DefaultRetryBackoff`) | trace-писатель |
-| `trace.ilm` | `30` дней (`store.DefaultILMDays`) | ILM-политика |
+| `trace.content` (`TraceContent`) | `redacted` (по умолчанию) / `none` / `full` (opt-in) | трейс операции |
 
 ## Смотрите также
 
-- [Справочник kit](./kit.md) — `kit.New` и жизненный цикл
+- [Справочник gobellim](./gobellim.md) — `gobellim.New` и жизненный цикл
 - [Провайдеры](./providers.md) — конфиги `model` и `embed`
-- [Производительность](../guides/performance.md) — латентность, память и ручки
-- [Деплой](../guides/deployment.md) — режимы сборки, гейты и откат
-- [Устройство](../internals/architecture.md) — рантайм, ORT и сборка
-- [Бизнес-правила](../internals/business-rules.md) — источники лимитов `BR-xx`
+- [Установка и сборка](../installation.md) — требования и переменные окружения
+- [Защита](../guard/README.md) — слои L1/L2 и рельсы

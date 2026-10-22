@@ -10,9 +10,9 @@ import (
 	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
-// EnsureStepTimeout bounds each individual schema-creation request made by
+// ensureStepTimeout bounds each individual schema-creation request made by
 // EnsureSchema.
-var EnsureStepTimeout = 30 * time.Second
+const ensureStepTimeout = 30 * time.Second
 
 type step struct {
 	method      string
@@ -30,12 +30,29 @@ func EnsureSchema(ctx context.Context, es ES, dims int) error {
 		return err
 	}
 
+	memMsgBody, err := MemoryMessagesIndexBody(dims)
+	if err != nil {
+		return err
+	}
+	memWorkBody, err := MemoryWorkingIndexBody()
+	if err != nil {
+		return err
+	}
+	tracesTemplate, err := TracesTemplateBody()
+	if err != nil {
+		return err
+	}
+	observationsTemplate, err := ObservationsTemplateBody()
+	if err != nil {
+		return err
+	}
+
 	steps := []step{
 		{http.MethodPut, "/_ilm/policy/" + ILMPolicyName, "application/json", ilm},
-		{http.MethodPut, "/_index_template/" + TraceTemplateName, "application/json", TracesTemplateBody()},
-		{http.MethodPut, "/_index_template/" + ObservationTemplateName, "application/json", ObservationsTemplateBody()},
-		{http.MethodPut, "/" + IndexMemoryMessages, "application/json", MemoryMessagesIndexBody(dims)},
-		{http.MethodPut, "/" + IndexMemoryWorking, "application/json", MemoryWorkingIndexBody()},
+		{http.MethodPut, "/_index_template/" + TraceTemplateName, "application/json", tracesTemplate},
+		{http.MethodPut, "/_index_template/" + ObservationTemplateName, "application/json", observationsTemplate},
+		{http.MethodPut, "/" + IndexMemoryMessages, "application/json", memMsgBody},
+		{http.MethodPut, "/" + IndexMemoryWorking, "application/json", memWorkBody},
 	}
 	if dims > 0 {
 		chunks, err := ChunksIndexBody(dims)
@@ -46,7 +63,7 @@ func EnsureSchema(ctx context.Context, es ES, dims int) error {
 	}
 	for _, s := range steps {
 		req := RawRequest(s.method, s.path, s.body, s.contentType)
-		stepCtx, cancel := context.WithTimeout(ctx, EnsureStepTimeout)
+		stepCtx, cancel := context.WithTimeout(ctx, ensureStepTimeout)
 		status, body, err := es.Do(stepCtx, req)
 		cancel()
 		if err != nil {
@@ -68,13 +85,4 @@ func alreadyExists(body []byte) bool {
 	s := string(body)
 	return strings.Contains(s, "resource_already_exists_exception") ||
 		strings.Contains(s, "already_exists_exception")
-}
-
-// Snippet returns the first 200 bytes of b for a bounded error excerpt.
-func Snippet(b []byte) string {
-	const n = 200
-	if len(b) > n {
-		b = b[:n]
-	}
-	return string(b)
 }

@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"strings"
 
-	kit "github.com/KirillYuzh/Gobellim"
+	"github.com/KirillYuzh/Gobellim"
 	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
@@ -32,7 +32,7 @@ type ServerTool struct {
 
 // FromTool adapts a kit tool for the server; calls go through app.CallTool so
 // authorization, guard, egress and tracing still apply.
-func FromTool(app *kit.App, def *kit.ToolDef) ServerTool {
+func FromTool(app *gobellim.App, def gobellim.ToolDef) ServerTool {
 	return ServerTool{
 		Name:        def.Name(),
 		Description: def.Description(),
@@ -93,6 +93,10 @@ func (s *Server) Name() string { return s.cfg.Name }
 
 // ServeStdio reads one JSON-RPC message per line from in and writes each
 // response line to out until the input ends or ctx is cancelled.
+//
+// Messages are handled one at a time: a slow tool blocks the next message.
+// That suits the stdio transport, where the client waits for one response
+// before it sends the next request.
 func (s *Server) ServeStdio(ctx context.Context, in io.Reader, out io.Writer) error {
 	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 0, 64*1024), maxMessageBytes)
