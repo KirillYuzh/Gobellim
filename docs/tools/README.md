@@ -1,4 +1,4 @@
-# Инструменты
+# Обзор
 
 Инструмент — типизированная Go-функция `func(ctx context.Context, in In) (Out, error)`,
 которую модель может вызвать. Объявление чистое: оно не трогает `App`, а ошибки
@@ -128,6 +128,10 @@ gobellim.RawTool("remote_tool", schema, func(ctx context.Context, args json.RawM
 
 Некритичная ошибка внутри инструмента возвращается модели как результат, а не
 роняет ход.
+
+## Устройство
+
+Как это устроено → [implementation.md](./implementation.md)
 
 ## Смотрите также
 

@@ -1,4 +1,6 @@
-# Поиск и индексация (retrieval)
+# Обзор
+
+Поиск и индексация (retrieval)
 
 `Ingest` режет документ на чанки, считает векторы и пишет их в Elasticsearch.
 `Search` выполняет BM25 и kNN с фильтром по ACL принципала, получает результаты через RRF и склеивает в итоговый список.
@@ -38,3 +40,5 @@ hits, err := app.Search(ctx, gobellim.SearchRequest{
 - [Быстрый старт](../overview.md)
 - [Защита](../guard/README.md) — query проходит через guard перед эмбеддером
 - [Справочник API](../reference/gobellim.md) — `gobellim.Doc`, `gobellim.SearchRequest`, `gobellim.SearchHit`
+
+Как это устроено → [implementation.md](./implementation.md)

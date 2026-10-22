@@ -1,4 +1,6 @@
-# Провайдеры моделей (providers)
+# Обзор
+
+Провайдеры моделей (providers)
 
 Провайдеры моделей реализуют интерфейс `model.Client` и используются в
 `gobellim.Config.LLM`. gobellim не поставляет собственных клиентов — вы приносите свой.
@@ -26,6 +28,10 @@ app, err := gobellim.New(ctx, gobellim.Config{
 	// ...
 })
 ```
+
+## Устройство
+
+Как это устроено → [implementation.md](./implementation.md)
 
 ## Смотрите также
 

@@ -26,6 +26,7 @@ go get github.com/KirillYuzh/Gobellim
 | [Провайдеры моделей](./providers/README.md)        | OpenAI-совместимые, Ollama, vLLM, GigaChat, эмбеддеры                       |
 | [Память](./memory/README.md)                       | рабочая память, история, recall                                             |
 | [MCP](./mcp/README.md)                             | MCP-клиент, регистрация инструментов                                        |
+| [Плагины](./plugins/README.md)                     | ONNX-детектор, эмбеддинги, Elasticsearch, гибридный поиск                   |
 | [Справочник API](./reference/gobellim.md)          | фасад gobellim, провайдеры, `policy.yaml`, индексы ES, ошибки, конфигурация |
 | [Установка](./installation.md)                     | требования, сборка, переменные окружения                                    |
 

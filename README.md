@@ -2,7 +2,7 @@
 
 **[English](README.md) · [Русский](README.ru.md)**
 
-![Go](https://img.shields.io/badge/Go-1.24-00ADD8?logo=go&logoColor=white)
+![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ![Gobellim](./site/public/gobellim-compact-white.svg)
@@ -14,24 +14,60 @@ guardrails behind one permission-checked call path.
 
 ## See it in 60 seconds
 
-The [lite-demo](./lite-demo) is a small service on a Clean Architecture
-skeleton: a principal, a policy, the guard, traces and tools, all behind one
-call path. The first run pulls the images and the model; after that the stack
-starts in about a minute.
+The [lite-demo](./lite-demo) is a small service with its own tool engine,
+workflow and GigaChat client. It shows a principal, a policy file, two tools
+(`link` and `research`) and a deterministic research workflow. The first run
+pulls the images; the service calls GigaChat over HTTPS with the key from
+`lite-demo/.env`.
 
 ```sh
 cd lite-demo
 docker compose up -d --build
 ```
 
-The service listens on `:8080`. The trace endpoints need a token
-(`TRACE_TOKEN=demo` in the compose file):
+The service listens on `:8080`, the mock service on `:8081`.
+
+### Requests for every scenario
 
 ```sh
-curl -H 'Authorization: Bearer demo' http://localhost:8080/v1/traces
+# health
+curl -s http://localhost:8080/healthz
+
+# chat with the link tool (role user)
+curl -s http://localhost:8080/v1/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user": {"id": "u-1", "tenant": "acme", "roles": ["user"]},
+    "messages": [{"role": "user", "content": "Добавь ссылку на документацию по Go."}]
+  }'
+
+# research, branch a (role support)
+curl -s http://localhost:8080/v1/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user": {"id": "u-1", "tenant": "acme", "roles": ["support"]},
+    "messages": [{"role": "user", "content": "Сделай research по go modules."}]
+  }'
+
+# research, branch b: status need_input (second research call)
+# research, branch other: safe error text (third research call)
+# mockd answers a, b, other in a circle, so repeat the same request
+
+# forbidden: the guest role has no chat permission
+curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/v1/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user": {"id": "u-2", "tenant": "acme", "roles": ["guest"]},
+    "messages": [{"role": "user", "content": "hi"}]
+  }'
+
+# bad request: unknown field
+curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/v1/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"user": {"id": "u-1", "tenant": "acme", "roles": ["user"]}, "messages": [], "extra": 1}'
 ```
 
-The endpoints and a ready-made `curl` are in
+The full endpoint list, statuses and error codes are in
 [lite-demo/README.md](./lite-demo/README.md).
 
 Retrieval, typed output, guardrails and traces are the same call path the
@@ -155,23 +191,20 @@ Start at [docs/README.md](./docs/README.md).
 ## Quickstart
 
 ```go
+tools, err := gobellim.NewRegistry().Register(
+	gobellim.Tool("get_weather", getWeather, gobellim.Desc("Current weather for a city.")),
+).Build()
+if err != nil {
+	return err
+}
+
 app, err := gobellim.New(ctx, gobellim.Config{
 	ES:      es,     // optional: your store.ES client (retrieval, memory, traces)
 	LLM:     llm,    // vLLM, Ollama, OpenAI-compatible or GigaChat
 	Policy:  policy, // authz.Load("policy.yaml")
 	GuardL2: guard.L1Only(), // evaluation path; production: guard/gliner (-tags ort)
+	Tools:   tools,
 })
-if err != nil {
-	return err
-}
-if err := app.Setup(ctx); err != nil { // creates the indexes once; a no-op without ES
-	return err
-}
-
-// A tool is a typed Go function: its schema and validation come from the type.
-if _, err := gobellim.Tool(app, "get_weather", getWeather, gobellim.Desc("Current weather for a city.")); err != nil {
-	return err
-}
 
 // Every call carries the caller's identity.
 ctx = gobellim.WithPrincipal(ctx, gobellim.Principal{UserID: "u-1", Roles: []string{"user"}, Tenant: "acme"})

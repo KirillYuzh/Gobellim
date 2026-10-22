@@ -1,4 +1,6 @@
-# MCP (Model Context Protocol)
+# Обзор
+
+MCP (Model Context Protocol)
 
 `mcp` — клиент Model Context Protocol (stdio и streamable HTTP). `Register`
 экспонирует инструменты как `mcp:<server>:<tool>`.
@@ -9,6 +11,10 @@ Allowlist egress выводится из адреса endpoint'а (`gobellim.Egr
 передать политику сам (`gobellim.Egress("example.com")`); дефолта, открывающего
 egress на любой хост, нет. Свои опции можно передать в `Register`, они
 применяются после дефолта и могут сузить allowlist или потребовать подтверждения.
+
+## Устройство
+
+Как это устроено → [implementation.md](./implementation.md)
 
 ## Смотрите также
 

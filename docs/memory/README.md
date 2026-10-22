@@ -1,4 +1,6 @@
-# Память (memory)
+# Обзор
+
+Память (memory)
 
 gobellim поддерживает три вида памяти: историю диалога, рабочую память и recall.
 
@@ -22,3 +24,5 @@ kNN поиск по сообщениям потока с вектором зап
 
 - [Быстрый старт](../overview.md)
 - [Справочник API](../reference/gobellim.md) — `gobellim.MemoryLoad`, `gobellim.MemoryAppend`, `gobellim.MemoryRecall`, `gobellim.MemoryWorking`, `gobellim.MemorySetWorking`
+
+Как это устроено → [implementation.md](./implementation.md)
