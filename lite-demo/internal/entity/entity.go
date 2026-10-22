@@ -43,13 +43,6 @@ type ChatRequest struct {
 	Messages []Message `json:"messages"`
 }
 
-// FollowupRequest — второй шаг сценария B.
-type FollowupRequest struct {
-	User  User   `json:"user"`
-	Query string `json:"query"`
-	Input string `json:"input"`
-}
-
 // ChatResponse — ответ сервиса. Status: ok, need_input, max_steps или budget.
 type ChatResponse struct {
 	Status    string     `json:"status"`

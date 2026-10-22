@@ -1,4 +1,4 @@
-// Package usecase — бизнес-сценарии демо: чат, followup и health.
+// Package usecase — бизнес-сценарии демо: чат и health.
 package usecase
 
 import (
@@ -13,11 +13,10 @@ import (
 	"some-project/internal/tools"
 )
 
-// Mock — второй сервис, к которому ходят инструменты.
+// Mock — второй сервис, к которому ходят шаги сценария.
 type Mock interface {
 	KB(ctx context.Context, query string) ([]entity.Chunk, error)
 	Lookup(ctx context.Context, query string) (repository.Lookup, error)
-	Followup(ctx context.Context, query, input string) (repository.Followup, error)
 }
 
 // Deps — зависимости сценариев.
@@ -45,16 +44,8 @@ func New(d Deps) (*UseCase, error) {
 	set, err := tools.NewRegistry().Register(
 		tools.New("link", link,
 			tools.Desc("Добавить заготовленную mock-ссылку в конец ответа."), tools.Read()),
-		tools.New("kb_search", u.kbSearch,
-			tools.Desc("Поиск по mock-базе знаний о Go. Возвращает чанки со score."), tools.Read()),
-		tools.New("remote_lookup", u.remoteLookup,
-			tools.Desc("Запрос к mock-сервису. Возвращает код a, b или other."), tools.Egress()),
-		tools.New("remote_followup", u.remoteFollowup,
-			tools.Desc("Второй запрос к mock-сервису с уточнением пользователя."),
-			tools.Egress(), tools.Perm("tool:remote_lookup")),
 		tools.New("research", u.research,
-			tools.Desc("Сценарий: база знаний, затем mock-upstream, затем ветка по коду ответа."),
-			tools.Egress()),
+			tools.Desc("База знаний, затем mock-upstream и ветка по коду ответа."), tools.Egress()),
 	).Build()
 	if err != nil {
 		return nil, err
@@ -76,20 +67,4 @@ func New(d Deps) (*UseCase, error) {
 // Chat — один ход диалога.
 func (u *UseCase) Chat(ctx context.Context, req entity.ChatRequest) (entity.ChatResponse, error) {
 	return u.agent.Chat(ctx, req.User, req.Messages)
-}
-
-// Followup — один запрос к стороннему сервису через тот же инструмент, что
-// вызывает модель.
-func (u *UseCase) Followup(ctx context.Context, req entity.FollowupRequest) (entity.ChatResponse, error) {
-	res, err := u.agent.CallTool(ctx, req.User, "remote_followup", map[string]any{
-		"query": req.Query,
-		"input": req.Input,
-	})
-	if err != nil {
-		return entity.ChatResponse{}, err
-	}
-	if res.Error != "" {
-		return entity.ChatResponse{}, fmt.Errorf("followup: %s: %w", res.Error, entity.ErrUpstream)
-	}
-	return entity.ChatResponse{Status: "ok", Answer: res.Body}, nil
 }

@@ -49,7 +49,6 @@ func routes() http.Handler {
 	})
 	mux.HandleFunc("POST /kb/search", handleKB)
 	mux.HandleFunc("POST /upstream/lookup", handleLookup)
-	mux.HandleFunc("POST /upstream/followup", handleFollowup)
 	return mux
 }
 
@@ -94,27 +93,6 @@ func handleLookup(w http.ResponseWriter, r *http.Request) {
 		out["error"] = "upstream returned an unknown code (mock)"
 	}
 	writeJSON(w, http.StatusOK, out)
-}
-
-func handleFollowup(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Query string `json:"query"`
-		Input string `json:"input"`
-	}
-	if !decode(w, r, &req) {
-		return
-	}
-	if req.Input == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "input is required"})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"code":  "b",
-		"query": req.Query,
-		"input": req.Input,
-		"body":  "B: mock-факт для «" + req.Input + "»: `go test ./...` запускает тесты (mock).",
-		"mock":  true,
-	})
 }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {

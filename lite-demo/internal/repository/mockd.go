@@ -34,13 +34,6 @@ type Lookup struct {
 	Error    string `json:"error"`
 }
 
-// Followup — ответ upstream/followup.
-type Followup struct {
-	Code  string `json:"code"`
-	Body  string `json:"body"`
-	Error string `json:"error"`
-}
-
 // KB возвращает чанки mock-базы знаний.
 func (c *Mockd) KB(ctx context.Context, query string) ([]entity.Chunk, error) {
 	var out struct {
@@ -57,15 +50,6 @@ func (c *Mockd) Lookup(ctx context.Context, query string) (Lookup, error) {
 	var out Lookup
 	if err := c.post(ctx, "/upstream/lookup", map[string]any{"query": query}, &out); err != nil {
 		return Lookup{}, err
-	}
-	return out, nil
-}
-
-// Followup вызывает upstream/followup.
-func (c *Mockd) Followup(ctx context.Context, query, input string) (Followup, error) {
-	var out Followup
-	if err := c.post(ctx, "/upstream/followup", map[string]any{"query": query, "input": input}, &out); err != nil {
-		return Followup{}, err
 	}
 	return out, nil
 }

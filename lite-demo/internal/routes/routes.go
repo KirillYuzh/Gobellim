@@ -14,7 +14,6 @@ func New(c *controller.Controller) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", c.Health)
 	mux.HandleFunc("POST /v1/chat", c.Chat)
-	mux.HandleFunc("POST /v1/followup", c.Followup)
 	return recoverer(mux)
 }
 

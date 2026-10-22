@@ -70,31 +70,22 @@ func (a *Agent) Chat(ctx context.Context, user entity.User, in []entity.Message)
 	return s.chat(ctx, in)
 }
 
-// CallTool вызывает инструмент напрямую, без модели.
-func (a *Agent) CallTool(ctx context.Context, user entity.User, name string, args map[string]any) (entity.Result, error) {
-	s, err := a.session(user)
-	if err != nil {
-		return entity.Result{}, err
-	}
-	return s.CallTool(ctx, name, args)
-}
-
-func (a *Agent) session(user entity.User) (*Session, error) {
+func (a *Agent) session(user entity.User) (*session, error) {
 	if err := user.Validate(); err != nil {
 		return nil, err
 	}
-	return &Session{a: a, user: user}, nil
+	return &session{a: a, user: user}, nil
 }
 
-// Session — один запрос: principal и общий бюджет вызовов.
-type Session struct {
+// session — один запрос: principal и общий бюджет вызовов.
+type session struct {
 	a     *Agent
 	user  entity.User
 	calls int
 }
 
 // chat — цикл «модель → инструменты → модель» с ограничением шагов.
-func (s *Session) chat(ctx context.Context, in []entity.Message) (entity.ChatResponse, error) {
+func (s *session) chat(ctx context.Context, in []entity.Message) (entity.ChatResponse, error) {
 	if err := s.authorize("chat"); err != nil {
 		return entity.ChatResponse{}, err
 	}
@@ -161,13 +152,7 @@ func (s *Session) chat(ctx context.Context, in []entity.Message) (entity.ChatRes
 	return entity.ChatResponse{Status: "max_steps", Answer: last, ToolCalls: calls}, nil
 }
 
-// CallTool — единственный путь к инструменту: право, бюджет, размер и схема
-// аргументов, затем типизированный обработчик.
-func (s *Session) CallTool(ctx context.Context, name string, args map[string]any) (entity.Result, error) {
-	return s.call(ctx, entity.ToolCall{Name: name, Args: args})
-}
-
-func (s *Session) call(ctx context.Context, tc entity.ToolCall) (entity.Result, error) {
+func (s *session) call(ctx context.Context, tc entity.ToolCall) (entity.Result, error) {
 	def := s.a.tools.Get(tc.Name)
 	if def == nil {
 		return entity.Result{}, entity.ErrNotFound
@@ -193,7 +178,7 @@ func (s *Session) call(ctx context.Context, tc entity.ToolCall) (entity.Result, 
 	}
 
 	s.a.log.Info("tool", "name", def.Name(), "effect", def.Effect().String(), "user", s.user.ID)
-	out, err := def.Invoke(withSession(ctx, s), raw)
+	out, err := def.Invoke(ctx, raw)
 	if err != nil {
 		return entity.Result{}, err
 	}
@@ -204,7 +189,7 @@ func (s *Session) call(ctx context.Context, tc entity.ToolCall) (entity.Result, 
 	return res, nil
 }
 
-func (s *Session) prepare(in []entity.Message) ([]entity.Message, error) {
+func (s *session) prepare(in []entity.Message) ([]entity.Message, error) {
 	if len(in) == 0 || len(in) > s.a.budget.MaxMessages {
 		return nil, fmt.Errorf("message count must be in [1, %d]: %w", s.a.budget.MaxMessages, entity.ErrInvalid)
 	}
@@ -227,7 +212,7 @@ func (s *Session) prepare(in []entity.Message) ([]entity.Message, error) {
 	return out, nil
 }
 
-func (s *Session) specs() []entity.ToolSpec {
+func (s *session) specs() []entity.ToolSpec {
 	out := make([]entity.ToolSpec, 0, s.a.tools.Len())
 	for _, def := range s.a.tools.All() {
 		if !s.a.policy.Allows(s.user, def.Permission()) {
@@ -243,25 +228,11 @@ func (s *Session) specs() []entity.ToolSpec {
 	return out
 }
 
-func (s *Session) authorize(permission string) error {
+func (s *session) authorize(permission string) error {
 	if s.a.policy.Allows(s.user, permission) {
 		return nil
 	}
 	return fmt.Errorf("%s: %w", permission, entity.ErrUnauthorized)
-}
-
-type sessionKey struct{}
-
-// withSession кладёт сессию в контекст: так инструмент вызывает другой
-// инструмент через те же права и тот же бюджет.
-func withSession(ctx context.Context, s *Session) context.Context {
-	return context.WithValue(ctx, sessionKey{}, s)
-}
-
-// SessionFrom достаёт сессию из контекста. Вне вызова инструмента вернёт nil.
-func SessionFrom(ctx context.Context) *Session {
-	s, _ := ctx.Value(sessionKey{}).(*Session)
-	return s
 }
 
 func systemPrompt(specs []entity.ToolSpec) string {

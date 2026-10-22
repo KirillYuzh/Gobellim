@@ -13,29 +13,26 @@ workflow.
 
 Модель отвечает на вопрос и может вызвать инструмент:
 
-| Инструмент        | Право                | Что делает                                         |
-| ----------------- | -------------------- | -------------------------------------------------- |
-| `link`            | `tool:link`          | добавляет mock-ссылку в конец ответа               |
-| `kb_search`       | `tool:kb_search`     | ищет чанки в mock-базе знаний                      |
-| `remote_lookup`   | `tool:remote_lookup` | mock-upstream; отвечает кодом `a`, `b` или `other` |
-| `remote_followup` | `tool:remote_lookup` | второй запрос с уточнением пользователя            |
-| `research`        | `tool:research`      | `kb_search` → `remote_lookup` → ветка по коду      |
+| Инструмент | Право           | Что делает                                    |
+| ---------- | --------------- | --------------------------------------------- |
+| `link`     | `tool:link`     | добавляет mock-ссылку в конец ответа          |
+| `research` | `tool:research` | база знаний → upstream → ветка по коду ответа |
 
-`research` — не отдельный движок, а workflow из трёх шагов. Ветка `a` отдаёт
-тело A вместе с чанками, `b` возвращает `need_input` и вопрос, `other` —
-безопасный текст ошибки.
+`research` — workflow из трёх шагов. Ветка `a` отдаёт тело A вместе с чанками,
+`b` возвращает `need_input` и вопрос, `other` — безопасный текст ошибки. Шаги
+вызывают обычные функции мока, без вложенных инструментов.
 
 ## Один путь
 
-Каждый вызов инструмента, из модели или из `research`, идёт через одну
-функцию `Session.CallTool`: право → бюджет → схема аргументов → типизированный
-обработчик. Второго пути нет.
+Каждый инструмент, который назвала модель, идёт через одну функцию
+`session.call`: право → бюджет → схема аргументов → обработчик. Вложенных
+вызовов нет: шаги `research` вызывают обычные функции мока.
 
 ```mermaid
 sequenceDiagram
     participant C as Клиент
     participant H as controller
-    participant U as usecase.Session
+    	participant U as agent.session
     participant L as Ollama
     participant T as tools.Set
 
@@ -78,14 +75,6 @@ curl -s http://localhost:8080/v1/chat \
   }'
 ```
 
-Второй шаг сценария B:
-
-```sh
-curl -s http://localhost:8080/v1/followup \
-  -H 'Content-Type: application/json' \
-  -d '{"user": {"id": "u-1", "tenant": "acme", "roles": ["support"]}, "query": "go test", "input": "1.22"}'
-```
-
 ## Локально
 
 Нужны запущенные Ollama (`ollama serve`) и mockd:
@@ -99,7 +88,7 @@ go run ./cmd/lite-demo
 
 ## API
 
-`POST /v1/chat`, `POST /v1/followup`, `GET /healthz`.
+`POST /v1/chat`, `GET /healthz`.
 
 Статусы чата: `ok`, `need_input`, `max_steps`, `budget`.
 
@@ -107,8 +96,6 @@ go run ./cmd/lite-demo
 | --- | ----------------------------------------- |
 | 400 | битый JSON, лишние поля, нет пользователя |
 | 403 | policy запретила действие                 |
-| 404 | неизвестный инструмент                    |
-| 429 | исчерпан бюджет tool calls                |
 | 502 | не ответила Ollama или mock-сервис        |
 | 504 | истёк дедлайн запроса                     |
 | 500 | внутренняя ошибка                         |
@@ -123,22 +110,15 @@ go run ./cmd/lite-demo
 {
   "default": "deny",
   "roles": {
-    "user": ["chat", "tool:link", "tool:kb_search"],
-    "support": [
-      "chat",
-      "tool:link",
-      "tool:kb_search",
-      "tool:remote_lookup",
-      "tool:research"
-    ]
+    "user": ["chat", "tool:link"],
+    "support": ["chat", "tool:link", "tool:research"]
   }
 }
 ```
 
-Права проверяются дважды: `Session.specs` не показывает модели инструмент, на
-который у роли нет права, а `Session.CallTool` повторяет проверку перед запуском.
-Поэтому модель не видит запрещённый инструмент, а если придумает его сама —
-получит `403`.
+Права проверяются дважды: `specs` не показывает модели инструмент, на который у
+роли нет права, а `call` повторяет проверку перед запуском. Поэтому модель не
+видит запрещённый инструмент, а если придумает его сама — получит отказ.
 
 В демо principal приходит в теле запроса. В проде здесь JWT/OIDC на границе
 `controller`, а usecase не меняется.
@@ -149,9 +129,14 @@ go run ./cmd/lite-demo
 результат проверяется по схеме `Out`, а права по умолчанию — `tool:<name>`:
 
 ```go
-tools.New("kb_search", u.kbSearch,
-	tools.Desc("Поиск по mock-базе знаний"),
+tools.New("link", link,
+	tools.Desc("Добавить mock-ссылку в конец ответа"),
 	tools.Read(),
+)
+
+tools.New("research", u.research,
+	tools.Desc("База знаний, upstream и ветка по коду ответа"),
+	tools.Egress(),
 )
 ```
 
@@ -165,18 +150,22 @@ tools.New("kb_search", u.kbSearch,
 под-workflow по состоянию.
 
 ```go
+func researchKB(ctx context.Context, st *researchState) error {
+	chunks, err := st.Mock.KB(ctx, st.Query)
+	st.KB = chunks
+	return err
+}
+
+func researchLookup(ctx context.Context, st *researchState) error {
+	out, err := st.Mock.Lookup(ctx, st.Query)
+	st.Lookup = out
+	return err
+}
+
 flow := workflow.New[researchState]("research").
-	Then("kb", func(ctx context.Context, st *researchState) error {
-		res, err := st.Session.CallTool(ctx, "kb_search", map[string]any{"query": st.Query})
-		st.KB = res
-		return err
-	}).
-	Then("lookup", func(ctx context.Context, st *researchState) error {
-		res, err := st.Session.CallTool(ctx, "remote_lookup", map[string]any{"query": st.Query})
-		st.Code = res.Code
-		return err
-	}).
-	Branch("route", func(st *researchState) string { return st.Code }, routes)
+	Then("kb", researchKB).
+	Then("lookup", researchLookup).
+	Branch("route", researchRoute, routes)
 ```
 
 Ошибка шага останавливает цепочку и возвращается с путём `research/kb`. `Run`
@@ -200,7 +189,7 @@ flow := workflow.New[researchState]("research").
 | `internal/repository` | клиент mock-сервиса                                        |
 | `internal/routes`     | таблица маршрутов и recover                                |
 | `internal/tools`      | движок инструментов: схема, каталог, вызов                 |
-| `internal/usecase`    | сценарии: чат, followup и health                           |
+| `internal/usecase`    | сценарии: чат, инструменты и health                        |
 | `internal/workflow`   | типизированный workflow с ветками                          |
 | `pkg/rest`            | JSON-ответ и разбор тела запроса                           |
 

@@ -1,13 +1,7 @@
 {
   "default": "deny",
   "roles": {
-    "user": ["chat", "tool:link", "tool:kb_search"],
-    "support": [
-      "chat",
-      "tool:link",
-      "tool:kb_search",
-      "tool:remote_lookup",
-      "tool:research"
-    ]
+    "user": ["chat", "tool:link"],
+    "support": ["chat", "tool:link", "tool:research"]
   }
 }

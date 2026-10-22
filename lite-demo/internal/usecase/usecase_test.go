@@ -3,7 +3,6 @@ package usecase
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -24,10 +23,7 @@ type fakeLLM struct {
 func (f *fakeLLM) Chat(_ context.Context, req entity.CompletionRequest) (entity.Completion, error) {
 	f.requests = append(f.requests, req)
 	if f.loop {
-		n := len(f.requests)
-		return entity.Completion{ToolCalls: []entity.ToolCall{{
-			Name: "kb_search", Args: map[string]any{"query": fmt.Sprintf("q%d", n)},
-		}}}, nil
+		return entity.Completion{ToolCalls: []entity.ToolCall{{Name: "link"}}}, nil
 	}
 	if len(f.responses) == 0 {
 		return entity.Completion{Content: "done"}, nil
@@ -38,8 +34,7 @@ func (f *fakeLLM) Chat(_ context.Context, req entity.CompletionRequest) (entity.
 }
 
 type fakeMock struct {
-	lookup   repository.Lookup
-	followup repository.Followup
+	lookup repository.Lookup
 }
 
 func (f *fakeMock) KB(_ context.Context, query string) ([]entity.Chunk, error) {
@@ -53,13 +48,6 @@ func (f *fakeMock) Lookup(_ context.Context, _ string) (repository.Lookup, error
 	return f.lookup, nil
 }
 
-func (f *fakeMock) Followup(_ context.Context, _, input string) (repository.Followup, error) {
-	if f.followup.Code == "" {
-		return repository.Followup{Code: "b", Body: "body for " + input}, nil
-	}
-	return f.followup, nil
-}
-
 func user(role string) entity.User {
 	return entity.User{ID: "u-1", Tenant: "acme", Roles: []string{role}}
 }
@@ -67,8 +55,8 @@ func user(role string) entity.User {
 func newUseCase(t *testing.T, llm agent.LLM, mock Mock, budget entity.Budget) *UseCase {
 	t.Helper()
 	p := &policy.Policy{Default: "deny", Roles: map[string][]string{
-		"user":    {"chat", "tool:link", "tool:kb_search", "tool:remote_lookup"},
-		"support": {"chat", "tool:link", "tool:kb_search", "tool:remote_lookup", "tool:research"},
+		"user":    {"chat", "tool:link"},
+		"support": {"chat", "tool:link", "tool:research"},
 	}}
 	uc, err := New(Deps{LLM: llm, Mock: mock, Policy: p, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Budget: budget})
 	if err != nil {
@@ -83,7 +71,7 @@ func msg(text string) []entity.Message {
 
 func TestChatRunsToolsAndAnswers(t *testing.T) {
 	llm := &fakeLLM{responses: []entity.Completion{
-		{ToolCalls: []entity.ToolCall{{Name: "kb_search", Args: map[string]any{"query": "go"}}}},
+		{ToolCalls: []entity.ToolCall{{Name: "link"}}},
 		{Content: "готово"},
 	}}
 	uc := newUseCase(t, llm, &fakeMock{}, entity.Budget{})
@@ -92,10 +80,10 @@ func TestChatRunsToolsAndAnswers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
-	if res.Status != "ok" || res.Answer != "готово" {
+	if res.Status != "ok" || !strings.Contains(res.Answer, "готово") || !strings.Contains(res.Answer, "example.invalid") {
 		t.Fatalf("response = %+v", res)
 	}
-	if len(res.ToolCalls) != 1 || res.ToolCalls[0].Name != "kb_search" {
+	if len(res.ToolCalls) != 1 || res.ToolCalls[0].Name != "link" {
 		t.Fatalf("tool calls = %+v", res.ToolCalls)
 	}
 	if len(llm.requests) != 2 {
@@ -109,12 +97,12 @@ func TestChatRunsToolsAndAnswers(t *testing.T) {
 
 func TestChatStopsForInput(t *testing.T) {
 	llm := &fakeLLM{responses: []entity.Completion{
-		{ToolCalls: []entity.ToolCall{{Name: "remote_lookup", Args: map[string]any{"query": "go"}}}},
+		{ToolCalls: []entity.ToolCall{{Name: "research", Args: map[string]any{"query": "go"}}}},
 	}}
 	mock := &fakeMock{lookup: repository.Lookup{Code: "b", Question: "версия?"}}
 	uc := newUseCase(t, llm, mock, entity.Budget{})
 
-	res, err := uc.Chat(context.Background(), entity.ChatRequest{User: user("user"), Messages: msg("найди")})
+	res, err := uc.Chat(context.Background(), entity.ChatRequest{User: user("support"), Messages: msg("найди")})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
@@ -179,16 +167,5 @@ func TestResearchNeedsPermission(t *testing.T) {
 	_, err := uc.Chat(context.Background(), entity.ChatRequest{User: user("user"), Messages: msg("research go")})
 	if !errors.Is(err, entity.ErrUnauthorized) {
 		t.Fatalf("err = %v, want ErrUnauthorized", err)
-	}
-}
-
-func TestFollowup(t *testing.T) {
-	uc := newUseCase(t, &fakeLLM{}, &fakeMock{}, entity.Budget{})
-	res, err := uc.Followup(context.Background(), entity.FollowupRequest{User: user("user"), Query: "go", Input: "1.22"})
-	if err != nil {
-		t.Fatalf("Followup: %v", err)
-	}
-	if res.Status != "ok" || res.Answer != "body for 1.22" {
-		t.Fatalf("response = %+v", res)
 	}
 }

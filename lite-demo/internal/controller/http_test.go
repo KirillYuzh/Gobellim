@@ -34,14 +34,10 @@ func (stubMock) Lookup(context.Context, string) (repository.Lookup, error) {
 	return repository.Lookup{Code: "a", Body: "body"}, nil
 }
 
-func (stubMock) Followup(context.Context, string, string) (repository.Followup, error) {
-	return repository.Followup{Code: "b", Body: "body"}, nil
-}
-
 func newHandler(t *testing.T) http.Handler {
 	t.Helper()
 	p := &policy.Policy{Default: "deny", Roles: map[string][]string{
-		"user": {"chat", "tool:kb_search"},
+		"user": {"chat", "tool:link"},
 	}}
 	uc, err := usecase.New(usecase.Deps{
 		LLM:    staticLLM{content: "ok"},
@@ -100,7 +96,7 @@ func TestHealth(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "kb_search") {
+	if !strings.Contains(rec.Body.String(), "research") {
 		t.Fatalf("body = %s", rec.Body)
 	}
 }

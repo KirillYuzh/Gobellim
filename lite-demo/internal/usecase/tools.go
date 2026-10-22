@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"some-project/internal/agent"
 	"some-project/internal/entity"
+	"some-project/internal/repository"
 	"some-project/internal/workflow"
 )
 
@@ -14,61 +14,22 @@ type queryIn struct {
 	Query string `json:"query"`
 }
 
-type followupIn struct {
-	Query string `json:"query"`
-	Input string `json:"input"`
-}
-
-// link — заглушка: возвращает готовую ссылку, не ходит в сеть.
+// link — обычная заглушка: возвращает готовую ссылку, в сеть не ходит.
 func link(context.Context, struct{}) (entity.Result, error) {
 	return entity.Result{Display: "https://example.invalid/go-doc (mock)"}, nil
 }
 
-func (u *UseCase) kbSearch(ctx context.Context, in queryIn) (entity.Result, error) {
-	chunks, err := u.mock.KB(ctx, in.Query)
-	if err != nil {
-		return entity.Result{}, err
-	}
-	return entity.Result{Data: chunks}, nil
-}
-
-func (u *UseCase) remoteLookup(ctx context.Context, in queryIn) (entity.Result, error) {
-	out, err := u.mock.Lookup(ctx, in.Query)
-	if err != nil {
-		return entity.Result{}, err
-	}
-	switch out.Code {
-	case "a":
-		return entity.Result{Code: "a", Body: out.Body}, nil
-	case "b":
-		return entity.Result{Code: "b", Question: out.Question, NeedInput: true}, nil
-	default:
-		return entity.Result{Code: "other", Error: "upstream returned an unknown code"}, nil
-	}
-}
-
-func (u *UseCase) remoteFollowup(ctx context.Context, in followupIn) (entity.Result, error) {
-	out, err := u.mock.Followup(ctx, in.Query, in.Input)
-	if err != nil {
-		return entity.Result{}, err
-	}
-	if out.Error != "" {
-		return entity.Result{Error: "upstream error"}, nil
-	}
-	return entity.Result{Body: out.Body}, nil
-}
-
-// researchState — состояние сценария research.
+// researchState — состояние сценария. Mock в состоянии, чтобы шаги вызывали
+// обычные функции, без обвязки инструментов.
 type researchState struct {
-	Session *agent.Session
-	Query   string
-	KB      entity.Result
-	Lookup  entity.Result
-	Result  entity.Result
+	Mock   Mock
+	Query  string
+	KB     []entity.Chunk
+	Lookup repository.Lookup
+	Result entity.Result
 }
 
-// researchFlow: база знаний, upstream и ветка по коду ответа. Каждый шаг
-// вызывает инструмент через сессию, поэтому права и бюджет те же.
+// researchFlow: база знаний, upstream и ветка по коду ответа.
 var researchFlow = workflow.New[researchState]("research").
 	Then("kb", researchKB).
 	Then("lookup", researchLookup).
@@ -79,14 +40,14 @@ var researchFlow = workflow.New[researchState]("research").
 	})
 
 func researchKB(ctx context.Context, st *researchState) error {
-	res, err := st.Session.CallTool(ctx, "kb_search", map[string]any{"query": st.Query})
-	st.KB = res
+	chunks, err := st.Mock.KB(ctx, st.Query)
+	st.KB = chunks
 	return err
 }
 
 func researchLookup(ctx context.Context, st *researchState) error {
-	res, err := st.Session.CallTool(ctx, "remote_lookup", map[string]any{"query": st.Query})
-	st.Lookup = res
+	out, err := st.Mock.Lookup(ctx, st.Query)
+	st.Lookup = out
 	return err
 }
 
@@ -98,7 +59,7 @@ func researchRoute(st *researchState) string {
 }
 
 func researchRelay(_ context.Context, st *researchState) error {
-	st.Result = entity.Result{Code: "a", Body: st.Lookup.Body, Data: st.KB.Data}
+	st.Result = entity.Result{Code: "a", Body: st.Lookup.Body, Data: st.KB}
 	return nil
 }
 
@@ -120,11 +81,7 @@ func (u *UseCase) research(ctx context.Context, in queryIn) (entity.Result, erro
 	if strings.TrimSpace(in.Query) == "" {
 		return entity.Result{}, fmt.Errorf("query is required: %w", entity.ErrInvalid)
 	}
-	s := agent.SessionFrom(ctx)
-	if s == nil {
-		return entity.Result{}, fmt.Errorf("research: no session: %w", entity.ErrInternal)
-	}
-	st := researchState{Session: s, Query: in.Query}
+	st := researchState{Mock: u.mock, Query: in.Query}
 	if err := researchFlow.Run(ctx, &st); err != nil {
 		return entity.Result{}, err
 	}
