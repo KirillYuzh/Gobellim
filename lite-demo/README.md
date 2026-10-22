@@ -193,18 +193,34 @@ flow := workflow.New[researchState]("research").
 
 ## Настройки
 
-| Переменная          | По умолчанию                                        | Зачем                  |
-| ------------------- | --------------------------------------------------- | ---------------------- |
-| `APP_ENV`           | dev                                                 | `prod` отклоняется     |
-| `HTTP_ADDR`         | `:8080`                                             | адрес сервера          |
-| `POLICY_PATH`       | `policy.json`                                       | файл прав              |
-| `MOCK_BASE_URL`     | `http://localhost:8081`                             | mock-сервис            |
-| `GIGACHAT_API_KEY`  | из `.env`                                           | OAuth-ключ, обязателен |
-| `GIGACHAT_MODEL`    | `GigaChat-2`                                        | модель                 |
-| `GIGACHAT_BASE_URL` | `https://api.giga.chat`                             | API                    |
-| `GIGACHAT_AUTH_URL` | `https://ngw.devices.sberbank.ru:9443/api/v2/oauth` | OAuth                  |
-| `GIGACHAT_SCOPE`    | `GIGACHAT_API_PERS`                                 | скоуп OAuth            |
-| `REQUEST_TIMEOUT`   | `3m`                                                | дедлайн одного запроса |
+| Переменная          | По умолчанию                                        | Зачем                                  |
+| ------------------- | --------------------------------------------------- | -------------------------------------- |
+| `APP_ENV`           | dev                                                 | `prod` отклоняется                     |
+| `HTTP_ADDR`         | `:8080`                                             | адрес сервера                          |
+| `POLICY_PATH`       | `policy.json`                                       | файл прав                              |
+| `MOCK_BASE_URL`     | `http://localhost:8081`                             | mock-сервис                            |
+| `GIGACHAT_API_KEY`  | из `.env`                                           | OAuth-ключ, обязателен                 |
+| `GIGACHAT_MODEL`    | `GigaChat-2`                                        | модель                                 |
+| `GIGACHAT_BASE_URL` | `https://api.giga.chat`                             | API                                    |
+| `GIGACHAT_AUTH_URL` | `https://ngw.devices.sberbank.ru:9443/api/v2/oauth` | OAuth                                  |
+| `GIGACHAT_SCOPE`    | `GIGACHAT_API_PERS`                                 | скоуп OAuth                            |
+| `REQUEST_TIMEOUT`   | `3m`                                                | дедлайн одного запроса                 |
+| `LOG_LEVEL`         | `info`                                              | `debug` печатает запрос и ответ модели |
+
+### Что получила модель
+
+На уровне `debug` сервис печатает каждый запрос к GigaChat и ответ на него:
+системный промпт, историю, схемы функций и результаты инструментов. Включите
+его в `.env` и перезапустите стек:
+
+```sh
+echo 'LOG_LEVEL=debug' >> .env
+docker compose up -d
+
+# только тела запросов, без обёртки лога
+docker compose logs app \
+  | jq -r 'select(.msg == "llm request") | .body | fromjson'
+```
 
 ## Проверки
 

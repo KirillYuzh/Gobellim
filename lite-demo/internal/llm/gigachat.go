@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -115,6 +116,9 @@ func (c *GigaChat) Chat(ctx context.Context, req entity.CompletionRequest) (enti
 	if err != nil {
 		return entity.Completion{}, fmt.Errorf("gigachat: encode request: %w", err)
 	}
+	// Полный запрос к модели: уровни LOG_LEVEL=debug видно, что именно она
+	// получила (system, историю, схемы функций и результаты инструментов).
+	slog.Default().Debug("llm request", "model", c.model, "body", string(raw))
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/v1/chat/completions", bytes.NewReader(raw))
 	if err != nil {
 		return entity.Completion{}, fmt.Errorf("gigachat: request: %w: %w", err, entity.ErrUpstream)
@@ -135,6 +139,7 @@ func (c *GigaChat) Chat(ctx context.Context, req entity.CompletionRequest) (enti
 	if resp.StatusCode != http.StatusOK {
 		return entity.Completion{}, fmt.Errorf("gigachat: status %d: %w", resp.StatusCode, entity.ErrUpstream)
 	}
+	slog.Default().Debug("llm response", "body", string(data))
 
 	var out gcResponse
 	if err := json.Unmarshal(data, &out); err != nil {
