@@ -37,7 +37,9 @@ func verifyFiles(dir, model string) error {
 			return invalidConfig(fmt.Errorf("model file %s: %w", path, err))
 		}
 	}
-	return nil
+	// A config that is not valid JSON would fail later, in the middle of a
+	// run; reject it here, where the operator can still act on it.
+	return parseConfigJSON(filepath.Join(base, "config.json"))
 }
 
 func parseConfigJSON(path string) error {

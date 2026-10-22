@@ -11,9 +11,12 @@ permissions:
   contents: read
 
 env:
-  GO_VERSION: "1.24"
+  GO_VERSION: "1.26"
   # Optional packages live in their own modules (D85); rerank stays in the core.
-  OPTIONAL_MODULES: "mcp webfetch flow eval kittest cmd demo scripts"
+  OPTIONAL_MODULES: "mcp webfetch flow eval kittest cmd scripts plugins/elasticsearch plugins/gigachat plugins/otel"
+  # Pinned so the vulnerability scan is reproducible; invoked by absolute path
+  # because $(go env GOPATH)/bin is not necessarily on PATH.
+  GOVULNCHECK_VERSION: "v1.9.0"
 
 jobs:
   build:
@@ -38,6 +41,51 @@ jobs:
             else
               (cd "$dir" && go build ./... && go vet ./...)
             fi
+          done
+
+  deps:
+    name: deps (tidy + govulncheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: '**/go.sum'
+      - name: install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
+      # A stale go.sum is how broken dependencies reach develop: `go mod tidy`
+      # must be a no-op for the core, every optional module, and lite-demo.
+      - name: go mod tidy (core, optional modules, lite-demo)
+        run: |
+          set -euo pipefail
+          go mod tidy
+          for dir in $OPTIONAL_MODULES lite-demo; do
+            echo "==> $dir"
+            (cd "$dir" && go mod tidy)
+          done
+      - name: go mod tidy changed nothing
+        run: |
+          set -euo pipefail
+          if ! git diff --exit-code -- go.mod go.sum; then
+            echo "core go.mod/go.sum are not tidy - run 'make tidy' and commit the result"
+            exit 1
+          fi
+          for dir in $OPTIONAL_MODULES lite-demo; do
+            if ! git diff --exit-code -- "$dir/go.mod" "$dir/go.sum"; then
+              echo "$dir/go.mod or $dir/go.sum are not tidy - run 'make tidy' and commit the result"
+              exit 1
+            fi
+          done
+      - name: govulncheck (core)
+        run: '"$(go env GOPATH)/bin/govulncheck" ./...'
+      - name: govulncheck (optional modules, lite-demo)
+        run: |
+          set -euo pipefail
+          for dir in $OPTIONAL_MODULES lite-demo; do
+            echo "==> $dir"
+            (cd "$dir" && "$(go env GOPATH)/bin/govulncheck" ./...)
           done
 
   test:
@@ -70,12 +118,12 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
       - name: go test -race (core)
-        run: go test -race -count=1 ./...
+        run: go test -race -shuffle=on -count=1 ./...
       - name: go test -race (optional modules)
         run: |
           for dir in $OPTIONAL_MODULES; do
             echo "==> $dir"
-            (cd "$dir" && go test -race -count=1 ./...)
+            (cd "$dir" && go test -race -shuffle=on -count=1 ./...)
           done
 
   ort-vet:
@@ -196,7 +244,8 @@ jobs:
             echo '```'
             cat bench.txt
             echo '```'
-            echo 'Download the `bench` artifact as the baseline and compare with `benchstat old.txt new.txt`.'
+            echo '**Published, not gated.** ns/op depends on the runner, so these numbers are not a pass/fail gate.'
+            echo 'To compare two runs: download both `bench` artifacts and run `benchstat old.txt new.txt`.'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: upload benchmarks
         if: always()
@@ -204,3 +253,39 @@ jobs:
         with:
           name: bench
           path: bench.txt
+
+  lite-demo:
+    name: lite-demo
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lite-demo
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: lite-demo/go.sum
+      - name: go build
+        run: go build ./...
+      - name: go vet
+        run: go vet ./...
+      - name: go vet -tags ort
+        run: go vet -tags ort ./...
+      - name: go test -race -shuffle=on
+        run: go test -race -shuffle=on -count=1 ./...
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.0
+          working-directory: lite-demo
+      - name: install gofumpt and govulncheck
+        run: |
+          go install mvdan.cc/gofumpt@v0.7.0
+          go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: gofumpt -l
+        run: test -z "$(gofumpt -l .)"
+      - name: govulncheck
+        run: '"$(go env GOPATH)/bin/govulncheck" ./...'

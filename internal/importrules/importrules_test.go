@@ -61,20 +61,21 @@ var skipDirs = map[string]bool{
 
 // optionalPackages are the non-core packages this repository ships: MCP (client
 // and server), the webfetch tool, the flow primitive, the eval harness, the
-// rerank adapter, the test kit and the tooling (cmd, demo, scripts). The core
-// must not depend on them — the dependency runs the other way, or not at all
-// (docs/internals/architecture.md, «Границы ядра»).
+// rerank adapter, the test kit, the vendor plugins and the tooling (cmd, demo,
+// scripts). The core must not depend on them — the dependency runs the other
+// way, or not at all (docs/internals/architecture.md, «Границы ядра»).
 var optionalPackages = []string{
 	"mcp", "webfetch", "flow", "eval", "kittest", "rerank",
-	"cmd", "demo", "scripts",
+	"cmd", "demo", "scripts", "plugins",
 }
 
 // coreOptionalExceptions is the honest list of edges where the compiled core
-// still depends on an optional package. It holds one edge: the façade exposes
-// Config.Reranker and SearchRequest.Rerank, so it imports rerank. The core rule
-// asserts this list is exactly the observed edges, so it cannot grow silently.
+// still depends on an optional package. It holds one edge: the façade (now
+// internal/app, re-exported by package gobellim) exposes Config.Reranker and
+// SearchRequest.Rerank, so it imports rerank. The core rule asserts this list is
+// exactly the observed edges, so it cannot grow silently.
 var coreOptionalExceptions = map[[2]string]bool{
-	{"", "rerank"}: true,
+	{"internal/app", "rerank"}: true,
 }
 
 var rules = []rule{
@@ -107,9 +108,12 @@ var rules = []rule{
 	},
 	{
 		name:    "flow-internal-leaves-only",
-		desc:    "flow is an optional module (D85) that used to be a core primitive (D67): it may import only internal/** leaves — never the kit façade (import cycle), never internal/call, never the core family (authz/guard/model/embed/chunk/store/trace), never a sibling or transport package (eval/rerank/mcp/webfetch); stdlib and the two jsonschema libraries of D67 are outside this rule",
+		desc:    "flow is an optional module (D85) that used to be a core primitive (D67): it may import only internal/** leaves and packages of its own module (session on top of workflow), but never the module root (import cycle), never internal/call, never the core family (authz/guard/model/embed/chunk/store/trace), never a sibling or transport package (eval/rerank/mcp/webfetch); stdlib and the two jsonschema libraries of D67 are outside this rule",
 		applies: func(pkg string) bool { return rootOf(pkg) == "flow" },
 		allows: func(pkg, imported string) bool {
+			if rootOf(imported) == "flow" {
+				return imported != "flow"
+			}
 			return isUnderInternal(imported) && !isCallPrimitive(imported)
 		},
 	},
@@ -128,7 +132,7 @@ var rules = []rule{
 			if !isOptionalPackage(imported) {
 				return true
 			}
-			return coreOptionalExceptions[[2]string{rootOf(pkg), rootOf(imported)}]
+			return coreOptionalExceptions[[2]string{pkg, rootOf(imported)}]
 		},
 	},
 }
@@ -292,6 +296,14 @@ func TestFlowInternalLeavesOnly(t *testing.T) {
 		}
 	})
 
+	t.Run("allows its own packages", func(t *testing.T) {
+		for _, dir := range []string{"flow/workflow", "flow/session"} {
+			if !r.allows("flow/session", dir) {
+				t.Errorf("flow/session may import %s", dir)
+			}
+		}
+	})
+
 	t.Run("rejects every forbidden edge", func(t *testing.T) {
 		forbidden := []struct {
 			what, dir string
@@ -378,10 +390,10 @@ func TestCoreHasNoOptionalDependency(t *testing.T) {
 				t.Errorf("the core must not import %q", dir)
 			}
 		}
-		if !r.allows("", "rerank") {
+		if !r.allows("internal/app", "rerank") {
 			t.Error("the recorded façade → rerank edge must be allowed")
 		}
-		if r.allows("store", "rerank") || r.allows("model", "rerank") {
+		if r.allows("store", "rerank") || r.allows("model", "rerank") || r.allows("internal/ort", "rerank") {
 			t.Error("rerank is optional: only the façade may import it")
 		}
 	})
@@ -405,7 +417,7 @@ func TestCoreHasNoOptionalDependency(t *testing.T) {
 					t.Errorf("%s:%d imports %s, which %s forbids", im.file, im.line, display(modulePath, im.dir), r.name)
 				}
 				if isOptionalPackage(im.dir) {
-					observed[[2]string{rootOf(pkg), rootOf(im.dir)}] = true
+					observed[[2]string{pkg, rootOf(im.dir)}] = true
 				}
 			}
 		}

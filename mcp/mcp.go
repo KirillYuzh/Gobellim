@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/KirillYuzh/Gobellim/internal/core"
@@ -78,19 +79,17 @@ type CallResult struct {
 	IsError           bool            `json:"isError,omitempty"`
 }
 
-// Text joins the text content items with newlines, ignoring other content types.
+// Text joins the text content items with newlines, ignoring other content types
+// and empty items.
 func (r CallResult) Text() string {
-	out := ""
-	for i, c := range r.Content {
-		if c.Type != "text" {
+	parts := make([]string, 0, len(r.Content))
+	for _, c := range r.Content {
+		if c.Type != "text" || c.Text == "" {
 			continue
 		}
-		if i > 0 && out != "" {
-			out += "\n"
-		}
-		out += c.Text
+		parts = append(parts, c.Text)
 	}
-	return out
+	return strings.Join(parts, "\n")
 }
 
 // Transport is the JSON-RPC channel a Client uses: Call sends a request and
@@ -110,6 +109,10 @@ type Client struct {
 	mu         sync.RWMutex
 	serverInfo ServerInfo
 	ready      bool
+
+	// initMu serializes the handshake, so two concurrent first calls make one
+	// initialize request instead of two.
+	initMu sync.Mutex
 }
 
 // New creates a client from cfg, selecting the stdio transport when Command is
@@ -149,7 +152,8 @@ func (c *Client) ServerInfo() ServerInfo {
 
 // Initialize performs the initialize handshake and sends
 // notifications/initialized, recording the server info. It is idempotent and is
-// called lazily by ListTools and CallTool.
+// called lazily by ListTools and CallTool. Concurrent first calls make one
+// handshake.
 func (c *Client) Initialize(ctx context.Context) error {
 	c.mu.RLock()
 	ready := c.ready
@@ -158,6 +162,15 @@ func (c *Client) Initialize(ctx context.Context) error {
 		return nil
 	}
 
+	c.initMu.Lock()
+	defer c.initMu.Unlock()
+	// Another caller may have finished the handshake while we waited.
+	c.mu.RLock()
+	ready = c.ready
+	c.mu.RUnlock()
+	if ready {
+		return nil
+	}
 	params := map[string]any{
 		"protocolVersion": c.cfg.ProtocolVersion,
 		"capabilities":    map[string]any{},
@@ -247,7 +260,8 @@ func (c *Client) CallTool(ctx context.Context, name string, args json.RawMessage
 	return res, nil
 }
 
-// Close closes the underlying transport, if any.
+// Close closes the underlying transport, if any. It does not cancel the calls
+// in flight: they end when their context ends or when the transport fails.
 func (c *Client) Close() error {
 	if c.transport == nil {
 		return nil
@@ -266,6 +280,8 @@ func (e *rpcError) Error() string {
 	return fmt.Sprintf("mcp: rpc error %d: %s", e.Code, e.Message)
 }
 
-func (e *rpcError) unwrap() error {
+// wrap renders the JSON-RPC error as a provider error, so a caller can
+// classify it with errors.Is.
+func (e *rpcError) wrap() error {
 	return fmt.Errorf("%w: %w", e, core.ErrProvider)
 }

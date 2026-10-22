@@ -10,6 +10,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -131,7 +132,7 @@ func directRequires(goMod string) (int, error) {
 // defaultBuildModules counts the distinct external modules the default build
 // (`go build`/`go test` without `-tags ort`) reaches.
 func defaultBuildModules(root, modPath string) (int, error) {
-	cmd := exec.Command("go", "list", "-deps", "-f", "{{with .Module}}{{.Path}}{{end}}", "./...")
+	cmd := exec.CommandContext(context.Background(), "go", "list", "-deps", "-f", "{{with .Module}}{{.Path}}{{end}}", "./...")
 	cmd.Dir = root
 	out, err := cmd.Output()
 	if err != nil {

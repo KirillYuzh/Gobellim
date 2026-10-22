@@ -1,0 +1,7 @@
+{
+  "default": "deny",
+  "roles": {
+    "user": ["chat", "tool:link"],
+    "support": ["chat", "tool:link", "tool:start_research", "research"]
+  }
+}

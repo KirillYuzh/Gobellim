@@ -2,7 +2,7 @@
 
 **[English](README.md) · [Русский](README.ru.md)**
 
-![Go](https://img.shields.io/badge/Go-1.24-00ADD8?logo=go&logoColor=white)
+![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ![Gobellim](./site/public/gobellim-compact-white.svg)
@@ -14,20 +14,67 @@ guardrails behind one permission-checked call path.
 
 ## See it in 60 seconds
 
-The [demo](./demo) is a support bot on a Clean Architecture skeleton with a
-seeded knowledge base. The first run pulls the images and the embedding model;
-after that the stack starts in about a minute.
+The [lite-demo](./lite-demo) is a small service with its own tool engine,
+workflow and GigaChat client. It shows a principal, a policy file, two tools
+(`link` and `start_research`) and a research scenario that pauses for the user.
+The first run pulls the images; the service calls GigaChat over HTTPS with the key
+from `lite-demo/.env`.
 
 ```sh
-cp demo/.env.example demo/.env                 # add GIGACHAT_CREDENTIALS (skip if the file exists)
-docker compose --env-file demo/.env \
-  -f demo/deploy/docker-compose.yml up -d
+cd lite-demo
+docker compose up -d --build
 ```
 
-The bot logs `knowledge base ready` and `bot listening` on `:8080`. Ask it a
-question as `root` and as `alice`: `alice` gets a refusal for the weather,
-because that tool is removed from her schema before the model sees it. The
-endpoints and a ready-made `curl` are in [demo/README.md](./demo/README.md).
+Open <http://localhost:8080> for the chat page, or use the requests below. The
+service listens on `:8080`. Every tool in the demo is a stub: no mock service,
+no outbound calls except GigaChat.
+
+### Requests for every scenario
+
+```sh
+# health
+curl -s http://localhost:8080/healthz
+
+# chat with the link tool (role user)
+curl -s http://localhost:8080/v1/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user": {"id": "u-1", "tenant": "acme", "roles": ["user"]},
+    "messages": [{"role": "user", "content": "Добавь ссылку на документацию по Go."}]
+  }'
+
+# research start (role support): the scenario suspends on a question
+curl -s http://localhost:8080/v1/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user": {"id": "u-1", "tenant": "acme", "roles": ["support"]},
+    "messages": [{"role": "user", "content": "Проведи исследование по go modules."}]
+  }'
+# → {"status":"awaiting_user","run_id":"run-...","question":{...}}
+
+# answer the path question
+curl -s http://localhost:8080/v1/research/run-.../resume \
+  -H 'Content-Type: application/json' \
+  -d '{"user": {"id": "u-1", "tenant": "acme", "roles": ["support"]}, "choice": "A"}'
+
+# path B asks one more question (X or Y) before it answers
+
+# forbidden: the guest role has no chat permission
+curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/v1/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user": {"id": "u-2", "tenant": "acme", "roles": ["guest"]},
+    "messages": [{"role": "user", "content": "hi"}]
+  }'
+
+# bad request: unknown field
+curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/v1/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"user": {"id": "u-1", "tenant": "acme", "roles": ["user"]}, "messages": [], "extra": 1}'
+```
+
+The full endpoint list, statuses and error codes are in
+[lite-demo/README.md](./lite-demo/README.md).
 
 Retrieval, typed output, guardrails and traces are the same call path the
 library gives you.
@@ -62,10 +109,10 @@ The same handler with Gobellim:
          return
      }
 -    answer, err := h.llm.Complete(r.Context(), req.Prompt)
-+    ctx := kit.WithPrincipal(r.Context(), kit.Principal{
++    ctx := gobellim.WithPrincipal(r.Context(), gobellim.Principal{
 +        UserID: req.UserID, Roles: req.Roles, Tenant: req.Tenant,
 +    })
-+    res, err := h.app.Chat(ctx, kit.ChatRequest{
++    res, err := h.app.Chat(ctx, gobellim.ChatRequest{
 +        Messages: []model.Message{{Role: model.RoleUser, Content: req.Prompt}},
 +    })
      if err != nil {
@@ -78,7 +125,7 @@ The same handler with Gobellim:
 ```
 
 That is the whole change in the handler. The app is built once at startup
-(`kit.New`, below). `Chat` authorizes before any model or store call, runs the
+(`gobellim.New`, below). `Chat` authorizes before any model or store call, runs the
 guard on input, tool results and output, traces the turn, and exposes only the
 tools the caller may use.
 
@@ -120,7 +167,7 @@ and tests behind it.
   filter, and search is deny-by-default ([`store/filter.go`](./store/filter.go),
   `filter_test.go`, `filter_fuzz_test.go`).
 - **Traces carry masked text by default.** Raw message text is not persisted
-  unless you opt in ([`trace/policy.go`](./trace/policy.go), `pii_test.go`).
+  unless you opt in ([`trace/config.go`](./trace/config.go), `pii_test.go`).
 - **L2 is required on purpose.** An internal security review or certification
   usually expects an ML layer. `guard.L1Only()` exists for explicit L1-only runs
   and is visible in `Health()`, never silent (`D80`).
@@ -150,28 +197,25 @@ Start at [docs/README.md](./docs/README.md).
 ## Quickstart
 
 ```go
-app, err := kit.New(ctx, kit.Config{
+tools, err := gobellim.NewRegistry().Register(
+	gobellim.Tool("get_weather", getWeather, gobellim.Desc("Current weather for a city.")),
+).Build()
+if err != nil {
+	return err
+}
+
+app, err := gobellim.New(ctx, gobellim.Config{
 	ES:      es,     // optional: your store.ES client (retrieval, memory, traces)
 	LLM:     llm,    // vLLM, Ollama, OpenAI-compatible or GigaChat
 	Policy:  policy, // authz.Load("policy.yaml")
 	GuardL2: guard.L1Only(), // evaluation path; production: guard/gliner (-tags ort)
+	Tools:   tools,
 })
-if err != nil {
-	return err
-}
-if err := app.Setup(ctx); err != nil { // creates the indexes once; a no-op without ES
-	return err
-}
-
-// A tool is a typed Go function: its schema and validation come from the type.
-if _, err := kit.Tool(app, "get_weather", getWeather, kit.Desc("Current weather for a city.")); err != nil {
-	return err
-}
 
 // Every call carries the caller's identity.
-ctx = kit.WithPrincipal(ctx, kit.Principal{UserID: "u-1", Roles: []string{"user"}, Tenant: "acme"})
+ctx = gobellim.WithPrincipal(ctx, gobellim.Principal{UserID: "u-1", Roles: []string{"user"}, Tenant: "acme"})
 
-res, err := app.Chat(ctx, kit.ChatRequest{
+res, err := app.Chat(ctx, gobellim.ChatRequest{
 	System:   "You are a support assistant. Answer briefly.",
 	Messages: []model.Message{{Role: model.RoleUser, Content: "Weather in Moscow?"}},
 })
@@ -278,8 +322,8 @@ Run the shipped guard eval with `go -C scripts run ./guardqual`.
 ## Learn more
 
 - [Documentation →](./docs)
-- [How-to guides →](./docs/guides)
-- [Runnable demo →](./demo)
+- [Guides →](./docs/README.md)
+- [Runnable demo →](./lite-demo)
 
 ## Contributing
 

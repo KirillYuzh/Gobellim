@@ -7,33 +7,31 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/KirillYuzh/Gobellim/trace"
 )
 
-func tr(id, out string, obs ...trace.Observation) Trace {
-	return Trace{Trace: trace.Trace{ID: id, Name: "chat", Output: out}, Observations: obs}
+func tr(id, out string, obs ...Observation) Trace {
+	return Trace{Trace: TraceRecord{ID: id, Name: "chat", Output: out}, Observations: obs}
 }
 
-func span(name string) trace.Observation {
-	return trace.Observation{TraceID: "t1", Name: name, Kind: trace.KindSpan}
+func span(name string) Observation {
+	return Observation{TraceID: "t1", Name: name, Kind: KindSpan}
 }
 
-func spanAt(name string, at time.Time) trace.Observation {
-	return trace.Observation{TraceID: "t1", Name: name, Kind: trace.KindSpan, StartTime: at}
+func spanAt(name string, at time.Time) Observation {
+	return Observation{TraceID: "t1", Name: name, Kind: KindSpan, StartTime: at}
 }
 
-func generation() trace.Observation {
-	return trace.Observation{TraceID: "t1", Name: "gpt", Kind: trace.KindGeneration}
+func generation() Observation {
+	return Observation{TraceID: "t1", Name: "gpt", Kind: KindGeneration}
 }
 
-func event() trace.Observation {
-	return trace.Observation{TraceID: "t1", Name: "guard", Kind: trace.KindEvent}
+func event() Observation {
+	return Observation{TraceID: "t1", Name: "guard", Kind: KindEvent}
 }
 
 func TestChecks(t *testing.T) {
 	base := time.Unix(100, 0).UTC()
-	ordered := []trace.Observation{
+	ordered := []Observation{
 		spanAt("fetch", base.Add(2*time.Second)),
 		spanAt("search", base),
 		spanAt("write", base.Add(time.Second)),
@@ -80,12 +78,12 @@ func TestChecks(t *testing.T) {
 		{"tool order no names", ToolOrder(), tr("t1", ""), true},
 		{"no tool errors pass", NoToolErrors(), tr("t1", "", span("search")), true},
 		{"no tool errors level", NoToolErrors(), tr("t1", "",
-			trace.Observation{TraceID: "t1", Name: "search", Kind: trace.KindSpan, Level: trace.LevelError}), false},
+			Observation{TraceID: "t1", Name: "search", Kind: KindSpan, Level: LevelError}), false},
 		{"no tool errors kind", NoToolErrors(), tr("t1", "",
-			trace.Observation{TraceID: "t1", Name: "search", Kind: trace.KindSpan, ErrorKind: "internal"}), false},
+			Observation{TraceID: "t1", Name: "search", Kind: KindSpan, ErrorKind: "internal"}), false},
 		{"no tool errors empty", NoToolErrors(), tr("t1", ""), true},
 		{"no tool errors ignores event", NoToolErrors(), tr("t1", "",
-			trace.Observation{TraceID: "t1", Name: "guard", Kind: trace.KindEvent, Level: trace.LevelError}), true},
+			Observation{TraceID: "t1", Name: "guard", Kind: KindEvent, Level: LevelError}), true},
 
 		{"all pass", All(Includes("Paris"), Excludes("Berlin")), tr("t1", "Paris"), true},
 		{"all fail", All(Includes("Paris"), Includes("Berlin")), tr("t1", "Paris"), false},
@@ -134,13 +132,13 @@ func TestDiceSimilarity(t *testing.T) {
 }
 
 func TestRunIsolatesCasesWithReset(t *testing.T) {
-	rec := trace.NewRecorder()
+	rec := NewRecorder()
 	var seen []string
 	run := func(_ context.Context, input string) error {
 		seen = append(seen, input)
-		rec.Enqueue(trace.Trace{ID: "t1", Name: "chat", Output: input})
+		rec.Enqueue(TraceRecord{ID: "t1", Name: "chat", Output: input})
 		if input == "first" {
-			rec.EnqueueObservation(trace.Observation{TraceID: "t1", Name: "search", Kind: trace.KindSpan})
+			rec.EnqueueObservation(Observation{TraceID: "t1", Name: "search", Kind: KindSpan})
 		}
 		return nil
 	}
@@ -168,11 +166,11 @@ func TestRunIsolatesCasesWithReset(t *testing.T) {
 }
 
 func TestRunReportsRunError(t *testing.T) {
-	rec := trace.NewRecorder()
+	rec := NewRecorder()
 	boom := errors.New("boom")
 	checked := false
 	run := func(_ context.Context, _ string) error {
-		rec.Enqueue(trace.Trace{ID: "t1", Name: "chat", Output: "partial"})
+		rec.Enqueue(TraceRecord{ID: "t1", Name: "chat", Output: "partial"})
 		return boom
 	}
 	check := func(Trace) error { checked = true; return nil }
@@ -197,7 +195,7 @@ func TestRunReportsRunError(t *testing.T) {
 }
 
 func TestRunFailsWhenNoTraceRecorded(t *testing.T) {
-	rec := trace.NewRecorder()
+	rec := NewRecorder()
 	run := func(context.Context, string) error { return nil }
 	results := Run(context.Background(), rec, []Case{{Name: "empty"}}, run)
 	if results[0].Passed {
@@ -216,14 +214,14 @@ func TestRunNilRecorderDoesNotPanic(t *testing.T) {
 }
 
 func TestRecorded(t *testing.T) {
-	rec := trace.NewRecorder()
+	rec := NewRecorder()
 	if _, err := Recorded(rec); err == nil {
 		t.Fatal("want an error when the recorder is empty")
 	}
-	rec.Enqueue(trace.Trace{ID: "t1", Name: "chat", Output: "a"})
-	rec.Enqueue(trace.Trace{ID: "t2", Name: "chat", Output: "b"})
-	rec.EnqueueObservation(trace.Observation{TraceID: "t1", Name: "old", Kind: trace.KindSpan})
-	rec.EnqueueObservation(trace.Observation{TraceID: "t2", Name: "new", Kind: trace.KindSpan})
+	rec.Enqueue(TraceRecord{ID: "t1", Name: "chat", Output: "a"})
+	rec.Enqueue(TraceRecord{ID: "t2", Name: "chat", Output: "b"})
+	rec.EnqueueObservation(Observation{TraceID: "t1", Name: "old", Kind: KindSpan})
+	rec.EnqueueObservation(Observation{TraceID: "t2", Name: "new", Kind: KindSpan})
 
 	got, err := Recorded(rec)
 	if err != nil {
@@ -238,9 +236,9 @@ func TestRecorded(t *testing.T) {
 }
 
 func TestRecordedWithoutTraceIDKeepsAllObservations(t *testing.T) {
-	rec := trace.NewRecorder()
-	rec.Enqueue(trace.Trace{ID: "", Name: "chat", Output: "a"})
-	rec.EnqueueObservation(trace.Observation{Name: "search", Kind: trace.KindSpan})
+	rec := NewRecorder()
+	rec.Enqueue(TraceRecord{ID: "", Name: "chat", Output: "a"})
+	rec.EnqueueObservation(Observation{Name: "search", Kind: KindSpan})
 
 	got, err := Recorded(rec)
 	if err != nil {

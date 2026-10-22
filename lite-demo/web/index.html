@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lite-demo</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --text: #16181d;
+    --muted: #6b7280;
+    --line: #e5e7eb;
+    --accent: #2563eb;
+    --accent-text: #ffffff;
+    --code: #f3f4f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115;
+      --panel: #171a21;
+      --text: #e8eaed;
+      --muted: #9aa2ad;
+      --line: #262b35;
+      --accent: #3b82f6;
+      --accent-text: #ffffff;
+      --code: #1f242d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    justify-content: center;
+  }
+  .app {
+    width: 100%;
+    max-width: 760px;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel);
+    border-left: 1px solid var(--line);
+    border-right: 1px solid var(--line);
+  }
+  header {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  header h1 { font-size: 15px; margin: 0; }
+  header span { color: var(--muted); font-size: 13px; }
+  #log {
+    flex: 1;
+    overflow-y: auto;
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .msg { max-width: 88%; }
+  .msg.user { align-self: flex-end; }
+  .msg.system { align-self: center; color: var(--muted); font-size: 13px; }
+  .bubble {
+    border-radius: 14px;
+    padding: 10px 13px;
+    overflow-wrap: anywhere;
+  }
+  .user .bubble {
+    background: var(--accent);
+    color: var(--accent-text);
+    white-space: pre-wrap;
+  }
+  .assistant .bubble {
+    background: var(--code);
+  }
+  .tools {
+    margin-top: 6px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .markdown p { margin: 0 0 8px; }
+  .markdown > :last-child { margin-bottom: 0; }
+  .markdown h3, .markdown h4, .markdown h5, .markdown h6 {
+    margin: 12px 0 6px;
+    font-size: 15px;
+  }
+  .markdown ul { margin: 6px 0 8px; padding-left: 20px; }
+  .markdown li { margin: 2px 0; }
+  .markdown pre {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 12px;
+    overflow-x: auto;
+    margin: 8px 0;
+  }
+  .markdown code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+  }
+  .markdown :not(pre) > code {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 1px 5px;
+  }
+  .markdown a { color: var(--accent); }
+  #prompt {
+    padding: 0 18px;
+    display: none;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  #prompt.open { display: flex; }
+  #prompt button {
+    border: 1px solid var(--accent);
+    background: transparent;
+    color: var(--accent);
+    border-radius: 10px;
+    padding: 7px 14px;
+    font: inherit;
+    cursor: pointer;
+  }
+  #prompt button:hover { background: var(--accent); color: var(--accent-text); }
+  form {
+    display: flex;
+    gap: 8px;
+    padding: 14px 18px 18px;
+    border-top: 1px solid var(--line);
+  }
+  textarea {
+    flex: 1;
+    resize: none;
+    min-height: 44px;
+    max-height: 160px;
+    padding: 11px 12px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+  }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  form button {
+    border: 0;
+    border-radius: 12px;
+    padding: 0 18px;
+    background: var(--accent);
+    color: var(--accent-text);
+    font: inherit;
+    cursor: pointer;
+  }
+  form button:disabled, textarea:disabled { opacity: .55; cursor: default; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>lite-demo</h1>
+    <span>чат, инструменты и workflow</span>
+  </header>
+  <div id="log"></div>
+  <div id="prompt"></div>
+  <form id="composer">
+    <textarea id="input" rows="1" placeholder="Спросите про Go или попросите исследование"></textarea>
+    <button id="send" type="submit">Отправить</button>
+  </form>
+</div>
+
+<script>
+const USER = { id: "web", tenant: "acme", roles: ["support"] };
+
+let history = [];   // {role, content}: только user и assistant
+let pending = null; // {run_id, question}
+let busy = false;
+
+const log = document.getElementById("log");
+const promptBox = document.getElementById("prompt");
+const form = document.getElementById("composer");
+const input = document.getElementById("input");
+const sendButton = document.getElementById("send");
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+// inline размечает строку: код, жирный, курсив, ссылки. HTML уже экранирован,
+// поэтому модель не может вставить тег.
+function inline(s) {
+  const code = [];
+  let x = esc(s).replace(/`([^`]+)`/g, (_, c) => {
+    code.push(c);
+    return "\u0000" + (code.length - 1) + "\u0000";
+  });
+  x = x.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  x = x.replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>");
+  x = x.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+    '<a href="$2" target="_blank" rel="noreferrer noopener">$1</a>');
+  return x.replace(/\u0000(\d+)\u0000/g, (_, i) => "<code>" + code[+i] + "</code>");
+}
+
+function mdText(src) {
+  const out = [];
+  let para = [];
+  let list = null;
+  const flushPara = () => {
+    if (para.length) {
+      out.push("<p>" + inline(para.join(" ")) + "</p>");
+      para = [];
+    }
+  };
+  const flushList = () => {
+    if (list) {
+      out.push("<ul>" + list.map((li) => "<li>" + inline(li) + "</li>").join("") + "</ul>");
+      list = null;
+    }
+  };
+  for (const raw of src.split("\n")) {
+    const line = raw.trim();
+    if (!line) {
+      flushPara();
+      flushList();
+      continue;
+    }
+    const heading = /^(#{1,4})\s+(.*)$/.exec(line);
+    if (heading) {
+      flushPara();
+      flushList();
+      const level = Math.min(heading[1].length + 2, 6);
+      out.push("<h" + level + ">" + inline(heading[2]) + "</h" + level + ">");
+      continue;
+    }
+    const item = /^[-*]\s+(.*)$/.exec(line);
+    if (item) {
+      flushPara();
+      (list ||= []).push(item[1]);
+      continue;
+    }
+    flushList();
+    para.push(line);
+  }
+  flushPara();
+  flushList();
+  return out.join("");
+}
+
+// md рендерит сообщение ассистента: блоки кода отдаются как есть, остальное
+// абзацами и списками.
+function md(src) {
+  return String(src)
+    .split(/```/)
+    .map((part, i) => {
+      if (i % 2) {
+        const nl = part.indexOf("\n");
+        const body = nl >= 0 ? part.slice(nl + 1) : part;
+        return "<pre><code>" + esc(body.replace(/\n+$/, "")) + "</code></pre>";
+      }
+      return mdText(part);
+    })
+    .join("");
+}
+
+function add(role, text, calls) {
+  const wrap = document.createElement("div");
+  wrap.className = "msg " + role;
+  const bubble = document.createElement("div");
+  bubble.className = "bubble" + (role === "assistant" ? " markdown" : "");
+  if (role === "assistant") {
+    bubble.innerHTML = md(text);
+  } else {
+    bubble.textContent = text;
+  }
+  wrap.appendChild(bubble);
+  if (calls && calls.length) {
+    const tools = document.createElement("div");
+    tools.className = "tools";
+    tools.textContent = "инструменты: " + calls.map((c) => c.name).join(", ");
+    wrap.appendChild(tools);
+  }
+  log.appendChild(wrap);
+  log.scrollTop = log.scrollHeight;
+}
+
+function setBusy(value) {
+  busy = value;
+  sendButton.disabled = value;
+  input.disabled = value;
+}
+
+function showPrompt(question) {
+  promptBox.replaceChildren();
+  promptBox.classList.add("open");
+  if (question.input === "choice") {
+    for (const option of question.options || []) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = option;
+      button.onclick = () => reply(option);
+      promptBox.appendChild(button);
+    }
+    input.placeholder = "Выберите вариант выше или напишите свой";
+  } else {
+    input.placeholder = "Введите ответ";
+  }
+  input.focus();
+}
+
+function hidePrompt() {
+  promptBox.classList.remove("open");
+  promptBox.replaceChildren();
+  input.placeholder = "Спросите про Go или попросите исследование";
+}
+
+async function post(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  let data = {};
+  try {
+    data = await res.json();
+  } catch (_) {
+    data = {};
+  }
+  if (!res.ok) {
+    throw new Error("HTTP " + res.status + " " + (data.error || ""));
+  }
+  return data;
+}
+
+// handle показывает ответ сервиса: текст, вопрос и следующий шаг.
+function handle(data) {
+  if (data.answer) {
+    add("assistant", data.answer, data.tool_calls);
+    history.push({ role: "assistant", content: data.answer });
+  }
+  if (data.status === "awaiting_user" && data.question) {
+    pending = { run_id: data.run_id, question: data.question };
+    showPrompt(data.question);
+    return;
+  }
+  pending = null;
+  hidePrompt();
+}
+
+async function send(text) {
+  add("user", text);
+  history.push({ role: "user", content: text });
+  setBusy(true);
+  try {
+    handle(await post("/v1/chat", { user: USER, messages: history }));
+  } catch (err) {
+    add("system", "Ошибка: " + err.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
+// reply отправляет ответ пользователя прямо в приложение, минуя модель.
+async function reply(value) {
+  const current = pending;
+  if (!current) return;
+  pending = null;
+  hidePrompt();
+  add("user", value);
+  setBusy(true);
+  const body = { user: USER };
+  if (current.question.input === "choice") {
+    body.choice = value;
+  } else {
+    body.text = value;
+  }
+  try {
+    handle(await post("/v1/research/" + encodeURIComponent(current.run_id) + "/resume", body));
+  } catch (err) {
+    add("system", "Ошибка: " + err.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
+form.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const text = input.value.trim();
+  if (!text || busy) return;
+  input.value = "";
+  if (pending) {
+    reply(text);
+    return;
+  }
+  send(text);
+});
+
+input.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    form.requestSubmit();
+  }
+});
+
+add("system", "Начните с «Проведи исследование по go modules» или «Добавь ссылку на документацию».");
+</script>
+</body>
+</html>

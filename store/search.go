@@ -41,7 +41,7 @@ func ACLFilter(p core.Principal) (map[string]any, error) {
 				map[string]any{"term": map[string]any{TenantField: p.Tenant}},
 				map[string]any{"terms": map[string]any{ACLField: roles}},
 
-				map[string]any{"term": map[string]any{"quarantined": false}},
+				map[string]any{"term": map[string]any{QuarantineField: false}},
 			},
 		},
 	}, nil
@@ -58,11 +58,11 @@ type SearchQuery struct {
 	NumCandidates int
 	Filter        Filter
 	EmbedModel    string
-
-	filterQuery map[string]any
 }
 
-func (q SearchQuery) normalized() (SearchQuery, error) {
+// normalized returns a copy of q with the defaults and clamps applied; the
+// receiver is left untouched.
+func (q SearchQuery) normalized() SearchQuery {
 	if q.Index == "" {
 		q.Index = IndexChunks
 	}
@@ -81,15 +81,12 @@ func (q SearchQuery) normalized() (SearchQuery, error) {
 	if q.NumCandidates > MaxNumCandidates {
 		q.NumCandidates = MaxNumCandidates
 	}
-	compiled, err := CompileFilter(q.Filter)
-	if err != nil {
-		return q, err
-	}
-	q.filterQuery = compiled
-	return q, nil
+	return q
 }
 
-func (q SearchQuery) effectiveFilter() (map[string]any, error) {
+// effectiveFilter combines the ACL clause with the embed-model clause and the
+// compiled metadata filter into one query clause.
+func (q SearchQuery) effectiveFilter(filterQuery map[string]any) (map[string]any, error) {
 	acl, err := ACLFilter(q.Principal)
 	if err != nil {
 		return nil, err
@@ -98,8 +95,8 @@ func (q SearchQuery) effectiveFilter() (map[string]any, error) {
 	if q.EmbedModel != "" {
 		clauses = append(clauses, map[string]any{"term": map[string]any{EmbedModelField: q.EmbedModel}})
 	}
-	if q.filterQuery != nil {
-		clauses = append(clauses, q.filterQuery)
+	if filterQuery != nil {
+		clauses = append(clauses, filterQuery)
 	}
 	if len(clauses) == 1 {
 		return acl, nil
@@ -116,12 +113,12 @@ func (q SearchQuery) effectiveFilter() (map[string]any, error) {
 // filter clauses. TopK defaults to 10 and is clamped to MaxTopK; NumCandidates
 // defaults to max(TopK*10, 100) and is clamped to MaxNumCandidates.
 func MSearchNDJSON(q SearchQuery) ([]byte, error) {
-	var err error
-	q, err = q.normalized()
+	q = q.normalized()
+	compiled, err := CompileFilter(q.Filter)
 	if err != nil {
 		return nil, err
 	}
-	filter, err := q.effectiveFilter()
+	filter, err := q.effectiveFilter(compiled)
 	if err != nil {
 		return nil, err
 	}
@@ -130,13 +127,11 @@ func MSearchNDJSON(q SearchQuery) ([]byte, error) {
 	header := map[string]any{"index": q.Index}
 	knn := map[string]any{
 		"size": q.TopK,
-		"query": map[string]any{
-			"knn": map[string]any{
-				"field":          VectorField,
-				"query_vector":   q.Vector,
-				"num_candidates": q.NumCandidates,
-				"filter":         filter,
-			},
+		"knn": map[string]any{
+			"field":          VectorField,
+			"query_vector":   q.Vector,
+			"num_candidates": q.NumCandidates,
+			"filter":         filter,
 		},
 		"_source": source,
 	}
@@ -168,9 +163,11 @@ type msearchResponse struct {
 }
 
 type msearchItem struct {
-	Error  json.RawMessage `json:"error"`
-	Status int             `json:"status"`
-	Shards struct {
+	Error           json.RawMessage `json:"error"`
+	Status          int             `json:"status"`
+	TimedOut        bool            `json:"timed_out"`
+	TerminatedEarly bool            `json:"terminated_early"`
+	Shards          struct {
 		Failed int `json:"failed"`
 	} `json:"_shards"`
 	Hits struct {
@@ -183,8 +180,9 @@ type msearchItem struct {
 }
 
 // ParseMSearch decodes an _msearch response into one hit list per sub-query,
-// failing the whole call on any error branch or failed shard; both wrap
-// core.ErrProvider.
+// failing the whole call on any error branch, failed shard, timed-out shard, or
+// early-terminated branch; all wrap core.ErrProvider. A partial result is
+// never returned as a complete one.
 func ParseMSearch(body []byte) ([][]Hit, error) {
 	var parsed msearchResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
@@ -195,6 +193,12 @@ func ParseMSearch(body []byte) ([][]Hit, error) {
 		if len(r.Error) > 0 {
 			return nil, fmt.Errorf("store: msearch response %d failed with status %d: %s: %w",
 				i, r.Status, Snippet(r.Error), core.ErrProvider)
+		}
+		if r.TimedOut {
+			return nil, fmt.Errorf("store: msearch response %d timed out: %w", i, core.ErrProvider)
+		}
+		if r.TerminatedEarly {
+			return nil, fmt.Errorf("store: msearch response %d terminated early: %w", i, core.ErrProvider)
 		}
 		if r.Shards.Failed > 0 {
 			return nil, fmt.Errorf("store: msearch response %d had %d failed shards: %w",

@@ -46,7 +46,7 @@ func (s Structurer) Structure(ctx context.Context, prose string) (string, error)
 		mode = SchemaInline
 	}
 
-	msgs, native := schemaPlan(Request{
+	msgs, native := SchemaPlan(Request{
 		Messages:   []Message{{Role: RoleUser, Content: s.instruction()}},
 		JSONSchema: s.Schema,
 		SchemaMode: mode,

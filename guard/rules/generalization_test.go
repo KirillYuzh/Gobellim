@@ -246,16 +246,15 @@ func TestEveryPassportSpellingStillFires(t *testing.T) {
 	}
 }
 
-func TestCanonicalReNeutralisesUppercaseEscapes(t *testing.T) {
-	if got := guard.Canonicalize(`\S\W\B\D`); got != `\s\w\b\d` {
-		t.Fatalf("Canonicalize(%q) = %q, want the uppercase escapes case-folded away", `\S\W\B\D`, got)
-	}
-	re := canonicalRe(`[^\s]+`)
+func TestCompileRegexDoesNotCanonicalizeMeta(t *testing.T) {
+	// Regex metacharacters must NOT be canonicalized (B-02 fix).
+	// \S must remain \S, not become \s
+	re := compileRegex(`\S+`)
 	if got := re.FindString("abc"); got != "abc" {
-		t.Errorf("[^\\s]+ matched %q, want the whole word", got)
+		t.Errorf(`\S+ matched %q, want the whole word`, got)
 	}
 	if got := re.FindString("a c"); got != "a" {
-		t.Errorf("[^\\s]+ matched %q across the space, want it to stop at it", got)
+		t.Errorf(`\S+ matched %q across the space, want it to stop at it`, got)
 	}
 }
 

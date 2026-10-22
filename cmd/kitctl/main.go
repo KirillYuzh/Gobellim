@@ -46,7 +46,7 @@ func usage() {
                                       validate the local guard and embedder models
   verify parity --dir DIR [--fixtures DIR] [--min-agreement 1.0]
                                       run the guard parity gate over fixtures
-  verify latency --dir DIR [--iterations 200] [--warmup 20] [--max-chars 8000]
+  verify latency --dir DIR [--iterations 20] [--warmup 2] [--max-chars 8000]
                                       measure guard pipeline latency (L1 and L1+L2)
 `)
 }
@@ -138,7 +138,7 @@ func download(ctx context.Context, hc *http.Client, url, path string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	if _, err := io.Copy(f, io.LimitReader(resp.Body, 1<<30)); err != nil {
 		_ = f.Close()
 		_ = os.Remove(tmp)
 		return fmt.Errorf("write %s: %w", tmp, err)

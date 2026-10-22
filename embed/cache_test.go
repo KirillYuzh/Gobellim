@@ -482,3 +482,48 @@ func (f *shortEmbedder) Passages(_ context.Context, texts []string) ([][]float32
 	}
 	return vecs[:len(texts)-1], nil
 }
+
+type closableEmbedder struct {
+	countingEmbedder
+	closeErr error
+	closed   int
+}
+
+func (f *closableEmbedder) Close() error {
+	f.closed++
+	return f.closeErr
+}
+
+func TestCachedImplementsCloser(t *testing.T) {
+	var c any = mustCached(t, &countingEmbedder{model: "test-model", dim: 4}, 8)
+	if _, ok := c.(Closer); !ok {
+		t.Fatal("*CachedEmbedder must implement Closer: the wrapped embedder's Close would be unreachable")
+	}
+}
+
+func TestCachedCloseDelegatesToInner(t *testing.T) {
+	inner := &closableEmbedder{countingEmbedder: countingEmbedder{model: "test-model", dim: 4}}
+	c := mustCached(t, inner, 8)
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if inner.closed != 1 {
+		t.Fatalf("inner Close called %d times, want 1", inner.closed)
+	}
+}
+
+func TestCachedClosePropagatesInnerError(t *testing.T) {
+	boom := errors.New("ort session is busy")
+	inner := &closableEmbedder{countingEmbedder: countingEmbedder{model: "test-model", dim: 4}, closeErr: boom}
+	c := mustCached(t, inner, 8)
+	if err := c.Close(); !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want %v", err, boom)
+	}
+}
+
+func TestCachedCloseWithoutInnerCloserIsNoop(t *testing.T) {
+	c := mustCached(t, &countingEmbedder{model: "test-model", dim: 4}, 8)
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}

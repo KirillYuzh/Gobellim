@@ -34,6 +34,8 @@ type CachedEmbedder struct {
 	cache *cache.LRU[[]float32]
 }
 
+var _ Closer = (*CachedEmbedder)(nil)
+
 // NewCached wraps inner with an LRU cache of cfg.Size vectors. It returns
 // ErrInvalidConfig when inner is nil and skips caching when Size is not positive.
 func NewCached(inner Embedder, cfg CacheConfig) (*CachedEmbedder, error) {
@@ -52,6 +54,17 @@ func (c *CachedEmbedder) Model() string { return c.inner.Model() }
 
 // Dim returns the wrapped embedder's vector dimension.
 func (c *CachedEmbedder) Dim() int { return c.inner.Dim() }
+
+// Close releases the wrapped embedder's resources. It delegates to the inner
+// embedder when that embedder implements Closer, and does nothing otherwise:
+// the cache itself owns no resource. Without this the wrapped ONNX session
+// pool would stay open for the lifetime of the process.
+func (c *CachedEmbedder) Close() error {
+	if closer, ok := c.inner.(Closer); ok {
+		return closer.Close()
+	}
+	return nil
+}
 
 // Len reports the number of cached vectors; it is zero when caching is disabled.
 func (c *CachedEmbedder) Len() int {

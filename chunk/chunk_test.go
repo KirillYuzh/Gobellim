@@ -11,8 +11,8 @@ type runeTokenizer struct{}
 func (runeTokenizer) Tokens(text string) []Token {
 	var toks []Token
 	i := 0
-	for _, r := range text {
-		toks = append(toks, Token{Text: string(r), Start: i, End: i + 1})
+	for range text {
+		toks = append(toks, Token{Start: i, End: i + 1})
 		i++
 	}
 	return toks
@@ -76,7 +76,7 @@ func TestWhitespaceTokenizerOffsets(t *testing.T) {
 	if len(toks) != 3 {
 		t.Fatalf("tokens = %v", toks)
 	}
-	if toks[0].Text != "мама" || toks[1].Start != 5 {
+	if toks[0].Start != 0 || toks[1].Start != 5 {
 		t.Fatalf("unexpected offsets: %+v", toks)
 	}
 
@@ -85,5 +85,38 @@ func TestWhitespaceTokenizerOffsets(t *testing.T) {
 	}
 	if utf8.RuneCountInString("мама") != 4 {
 		t.Fatal("sanity")
+	}
+}
+
+// brokenTokenizer reports offsets outside the text. Tokenizer is a public
+// interface, so a broken implementation must not crash the process.
+type brokenTokenizer struct{ toks []Token }
+
+func (b brokenTokenizer) Tokens(string) []Token { return b.toks }
+
+func TestSplitSurvivesBrokenOffsets(t *testing.T) {
+	cases := []struct {
+		name string
+		toks []Token
+	}{
+		{"start past the end", []Token{{Start: 1000, End: 2000}}},
+		{"negative offsets", []Token{{Start: -5, End: -1}}},
+		{"end before start", []Token{{Start: 2, End: 1}}},
+		{"zero length", []Token{{Start: 1, End: 1}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := New(brokenTokenizer{toks: tc.toks}, 4, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The call must return, not panic.
+			got := c.Split("abc")
+			for _, g := range got {
+				if !utf8.ValidString(g) {
+					t.Fatalf("chunk %q is not valid UTF-8", g)
+				}
+			}
+		})
 	}
 }

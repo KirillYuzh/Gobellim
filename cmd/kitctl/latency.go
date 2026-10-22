@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"os/exec"
 	"runtime"
 	"sort"
 	"strconv"
@@ -53,6 +52,7 @@ func runVerifyLatency(args []string) int {
 	warmup := fs.Int("warmup", 2, "warmup passes over the corpus, discarded")
 	maxChars := fs.Int("max-chars", guard.DefaultMaxChars, "longest corpus item and guard truncation limit, in runes")
 	window := fs.Int("window", guard.DefaultWindowChars, "detection window in runes; longer text is scanned in overlapping windows of this size")
+	guardModel := fs.String("guard-model", defaultGuardModel, "guard L2 model name")
 	if _, err := parseInterleaved(fs, args); err != nil {
 		return 2
 	}
@@ -66,11 +66,11 @@ func runVerifyLatency(args []string) int {
 	baselineRSS, rssSource := rssMB()
 
 	var l2Note string
-	if det, err := newL2Detector(*dir, defaultGuardModel); err != nil {
+	if det, err := newL2Detector(*dir, *guardModel); err != nil {
 		l2Note = fmt.Sprintf("L1+L2 not measured: %v", err)
 	} else {
 		configs = append(configs, latencyConfig{name: "L1+L2", layers: []guard.Detector{rules.New(), det}})
-		l2Note = fmt.Sprintf("L1+L2 measured from %s/%s", *dir, defaultGuardModel)
+		l2Note = fmt.Sprintf("L1+L2 measured from %s/%s", *dir, *guardModel)
 	}
 
 	ctx := context.Background()
@@ -188,12 +188,6 @@ func percentile(sorted []float64, p float64) float64 {
 }
 
 func rssMB() (float64, string) {
-	out, err := exec.Command("ps", "-o", "rss=", "-p", strconv.Itoa(os.Getpid())).Output()
-	if err == nil {
-		if kb, perr := strconv.ParseFloat(strings.TrimSpace(string(out)), 64); perr == nil && kb > 0 {
-			return kb / 1024, "ps -o rss="
-		}
-	}
 	var ru syscall.Rusage
 	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &ru); err == nil && ru.Maxrss > 0 {
 		if runtime.GOOS == "darwin" {

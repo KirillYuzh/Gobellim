@@ -63,7 +63,7 @@ func NewLocal(cfg LocalConfig) (Embedder, error) {
 		}
 	}
 
-	preset, err := resolveLocalPreset(dir, cfg.Model)
+	preset, err := resolvePresetFromDir(dir, cfg.Model)
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +275,7 @@ func (e *localEmbedder) runBatch(ctx context.Context, texts []string) ([][]float
 			}
 		}
 		if e.preset.Normalize {
-			normalizeL2(vec)
+			NormalizeL2(vec)
 		}
 		vectors[k] = vec
 	}
@@ -300,29 +300,6 @@ type session struct {
 }
 
 func (s *session) Close() error { return s.inner.Destroy() }
-
-func resolveLocalPreset(dir, model string) (Preset, error) {
-	fileCfg := filepath.Join(dir, "kit_embedder.json")
-	if _, err := os.Stat(fileCfg); err == nil {
-		p, lerr := LoadFileConfig(fileCfg)
-		if lerr != nil {
-			return Preset{}, lerr
-		}
-		if verr := p.Validate(); verr != nil {
-			return Preset{}, verr
-		}
-		return p, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return Preset{}, invalidConfig(fmt.Errorf("stat %s: %w", fileCfg, err))
-	}
-	if p, ok := PresetFor(model); ok {
-		if verr := p.Validate(); verr != nil {
-			return Preset{}, verr
-		}
-		return p, nil
-	}
-	return Preset{}, invalidConfig(fmt.Errorf("no preset for model %q and no kit_embedder.json in %s", model, dir))
-}
 
 func inspectGraph(modelPath string, opts *orts.SessionOptions) (inputs, outputs []string, direct, useType bool, dim int, err error) {
 	infos, outInfos, gerr := orts.GetInputOutputInfoWithOptions(modelPath, opts)
@@ -404,16 +381,27 @@ func (c LocalConfig) withDefaults() LocalConfig {
 	return c
 }
 
+// ortEnv guards the process-global ONNX Runtime environment.
+var ortEnv onceInit
+
+// initEnvironment initializes the ONNX Runtime environment. The environment is
+// process-global, so concurrent NewLocal calls must not race to initialize it:
+// the first caller initializes it and every caller sees the same result.
 func initEnvironment() error {
+	return ortEnv.do(initializeEnvironment)
+}
+
+func initializeEnvironment() error {
 	lib := os.Getenv("KIT_ORT_LIB")
 	if lib == "" {
 		lib = defaultLibPath()
 	}
 	orts.SetSharedLibraryPath(lib)
-	if !orts.IsInitialized() {
-		if err := orts.InitializeEnvironment(); err != nil {
-			return fmt.Errorf("ort init: %w", err)
-		}
+	if orts.IsInitialized() {
+		return nil
+	}
+	if err := orts.InitializeEnvironment(); err != nil {
+		return fmt.Errorf("ort init: %w", err)
 	}
 	return nil
 }

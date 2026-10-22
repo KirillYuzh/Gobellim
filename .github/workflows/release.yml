@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  GO_VERSION: "1.24"
+  GO_VERSION: "1.26"
   # v1.12.0 requires Go 1.26; v1.9.0 is the newest line that builds on 1.24.
   CYCLONEDX_GOMOD_VERSION: "v1.9.0"
 
@@ -30,7 +30,7 @@ jobs:
           go install "github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@${CYCLONEDX_GOMOD_VERSION}"
           bin="$(go env GOPATH)/bin/cyclonedx-gomod"
           "$bin" mod -json -output sbom-core.cdx.json .
-          for d in mcp webfetch flow eval kittest cmd demo scripts; do
+          for d in mcp webfetch flow eval kittest cmd scripts plugins/elasticsearch plugins/gigachat plugins/otel; do
             (cd "$d" && "$bin" mod -json -output "../sbom-$d.cdx.json" .)
           done
           ls -l sbom-*.cdx.json

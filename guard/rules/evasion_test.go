@@ -154,7 +154,11 @@ func TestSNILSAcceptsUnicodeDashes(t *testing.T) {
 }
 
 func TestNoUnsafeDetectorAtL1(t *testing.T) {
-	for _, m := range matchers {
+	d, err := NewDetector()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range d.matchers {
 		if m.category == guard.CatUnsafe {
 			t.Fatalf("matcher %q emits UNSAFE at L1: add corpus cases and thresholds in the same change", m.label)
 		}

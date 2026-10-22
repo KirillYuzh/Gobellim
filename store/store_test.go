@@ -34,9 +34,17 @@ func TestChunksIndexBodyUsesDims(t *testing.T) {
 }
 
 func TestTemplatesAreDataStreams(t *testing.T) {
+	traces, err := TracesTemplateBody()
+	if err != nil {
+		t.Fatal(err)
+	}
+	observations, err := ObservationsTemplateBody()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, body := range map[string][]byte{
-		"traces":       TracesTemplateBody(),
-		"observations": ObservationsTemplateBody(),
+		"traces":       traces,
+		"observations": observations,
 	} {
 		var parsed map[string]any
 		if err := json.Unmarshal(body, &parsed); err != nil {
@@ -56,13 +64,21 @@ func TestTemplateDeclaredFields(t *testing.T) {
 		}
 		return parsed["template"].(map[string]any)["mappings"].(map[string]any)["properties"].(map[string]any)
 	}
-	traces := props(TracesTemplateBody())
+	tracesBody, err := TracesTemplateBody()
+	if err != nil {
+		t.Fatal(err)
+	}
+	observationsBody, err := ObservationsTemplateBody()
+	if err != nil {
+		t.Fatal(err)
+	}
+	traces := props(tracesBody)
 	for _, f := range []string{"kind", "score", "comment", "guard_version", "guard_model", "policy_hash", "text_policy"} {
 		if _, ok := traces[f]; !ok {
 			t.Fatalf("traces template missing %q", f)
 		}
 	}
-	obs := props(ObservationsTemplateBody())
+	obs := props(observationsBody)
 	for _, f := range []string{"guard_version", "guard_model", "policy_hash", "text_policy", "tags"} {
 		if _, ok := obs[f]; !ok {
 			t.Fatalf("observations template missing %q", f)
@@ -94,7 +110,7 @@ func TestBulkBodyNDJSON(t *testing.T) {
 }
 
 func TestValidateChunk(t *testing.T) {
-	base := Chunk{ID: "c1", DocID: "d1", Tenant: "t1", Text: "hi", Vector: []float32{1, 0}}
+	base := Chunk{ID: "c1", DocID: "d1", Tenant: "t1", ACL: []string{"support"}, Text: "hi", Vector: []float32{1, 0}}
 	if err := ValidateChunk(base, 2); err != nil {
 		t.Fatalf("valid chunk rejected: %v", err)
 	}
@@ -106,7 +122,7 @@ func TestValidateChunk(t *testing.T) {
 	if err := ValidateChunk(noVec, 2); !errors.Is(err, core.ErrInvalidArgs) {
 		t.Fatalf("non-quarantine chunk without vector must fail, got %v", err)
 	}
-	q := Chunk{ID: "q1", DocID: "d1", Tenant: "t1", Quarantine: true}
+	q := Chunk{ID: "q1", DocID: "d1", Tenant: "t1", ACL: []string{"support"}, Quarantine: true}
 	if err := ValidateChunk(q, 2); err != nil {
 		t.Fatalf("clean quarantine chunk rejected: %v", err)
 	}
@@ -147,6 +163,9 @@ func TestACLFilterDenyByDefault(t *testing.T) {
 	}
 	if !strings.Contains(s, `"acl":["support","admin"]`) {
 		t.Fatalf("roles filter missing: %s", s)
+	}
+	if !strings.Contains(s, `"`+QuarantineField+`":false`) {
+		t.Fatalf("quarantine filter missing: %s", s)
 	}
 
 	emptyACL, err := ACLFilter(core.Principal{Tenant: "t1"})
@@ -222,10 +241,7 @@ func TestMSearchNDJSONAppliesFilter(t *testing.T) {
 }
 
 func TestNormalizedClamps(t *testing.T) {
-	got, err := SearchQuery{TopK: 5000, NumCandidates: 99999}.normalized()
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := SearchQuery{TopK: 5000, NumCandidates: 99999}.normalized()
 	if got.TopK != MaxTopK {
 		t.Fatalf("TopK = %d, want %d", got.TopK, MaxTopK)
 	}
@@ -233,12 +249,20 @@ func TestNormalizedClamps(t *testing.T) {
 		t.Fatalf("NumCandidates = %d, want %d", got.NumCandidates, MaxNumCandidates)
 	}
 
-	def, err := SearchQuery{}.normalized()
-	if err != nil {
-		t.Fatal(err)
-	}
+	def := SearchQuery{}.normalized()
 	if def.TopK != DefaultTopK || def.NumCandidates != 100 {
 		t.Fatalf("defaults = TopK %d NumCandidates %d", def.TopK, def.NumCandidates)
+	}
+}
+
+func TestNormalizedLeavesReceiverUntouched(t *testing.T) {
+	q := SearchQuery{TopK: 5, NumCandidates: 7, Index: "other"}
+	got := q.normalized()
+	if q.TopK != 5 || q.NumCandidates != 7 || q.Index != "other" {
+		t.Fatalf("normalized mutated the receiver: %+v", q)
+	}
+	if got.Index != "other" || got.TopK != 5 || got.NumCandidates != 7 {
+		t.Fatalf("normalized copy = %+v", got)
 	}
 }
 
@@ -438,6 +462,51 @@ func TestMSearchNDJSONFiltersByEmbedModel(t *testing.T) {
 		}
 		if !strings.Contains(lines[i], `"acl":["support"]`) {
 			t.Fatalf("line %d must still carry the ACL filter: %s", i, lines[i])
+		}
+	}
+}
+
+func TestParseMSearchTimedOut(t *testing.T) {
+	body := `{"responses":[{"timed_out":true,"hits":{"hits":[{"_id":"a","_score":1}]}}]}`
+	if _, err := ParseMSearch([]byte(body)); !errors.Is(err, core.ErrProvider) {
+		t.Fatalf("timed out msearch must fail with ErrProvider, got %v", err)
+	}
+}
+
+func TestParseMSearchTerminatedEarly(t *testing.T) {
+	body := `{"responses":[{"terminated_early":true,"hits":{"hits":[]}}]}`
+	if _, err := ParseMSearch([]byte(body)); !errors.Is(err, core.ErrProvider) {
+		t.Fatalf("terminated early msearch must fail with ErrProvider, got %v", err)
+	}
+}
+
+func TestMSearchNDJSONRejectsInvalidFilter(t *testing.T) {
+	_, err := MSearchNDJSON(SearchQuery{
+		Text:      "hello",
+		Vector:    []float32{1, 2, 3},
+		Principal: core.Principal{Tenant: "t1", Roles: []string{"support"}},
+		Filter:    Filter{"unknown_field": "x"},
+	})
+	if !errors.Is(err, core.ErrInvalidArgs) {
+		t.Fatalf("invalid filter must fail with ErrInvalidArgs, got %v", err)
+	}
+}
+
+func TestMSearchNDJSONAppliesFilterOnce(t *testing.T) {
+	body, err := MSearchNDJSON(SearchQuery{
+		Text:      "hello",
+		Vector:    []float32{1, 2, 3},
+		Principal: core.Principal{Tenant: "t1", Roles: []string{"support"}},
+		TopK:      5,
+		Filter:    Filter{"doc_id": "d1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
+	for _, i := range []int{1, 3} {
+		if n := strings.Count(lines[i], `"doc_id":"d1"`); n != 1 {
+			t.Fatalf("line %d must carry the filter exactly once, got %d: %s", i, n, lines[i])
 		}
 	}
 }

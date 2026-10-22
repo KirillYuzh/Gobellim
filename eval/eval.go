@@ -8,29 +8,25 @@ import (
 	"time"
 
 	"github.com/KirillYuzh/Gobellim/internal/core"
-	"github.com/KirillYuzh/Gobellim/trace"
 )
 
-// Trace is one recorded trace together with the observations that belong to it.
+// Trace is one recorded trace together with its observations.
 type Trace struct {
-	Trace        trace.Trace
-	Observations []trace.Observation
+	Trace        TraceRecord
+	Observations []Observation
 }
 
-// Check inspects a recorded trace and returns a non-nil error when it fails.
-type Check func(t Trace) error
+// Check inspects a trace and returns an error on failure.
+type Check func(Trace) error
 
-// Case is one eval scenario: an input to run and the checks to apply to the
-// trace it produces. Metadata is carried through untouched for the caller.
+// Case is one eval scenario: an input to run and the checks to apply.
 type Case struct {
-	Name     string
-	Input    string
-	Checks   []Check
-	Metadata map[string]any
+	Name   string
+	Input  string
+	Checks []Check
 }
 
-// Result is the outcome of one Case: the pass/fail verdict, any joined check
-// failure, the recorded trace, and the elapsed time.
+// Result is the outcome of one Case.
 type Result struct {
 	Name    string
 	Passed  bool
@@ -39,10 +35,8 @@ type Result struct {
 	Elapsed time.Duration
 }
 
-// Run executes each case sequentially, resetting rec before every case, and
-// returns one Result per case. A failing run function or check is reported in
-// the Result rather than aborting the batch.
-func Run(ctx context.Context, rec *trace.Recorder, cases []Case,
+// Run executes each case sequentially, resetting rec before every case.
+func Run(ctx context.Context, rec *Recorder, cases []Case,
 	run func(ctx context.Context, input string) error,
 ) []Result {
 	results := make([]Result, 0, len(cases))
@@ -52,7 +46,7 @@ func Run(ctx context.Context, rec *trace.Recorder, cases []Case,
 	return results
 }
 
-func runCase(ctx context.Context, rec *trace.Recorder, c Case,
+func runCase(ctx context.Context, rec *Recorder, c Case,
 	run func(ctx context.Context, input string) error,
 ) Result {
 	start := time.Now()
@@ -90,7 +84,7 @@ func runCase(ctx context.Context, rec *trace.Recorder, c Case,
 	var failures []error
 	for i, check := range c.Checks {
 		if check == nil {
-			failures = append(failures, fmt.Errorf("eval: trace %s: check %d is nil", identify(t), i))
+			failures = append(failures, fmt.Errorf("eval: trace %s: check %d is nil", traceID(t), i))
 			continue
 		}
 		if cerr := check(t); cerr != nil {
@@ -103,10 +97,8 @@ func runCase(ctx context.Context, rec *trace.Recorder, c Case,
 	return res
 }
 
-// Recorded returns the last trace from rec's snapshot together with its
-// observations. It returns core.ErrInvalidConfig for a nil recorder and
-// core.ErrNotFound when nothing was recorded.
-func Recorded(rec *trace.Recorder) (Trace, error) {
+// Recorded returns the last record from rec's snapshot with its observations.
+func Recorded(rec *Recorder) (Trace, error) {
 	if rec == nil {
 		return Trace{}, fmt.Errorf("eval: no recorder: %w", core.ErrInvalidConfig)
 	}
@@ -115,7 +107,7 @@ func Recorded(rec *trace.Recorder) (Trace, error) {
 		return Trace{}, fmt.Errorf("eval: no trace recorded: %w", core.ErrNotFound)
 	}
 	last := snap.Traces[len(snap.Traces)-1]
-	obs := make([]trace.Observation, 0, len(snap.Observations))
+	obs := make([]Observation, 0, len(snap.Observations))
 	for _, o := range snap.Observations {
 		if last.ID == "" || o.TraceID == last.ID {
 			obs = append(obs, o)
@@ -124,13 +116,13 @@ func Recorded(rec *trace.Recorder) (Trace, error) {
 	return Trace{Trace: last, Observations: obs}, nil
 }
 
-// Report aggregates the results of an eval run with passed and failed counts.
+// Report aggregates eval results.
 type Report struct {
 	Total, Passed, Failed int
 	Results               []Result
 }
 
-// Summarize counts passed and failed results into a Report.
+// Summarize counts passed and failed results.
 func Summarize(results []Result) Report {
 	r := Report{Total: len(results), Results: results}
 	for _, res := range results {
@@ -143,11 +135,10 @@ func Summarize(results []Result) Report {
 	return r
 }
 
-// OK reports whether no result failed.
+// OK reports whether all cases passed.
 func (r Report) OK() bool { return r.Failed == 0 }
 
-// String renders one line per result, "PASS name" or "FAIL name: error", and
-// deliberately omits input and output text.
+// String renders one line per result.
 func (r Report) String() string {
 	var b strings.Builder
 	for i, res := range r.Results {
@@ -175,15 +166,14 @@ func oneLine(s string) string {
 	return s
 }
 
-func identify(t Trace) string {
-	switch {
-	case t.Trace.ID != "":
+func traceID(t Trace) string {
+	if t.Trace.ID != "" {
 		return t.Trace.ID
-	case t.Trace.Name != "":
-		return t.Trace.Name
-	default:
-		return "<unknown>"
 	}
+	if t.Trace.Name != "" {
+		return t.Trace.Name
+	}
+	return "<unknown>"
 }
 
 func output(t Trace) string { return t.Trace.Output }

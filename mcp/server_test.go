@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/KirillYuzh/Gobellim"
+	"github.com/KirillYuzh/Gobellim/authz"
+	"github.com/KirillYuzh/Gobellim/guard"
 )
 
 func echoServer(t *testing.T, handler func(ctx context.Context, args json.RawMessage) (string, error)) *Server {
@@ -133,7 +135,7 @@ func TestServerRejectsBrowserOrigin(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	req, err := http.NewRequest(http.MethodPost, ts.URL, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, ts.URL, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +149,7 @@ func TestServerRejectsBrowserOrigin(t *testing.T) {
 		t.Fatalf("status = %d, want 403", resp.StatusCode)
 	}
 
-	get, err := http.NewRequest(http.MethodGet, ts.URL, nil)
+	get, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,14 +167,31 @@ type echoIn struct {
 	Msg string `json:"msg"`
 }
 
-func TestFromToolRunsThroughTheCallPath(t *testing.T) {
-	app := testApp(t)
-	def, err := kit.Tool(app, "echo", func(_ context.Context, in echoIn) (string, error) {
-		return in.Msg, nil
-	}, kit.Desc("echo"))
+func testAppWithTools(t *testing.T, ts *gobellim.ToolSet) *gobellim.App {
+	t.Helper()
+	policy, err := authz.Parse(strings.NewReader("version: 1\ndefault: deny\nroles:\n  user:\n    permissions:\n      - \"*\"\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	app, err := gobellim.New(context.Background(), gobellim.Config{ES: nopES{}, LLM: nopLLM{}, Policy: policy, GuardL2: guard.L1Only(), Tools: ts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = app.Close(context.Background()) })
+	return app
+}
+
+func TestFromToolRunsThroughTheCallPath(t *testing.T) {
+	def := gobellim.Tool("echo", func(_ context.Context, in echoIn) (string, error) {
+		return in.Msg, nil
+	}, gobellim.Desc("echo"))
+	reg := gobellim.NewRegistry()
+	reg.Register(def)
+	ts, err := reg.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := testAppWithTools(t, ts)
 	srv, err := NewServer(ServerConfig{Name: "kit", Tools: []ServerTool{FromTool(app, def)}})
 	if err != nil {
 		t.Fatal(err)
@@ -180,7 +199,7 @@ func TestFromToolRunsThroughTheCallPath(t *testing.T) {
 
 	payload := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{"msg":"hi"}}}`)
 
-	authorized := kit.WithPrincipal(context.Background(), kit.Principal{UserID: "u", Roles: []string{"user"}, Tenant: "t"})
+	authorized := gobellim.WithPrincipal(context.Background(), gobellim.Principal{UserID: "u", Roles: []string{"user"}, Tenant: "t"})
 	res := srv.handle(authorized, payload)
 	if res == nil || res.Error != nil {
 		t.Fatalf("authorized call failed: %+v", res)

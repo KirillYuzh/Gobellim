@@ -3,6 +3,7 @@
 package gliner
 
 import (
+	"container/list"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -31,6 +34,18 @@ const DefaultSessions = 2
 // DefaultMaxTokens is the default cap on tokens in the L2 tensor input.
 const DefaultMaxTokens = 512
 
+func loadModelConfig(path string) (modelConfig, error) {
+	var mc modelConfig
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return mc, fmt.Errorf("read config %s: %w", path, err)
+	}
+	if err := json.Unmarshal(raw, &mc); err != nil {
+		return mc, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	return mc, nil
+}
+
 // Config configures the L2 detector: model directory and name, session pool
 // size and wait, and the token cap; zero values get defaults.
 type Config struct {
@@ -49,6 +64,7 @@ type Detector struct {
 	wordRe    *regexp.Regexp
 	tk        *tokenizers.Tokenizer
 	pool      *ort.Pool
+	cache     *lruCache
 }
 
 // Health reports pool capacity and in-use sessions, or that the pool is not ready.
@@ -159,7 +175,7 @@ func New(cfg Config) (*Detector, error) {
 		abort()
 		return nil, unavailable(err)
 	}
-	return &Detector{cfg: mc, maxTokens: maxTokens, wordRe: wordRe, tk: tk, pool: pool}, nil
+	return &Detector{cfg: mc, maxTokens: maxTokens, wordRe: wordRe, tk: tk, pool: pool, cache: newLRUCache(1024)}, nil
 }
 
 // VerifyDir checks the model files and config, then constructs and closes a
@@ -188,10 +204,14 @@ func (*Detector) UsesNaturalText() bool { return true }
 
 // Detect tokenises text into words, runs one inference, and converts entity
 // spans and classification labels into findings; inference errors are wrapped
-// as ErrGuardUnavailable.
+// as ErrGuardUnavailable. Results are cached by text hash to avoid re-running
+// on repeated messages (e.g., history replay).
 func (d *Detector) Detect(ctx context.Context, text string) ([]guard.Finding, error) {
 	if text == "" {
 		return nil, nil
+	}
+	if fs, ok := d.cache.Get(text); ok {
+		return fs, nil
 	}
 	p := d.prepare(text)
 	sess, err := d.acquire(ctx)
@@ -203,7 +223,9 @@ func (d *Detector) Detect(ctx context.Context, text string) ([]guard.Finding, er
 	if err != nil {
 		return nil, unavailable(fmt.Errorf("inference: %w", err))
 	}
-	return d.findings(p, out), nil
+	fs := d.findings(p, out)
+	d.cache.Add(text, fs)
+	return fs, nil
 }
 
 func (d *Detector) acquire(ctx context.Context) (*session, error) {
@@ -229,20 +251,25 @@ type session struct {
 
 func (s *session) Close() error { return s.inner.Destroy() }
 
-type prepared struct {
-	runes     []rune
-	words     []word
-	nRunes    int
-	inputIDs  []int64
-	wordFirst []int64
-	attn      []int64
+func (d *Detector) splitWords(text string) []word {
+	matches := d.wordRe.FindAllStringIndex(text, -1)
+	out := make([]word, 0, len(matches))
+	for _, m := range matches {
+		raw := text[m[0]:m[1]]
+		start := utf8.RuneCountInString(text[:m[0]])
+		out = append(out, word{
+			token: strings.ToLower(raw),
+			start: start,
+			end:   start + utf8.RuneCountInString(raw),
+		})
+	}
+	return out
 }
 
 func (d *Detector) prepare(text string) *prepared {
 	norm := normalizeText(text)
 	runes := []rune(norm)
 	words := d.splitWords(norm)
-
 	limit := d.maxTokens
 	if limit < 1 {
 		limit = DefaultMaxTokens
@@ -268,20 +295,16 @@ func (d *Detector) prepare(text string) *prepared {
 	for i := range attn {
 		attn[i] = 1
 	}
+	// nRunes must match the normalized text (what runes/words are based on),
+	// not the original text. Otherwise spans are off by 1 when normalizeText adds ".".
 	return &prepared{
 		runes:     runes,
 		words:     words,
-		nRunes:    utf8.RuneCountInString(text),
+		nRunes:    len(runes),
 		inputIDs:  seq,
 		wordFirst: first,
 		attn:      attn,
 	}
-}
-
-type outputs struct {
-	spanProbs   []float32
-	countLogits []float32
-	clsLogits   [][]float32
 }
 
 type tensorSet struct {
@@ -438,144 +461,53 @@ func (d *Detector) categoryForClass(group int, label string) (guard.Category, bo
 	return categoryForClass(d.cfg.CategoryMap, task, label)
 }
 
-type classification struct {
-	Task                  string             `json:"task"`
-	Labels                []string           `json:"labels"`
-	MultiLabel            bool               `json:"multi_label"`
-	Activation            string             `json:"activation"`
-	Output                string             `json:"output"`
-	ClsThreshold          float64            `json:"cls_threshold"`
-	Threshold             float64            `json:"threshold"`
-	Thresholds            map[string]float64 `json:"thresholds"`
-	SchemaMarkerPositions []int64            `json:"schema_marker_positions"`
+// lruCache is a simple thread-safe LRU cache for detector results.
+// It avoids re-running inference on identical text (e.g., history replay).
+type lruCache struct {
+	mu       sync.Mutex
+	capacity int
+	list     *list.List
+	items    map[string]*list.Element
 }
 
-func (c *classification) activation() string {
-	if c.Activation == "" {
-		return "softmax"
-	}
-	return c.Activation
+type lruEntry struct {
+	key   string
+	value []guard.Finding
 }
 
-func (c *classification) outputName() string {
-	if c.Output == "" {
-		return "cls_logits"
+func newLRUCache(capacity int) *lruCache {
+	return &lruCache{
+		capacity: capacity,
+		list:     list.New(),
+		items:    make(map[string]*list.Element, capacity),
 	}
-	return c.Output
 }
 
-func (c *classification) thresholdFor(label string) float64 {
-	return thresholdFor(c.ClsThreshold, c.Threshold, c.Thresholds, label)
+func (c *lruCache) Get(key string) ([]guard.Finding, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if el, ok := c.items[key]; ok {
+		c.list.MoveToFront(el)
+		return el.Value.(*lruEntry).value, true
+	}
+	return nil, false
 }
 
-type modelConfig struct {
-	PrefixIDs   []int64           `json:"prefix_ids"`
-	CategoryMap map[string]string `json:"category_map"`
-	Prompt      struct {
-		PrefixIDs []int64 `json:"prefix_ids"`
-	} `json:"prompt"`
-	MaxSequenceLength int `json:"max_sequence_length"`
-	MaxWidth          int `json:"max_width"`
-	CountMax          int `json:"count_max"`
-	Schema            struct {
-		Entities struct {
-			Labels                []string           `json:"labels"`
-			Thresholds            map[string]float64 `json:"thresholds"`
-			SchemaMarkerPositions []int64            `json:"schema_marker_positions"`
-		} `json:"entities"`
-		Classifications []classification `json:"classifications"`
-	} `json:"schema"`
-	Decode struct {
-		DefaultSpanThreshold float64 `json:"default_span_threshold"`
-	} `json:"decode"`
-}
-
-func (c *modelConfig) classOutputs() []string {
-	out := make([]string, 0, len(c.Schema.Classifications))
-	for i := range c.Schema.Classifications {
-		out = append(out, c.Schema.Classifications[i].outputName())
+func (c *lruCache) Add(key string, value []guard.Finding) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if el, ok := c.items[key]; ok {
+		c.list.MoveToFront(el)
+		el.Value.(*lruEntry).value = value
+		return
 	}
-	return out
-}
-
-func (c *modelConfig) classSchemaIndices() []int64 {
-	groups := c.Schema.Classifications
-	if len(groups) == 0 || len(groups[0].SchemaMarkerPositions) == 0 {
-		return nil
-	}
-	out := []int64{groups[0].SchemaMarkerPositions[0]}
-	for i := range groups {
-		if len(groups[i].SchemaMarkerPositions) == 0 {
-			continue
-		}
-		out = append(out, groups[i].SchemaMarkerPositions[1:]...)
-	}
-	return out
-}
-
-func (c *modelConfig) validate() error {
-	switch {
-	case len(c.PrefixIDs) == 0:
-		return errors.New("config: prompt prefix_ids is empty")
-	case c.MaxSequenceLength < 0:
-		return errors.New("config: max_sequence_length is negative")
-	case c.MaxWidth < 1:
-		return errors.New("config: max_width is not set")
-	case c.CountMax < 1:
-		return errors.New("config: count_max is not set")
-	case c.Decode.DefaultSpanThreshold <= 0:
-		return errors.New("config: default_span_threshold is not set")
-	case len(c.Schema.Entities.Labels) == 0:
-		return errors.New("config: entity labels are empty")
-	case len(c.Schema.Entities.SchemaMarkerPositions) != len(c.Schema.Entities.Labels)+1:
-		return errors.New("config: entity schema_marker_positions do not match labels")
-	case len(c.Schema.Classifications) == 0:
-		return errors.New("config: at least one classification group is required")
-	}
-	seen := make(map[string]int, len(c.Schema.Classifications))
-	for i := range c.Schema.Classifications {
-		cls := &c.Schema.Classifications[i]
-		switch {
-		case len(cls.Labels) == 0:
-			return fmt.Errorf("config: classification %d labels are empty", i)
-		case len(cls.SchemaMarkerPositions) != len(cls.Labels)+1:
-			return fmt.Errorf("config: classification %d schema_marker_positions do not match labels", i)
-		case cls.Activation != "" && cls.Activation != "softmax" && cls.Activation != "sigmoid":
-			return fmt.Errorf("config: classification %d activation %q is not softmax or sigmoid", i, cls.Activation)
-		case cls.MultiLabel && cls.activation() != "sigmoid":
-			return fmt.Errorf("config: classification %d sets multi_label without sigmoid activation", i)
-		}
-		out := cls.outputName()
-		if prev, ok := seen[out]; ok {
-			return fmt.Errorf("config: classification %d output %q duplicates classification %d", i, out, prev)
-		}
-		seen[out] = i
-	}
-	for label, cat := range c.CategoryMap {
-		if categoryIsSafe(cat) {
-			continue
-		}
-		if _, ok := parseCategory(cat); !ok {
-			return fmt.Errorf("config: category_map[%q] has unknown category %q", label, cat)
+	el := c.list.PushFront(&lruEntry{key: key, value: value})
+	c.items[key] = el
+	if c.list.Len() > c.capacity {
+		oldest := c.list.Back()
+		if oldest != nil {
+			c.list.Remove(oldest)
+			delete(c.items, oldest.Value.(*lruEntry).key)
 		}
 	}
-	return nil
-}
-
-func loadModelConfig(path string) (modelConfig, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return modelConfig{}, err
-	}
-	var mc modelConfig
-	if err := json.Unmarshal(raw, &mc); err != nil {
-		return modelConfig{}, err
-	}
-	if len(mc.Prompt.PrefixIDs) > 0 {
-		mc.PrefixIDs = mc.Prompt.PrefixIDs
-	}
-	if err := mc.validate(); err != nil {
-		return modelConfig{}, err
-	}
-	return mc, nil
 }

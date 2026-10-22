@@ -1,6 +1,10 @@
 package guard
 
-import "context"
+import (
+	"context"
+
+	"github.com/KirillYuzh/Gobellim/internal/core"
+)
 
 type l1Only struct{}
 
@@ -15,7 +19,9 @@ func L1Only() Detector { return l1Only{} }
 // drops the marker, so the pipeline's layer list stays exactly `L1`.
 func (l1Only) Name() string { return rulesLayer }
 
-func (l1Only) Detect(context.Context, string) ([]Finding, error) { return nil, nil }
+func (l1Only) Detect(context.Context, string) ([]Finding, error) {
+	return nil, core.ErrGuardUnavailable
+}
 
 // IsL1Only reports whether d is the explicit L1-only marker.
 func IsL1Only(d Detector) bool {

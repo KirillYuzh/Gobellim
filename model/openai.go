@@ -18,6 +18,7 @@ type OpenAIConfig struct {
 	HTTPClient *http.Client
 
 	ContextTokens int
+	Region        Region
 }
 
 // OpenAIClient is a Client speaking the OpenAI chat-completions protocol; it
@@ -57,6 +58,9 @@ func VLLM(baseURL, modelName string) (*OpenAIClient, error) {
 
 // Model returns the configured model name.
 func (c *OpenAIClient) Model() string { return c.cfg.Model }
+
+// Region implements model.Regional.
+func (c *OpenAIClient) Region() Region { return c.cfg.Region }
 
 type oaiMessage struct {
 	Role       string       `json:"role"`
@@ -139,7 +143,7 @@ func oaiToolChoice(choice string) any {
 }
 
 func (c *OpenAIClient) buildBody(req Request, stream bool) oaiRequest {
-	msgs, native := schemaPlan(req)
+	msgs, native := SchemaPlan(req)
 
 	body := oaiRequest{
 		Model:       c.cfg.Model,
@@ -195,7 +199,7 @@ func (c *OpenAIClient) headers() map[string]string {
 }
 
 func (c *OpenAIClient) encode(req Request, stream bool) (map[string]any, map[string]string, error) {
-	payload, err := applyProviderOptions(req, c.buildBody(req, stream))
+	payload, err := ApplyProviderOptions(req, c.buildBody(req, stream))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -211,7 +215,7 @@ func (c *OpenAIClient) Chat(ctx context.Context, req Request) (Response, error) 
 	}
 
 	var out oaiResponse
-	if err := doJSON(ctx, c.hc, http.MethodPost, joinURL(c.cfg.BaseURL, "/chat/completions"), headers, outBody, &out); err != nil {
+	if err := DoJSON(ctx, c.hc, http.MethodPost, joinURL(c.cfg.BaseURL, "/chat/completions"), headers, outBody, &out); err != nil {
 		return Response{}, err
 	}
 	if len(out.Choices) == 0 {

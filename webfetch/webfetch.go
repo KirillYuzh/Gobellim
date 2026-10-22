@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	kit "github.com/KirillYuzh/Gobellim"
+	gobellim "github.com/KirillYuzh/Gobellim"
 	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
@@ -18,7 +18,7 @@ const (
 	defaultTimeout            = 15 * time.Second
 	defaultMaxRedirects       = 5
 	defaultToolName           = "web_fetch"
-	defaultUserAgent          = "kit-webfetch/1"
+	defaultUserAgent          = "gobellim-webfetch/1"
 )
 
 // Config configures the web_fetch tool. AllowHosts, when non-empty, restricts
@@ -26,6 +26,7 @@ const (
 // default to 1 MiB, 15s, and 5 when zero.
 type Config struct {
 	AllowHosts   []string
+	AllowAnyHost bool
 	MaxBytes     int64
 	Timeout      time.Duration
 	MaxRedirects int
@@ -73,10 +74,10 @@ type fetcher struct {
 	client *http.Client
 }
 
-// New registers an SSRF-hardened web_fetch tool on app. The tool is marked
-// EffectEgress and uses AllowHosts as its egress allowlist, or EgressAny when the
-// list is empty; it accepts only http and https and refuses non-public addresses.
-func New(app *kit.App, name string, cfg Config) (*kit.ToolDef, error) {
+// New declares an SSRF-hardened web_fetch tool. The tool is marked egress and
+// uses AllowHosts as its host allowlist, or any host when the list is empty; it
+// accepts only http and https and refuses non-public addresses.
+func New(name string, cfg Config) (gobellim.ToolDef, error) {
 	c, err := cfg.normalized()
 	if err != nil {
 		return nil, err
@@ -86,19 +87,21 @@ func New(app *kit.App, name string, cfg Config) (*kit.ToolDef, error) {
 	}
 	f := &fetcher{cfg: c, client: newClient(c)}
 
-	opts := []kit.ToolOption{
-		kit.Desc("Fetch a URL over http or https and return the response body as text. Only public hosts are reachable."),
-		kit.Effects(kit.EffectEgress),
-	}
+	policy := gobellim.Egress()
 	if len(c.AllowHosts) > 0 {
-		opts = append(opts, kit.EgressHosts(c.AllowHosts...))
+		policy = gobellim.Egress(c.AllowHosts...)
+	} else if c.AllowAnyHost {
+		policy = policy.AnyHost()
 	} else {
-		opts = append(opts, kit.EgressAny())
+		return nil, fmt.Errorf("webfetch: AllowHosts is empty: set AllowHosts or AllowAnyHost: %w", core.ErrInvalidConfig)
 	}
 
-	return kit.Tool(app, name, func(ctx context.Context, in In) (Out, error) {
+	return gobellim.Tool(name, func(ctx context.Context, in In) (Out, error) {
 		return f.fetch(ctx, in.URL)
-	}, opts...)
+	},
+		gobellim.Desc("Fetch a URL over http or https and return the response body as text. Only public hosts are reachable."),
+		policy,
+	), nil
 }
 
 func newClient(cfg Config) *http.Client {
@@ -114,7 +117,7 @@ func newClient(cfg Config) *http.Client {
 	return &http.Client{
 		Transport: tr,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= cfg.MaxRedirects {
+			if len(via) > cfg.MaxRedirects {
 				return fmt.Errorf("webfetch: stopped after %d redirects", cfg.MaxRedirects)
 			}
 			switch req.URL.Scheme {
@@ -202,7 +205,14 @@ func hostAllowed(host string, allow []string) bool {
 		if a == "" {
 			continue
 		}
-		if host == a || strings.HasSuffix(host, "."+a) {
+		if strings.HasPrefix(a, "*.") {
+			suffix := a[1:] // ".example.com"
+			if strings.HasSuffix(host, suffix) && host != suffix[1:] {
+				return true
+			}
+			continue
+		}
+		if host == a {
 			return true
 		}
 	}

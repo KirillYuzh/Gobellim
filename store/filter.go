@@ -13,11 +13,11 @@ import (
 type Filter map[string]any
 
 var allowedFilterFields = map[string]struct{}{
-	"doc_id":      {},
-	"source":      {},
-	"position":    {},
-	"created_at":  {},
-	"quarantined": {},
+	"doc_id":        {},
+	"source":        {},
+	"position":      {},
+	"created_at":    {},
+	QuarantineField: {},
 }
 
 var rangeOperators = map[string]string{

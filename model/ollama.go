@@ -17,6 +17,7 @@ type OllamaConfig struct {
 	HTTPClient *http.Client
 
 	ContextTokens int
+	Region        Region
 }
 
 // OllamaClient is a Client speaking Ollama's /api/chat protocol.
@@ -47,6 +48,9 @@ func Ollama(baseURL, modelName string) (*OllamaClient, error) {
 
 // Model returns the configured Ollama model name.
 func (c *OllamaClient) Model() string { return c.cfg.Model }
+
+// Region implements model.Regional.
+func (c *OllamaClient) Region() Region { return c.cfg.Region }
 
 type ollamaToolCall struct {
 	Function struct {
@@ -85,16 +89,37 @@ type ollamaResponse struct {
 
 // Chat performs one non-streaming Ollama request, sending tools and, in
 // SchemaNative mode, the JSON Schema as the request format.
+// parseObject decodes a JSON string into a map and returns an error on bad
+// input, so a malformed tool call cannot silently become an empty object.
+func parseObject(s string) (map[string]any, error) {
+	if s == "" {
+		return map[string]any{}, nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		return nil, err
+	}
+	if m == nil {
+		m = map[string]any{}
+	}
+	return m, nil
+}
+
+// Chat performs one non-streaming Ollama request.
 func (c *OllamaClient) Chat(ctx context.Context, req Request) (Response, error) {
-	msgs, native := schemaPlan(req)
+	msgs, native := SchemaPlan(req)
 
 	body := ollamaRequest{Model: c.cfg.Model, Stream: false}
 	for _, m := range msgs {
 		om := ollamaMessage{Role: string(m.Role), Content: m.Content}
 		for _, tc := range m.ToolCalls {
-			var otc ollamaToolCall
+			args, err := parseObject(tc.Args)
+			if err != nil {
+				return Response{}, fmt.Errorf("model: ollama: tool %s: %w", tc.Name, err)
+			}
+			otc := ollamaToolCall{}
 			otc.Function.Name = tc.Name
-			otc.Function.Arguments = rawObject(tc.Args)
+			otc.Function.Arguments = args
 			om.ToolCalls = append(om.ToolCalls, otc)
 		}
 		body.Messages = append(body.Messages, om)
@@ -129,13 +154,13 @@ func (c *OllamaClient) Chat(ctx context.Context, req Request) (Response, error) 
 		body.Options = opts
 	}
 
-	outBody, err := applyProviderOptions(req, body)
+	outBody, err := ApplyProviderOptions(req, body)
 	if err != nil {
 		return Response{}, err
 	}
 
 	var out ollamaResponse
-	if err := doJSON(ctx, c.hc, http.MethodPost, joinURL(c.cfg.BaseURL, "/api/chat"), nil, outBody, &out); err != nil {
+	if err := DoJSON(ctx, c.hc, http.MethodPost, joinURL(c.cfg.BaseURL, "/api/chat"), nil, outBody, &out); err != nil {
 		return Response{}, err
 	}
 	msg := Message{Role: RoleAssistant, Content: out.Message.Content}
@@ -169,15 +194,4 @@ func ollamaFinishReason(out ollamaResponse) FinishReason {
 		return FinishStop
 	}
 	return FinishOther
-}
-
-func rawObject(s string) map[string]any {
-	if s == "" {
-		return map[string]any{}
-	}
-	var m map[string]any
-	if err := json.Unmarshal([]byte(s), &m); err != nil || m == nil {
-		return map[string]any{}
-	}
-	return m
 }

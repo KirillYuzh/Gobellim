@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	kit "github.com/KirillYuzh/Gobellim"
+	"github.com/KirillYuzh/Gobellim"
 	"github.com/KirillYuzh/Gobellim/authz"
 	"github.com/KirillYuzh/Gobellim/guard"
 	"github.com/KirillYuzh/Gobellim/model"
@@ -27,18 +27,54 @@ func (nopLLM) Chat(context.Context, model.Request) (model.Response, error) {
 	return model.Response{}, nil
 }
 
-func testApp(t *testing.T) *kit.App {
+func testApp(t *testing.T, tools *gobellim.ToolSet, policy *authz.Policy) *gobellim.App {
 	t.Helper()
-	policy, err := authz.Parse(strings.NewReader("version: 1\ndefault: deny\nroles:\n  user:\n    permissions:\n      - \"*\"\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	app, err := kit.New(context.Background(), kit.Config{ES: nopES{}, LLM: nopLLM{}, Policy: policy, GuardL2: guard.L1Only()})
+	app, err := gobellim.New(context.Background(), gobellim.Config{
+		ES: nopES{}, LLM: nopLLM{}, Policy: policy, GuardL2: guard.L1Only(), Tools: tools,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = app.Close(context.Background()) })
 	return app
+}
+
+// An MCP tool registered in an app runs through the app's tool path: it is
+// gated by tool:<server>:<tool>, and a principal without that permission
+// cannot run it.
+func TestRegisteredToolIsGatedByTheApp(t *testing.T) {
+	srv := jsonRPCServer(t, false)
+	defer srv.Close()
+
+	c, err := New(Config{Name: "fs", URL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+
+	defs, err := Register(context.Background(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := gobellim.NewRegistry()
+	registry.Register(defs...)
+	tools, err := registry.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	policy, err := authz.Parse(strings.NewReader(
+		"version: 1\ndefault: deny\nroles:\n  user:\n    permissions:\n      - chat\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := testApp(t, tools, policy)
+
+	ctx := gobellim.WithPrincipal(context.Background(),
+		gobellim.Principal{UserID: "u1", Roles: []string{"user"}, Tenant: "t1"})
+	if _, err := app.CallTool(ctx, "mcp:fs:echo", json.RawMessage(`{}`)); err == nil {
+		t.Fatal("a principal without tool:mcp:fs:echo must not run the tool")
+	}
 }
 
 func TestRegisterAddsPrefixedToolsWithEgress(t *testing.T) {
@@ -51,7 +87,7 @@ func TestRegisterAddsPrefixedToolsWithEgress(t *testing.T) {
 	}
 	defer func() { _ = c.Close() }()
 
-	defs, err := Register(context.Background(), testApp(t), c)
+	defs, err := Register(context.Background(), c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,14 +101,16 @@ func TestRegisterAddsPrefixedToolsWithEgress(t *testing.T) {
 	if def.Permission() != "tool:mcp:fs:echo" {
 		t.Fatalf("permission = %q", def.Permission())
 	}
-	if def.Effect() != kit.EffectEgress {
-		t.Fatalf("effect = %v, want egress", def.Effect())
+	if def.Policy().Effect() != gobellim.EffectEgress {
+		t.Fatalf("effect = %v, want egress", def.Policy().Effect())
 	}
 	if !json.Valid(def.Schema()) {
 		t.Fatalf("schema is not JSON: %s", def.Schema())
 	}
 }
 
+// The caller's options are honoured, but a tool that calls a remote server
+// always egresses: the effect cannot be downgraded to read.
 func TestRegisterCallerOptionsOverrideDefaults(t *testing.T) {
 	srv := jsonRPCServer(t, false)
 	defer srv.Close()
@@ -83,20 +121,64 @@ func TestRegisterCallerOptionsOverrideDefaults(t *testing.T) {
 	}
 	defer func() { _ = c.Close() }()
 
-	defs, err := Register(context.Background(), testApp(t), c, kit.Effects(kit.EffectRead), kit.RequireApproval(true))
+	defs, err := Register(context.Background(), c, gobellim.Read().Approve())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if defs[0].Effect() != kit.EffectRead {
-		t.Fatalf("effect = %v, want the caller's read", defs[0].Effect())
+	if defs[0].Policy().Effect() != gobellim.EffectEgress {
+		t.Fatalf("effect = %v, want egress", defs[0].Policy().Effect())
 	}
-	if !defs[0].RequireApproval() {
+	if !defs[0].Policy().RequiresApproval() {
 		t.Fatal("require approval must be honoured")
 	}
 }
 
+// The egress allowlist is the endpoint host, not every host.
+func TestRegisterDerivesEgressAllowlistFromTheEndpoint(t *testing.T) {
+	srv := jsonRPCServer(t, false)
+	defer srv.Close()
+
+	c, err := New(Config{Name: "fs", URL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+
+	defs, err := Register(context.Background(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hosts := defs[0].Policy().EgressHosts()
+	if len(hosts) != 1 || hosts[0] != "127.0.0.1" {
+		t.Fatalf("hosts = %v, want [127.0.0.1]", hosts)
+	}
+	if defs[0].Policy().EgressAny() {
+		t.Fatal("the allowlist must not open egress to every host")
+	}
+}
+
+// A stdio client has no endpoint host, so the caller must name the hosts it
+// allows. There is no default that opens egress to every host.
+func TestRegisterRequiresAnEgressPolicyForStdio(t *testing.T) {
+	c := &Client{cfg: Config{Name: "fs", Command: "true"}}
+	c.transport = &stubTransport{
+		call: func(_ context.Context, method string, _ any) (json.RawMessage, error) {
+			switch method {
+			case "initialize":
+				return json.RawMessage(`{}`), nil
+			case "tools/list":
+				return json.RawMessage(`{"tools":[{"name":"echo","inputSchema":{"type":"object"}}]}`), nil
+			}
+			return json.RawMessage(`{}`), nil
+		},
+	}
+	if _, err := Register(context.Background(), c); err == nil {
+		t.Fatal("a stdio client must not get a default egress policy")
+	}
+}
+
 func TestRegisterRejectsUncompilableSchema(t *testing.T) {
-	c := &Client{cfg: Config{Name: "bad"}}
+	c := &Client{cfg: Config{Name: "bad", URL: "http://mcp.example.com"}}
 	c.transport = &stubTransport{
 		call: func(_ context.Context, method string, _ any) (json.RawMessage, error) {
 			switch method {
@@ -108,7 +190,7 @@ func TestRegisterRejectsUncompilableSchema(t *testing.T) {
 			return json.RawMessage(`{}`), nil
 		},
 	}
-	if _, err := Register(context.Background(), testApp(t), c); err == nil {
+	if _, err := Register(context.Background(), c); err == nil {
 		t.Fatal("want a schema compilation error")
 	}
 }

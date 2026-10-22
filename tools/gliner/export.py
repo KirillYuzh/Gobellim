@@ -62,6 +62,8 @@ from gliner2.training.trainer import ExtractorCollator
 # --------------------------------------------------------------------------- #
 
 REPO_ID = "hivetrace/gliner-guard-omni"
+# Pin a revision here before shipping: an unpinned export is not reproducible.
+REVISION = os.environ.get("GLINER_REVISION", "")
 
 # The pinned default schema (the shipped model).  These three constants are the
 # shipped 3-label / 1-softmax export; DEFAULT_SCHEMA below wraps them.
@@ -547,12 +549,10 @@ def schema_index_tensors(batch, spec=None):
         cls.append(flat)
     n_e = {len(v) for v in ent}
     n_c = {len(v) for v in cls}
-    assert n_e == {1 + len(spec.entity_labels)}, (
-        f"unexpected entity marker counts {n_e}"
-    )
-    assert n_c == {1 + sum(len(c.labels) for c in spec.classifications)}, (
-        f"unexpected classification marker counts {n_c}"
-    )
+    if n_e != {1 + len(spec.entity_labels)}:
+        raise SystemExit(f"unexpected entity marker counts {n_e}")
+    if n_c != {1 + sum(len(c.labels) for c in spec.classifications)}:
+        raise SystemExit(f"unexpected classification marker counts {n_c}")
     return (
         torch.tensor(ent, dtype=torch.long),
         torch.tensor(cls, dtype=torch.long),
@@ -788,11 +788,11 @@ def find_snapshot_file(name: str):
     try:
         from huggingface_hub import try_to_load_from_cache
 
-        p = try_to_load_from_cache(REPO_ID, name)
+        p = try_to_load_from_cache(REPO_ID, name, revision=REVISION or None)
         if isinstance(p, str) and os.path.exists(p):
             return Path(p)
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"find_snapshot_file({name}): {exc}", file=sys.stderr)
     return None
 
 
@@ -1531,7 +1531,7 @@ def main() -> int:
     t0 = time.time()
 
     print(f"[1/6] loading {REPO_ID} ...")
-    model = GLiNER2.from_pretrained(REPO_ID)
+    model = GLiNER2.from_pretrained(REPO_ID, revision=REVISION or None)
     model.eval()
     torch.set_grad_enabled(False)
     print(
@@ -1572,7 +1572,8 @@ def main() -> int:
         print(f"      in  {i.name:24s} {dims(i)}")
     for o in proto.graph.output:
         print(f"      out {o.name:24s} {dims(o)}")
-    assert opset_ok, "opset must be >= 17"
+    if not opset_ok:
+        raise SystemExit("opset must be >= 17")
 
     print("[3/6] copying tokenizer ...")
     tok_src = find_snapshot_file("tokenizer.json")
@@ -1592,9 +1593,8 @@ def main() -> int:
         f"      tokenizer.json round-trip: {tok_check['words_checked']} words, "
         f"{tok_check['mismatches']} mismatches (ok={tok_check['ok']})"
     )
-    assert tok_check["ok"], (
-        f"tokenizer.json does not round-trip: {tok_check['examples']}"
-    )
+    if not tok_check["ok"]:
+        raise SystemExit(f"tokenizer.json does not round-trip: {tok_check['examples']}")
     cfg = write_config(model, trace_batch, model_dir, tok_src, opset_ok, tok_check)
     print(
         f"      prefix_len={cfg['prompt']['prefix_len']} "

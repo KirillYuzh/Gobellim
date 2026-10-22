@@ -14,15 +14,15 @@ func TestMaskCoversCanonicalShiftedSpans(t *testing.T) {
 	}
 	zwsp := "\u200b"
 	cases := []struct{ in, want string }{
-		{"почта: ivan.petrov@example.com", "почта: [PII:EMAIL]"},
-		{"почта: " + zwsp + "ivan.petrov@example.com", "почта: " + zwsp + "[PII:EMAIL]"},
-		{"почта: " + zwsp + zwsp + zwsp + "ivan.petrov@example.com", "почта: " + zwsp + zwsp + zwsp + "[PII:EMAIL]"},
-		{"почта: \u202eivan.petrov@example.com\u202c", "почта: \u202e[PII:EMAIL]\u202c"},
-		{"инн 7707083893", "инн [PII:INN]"},
-		{"инн " + zwsp + "7707083893", "инн " + zwsp + "[PII:INN]"},
-		{"инн 7707" + zwsp + "083893", "инн [PII:INN]"},
-		{"паспорт " + zwsp + "4509 123456", "паспорт " + zwsp + "[PII:PASSPORT]"},
-		{"паспорт 4509" + zwsp + " 123456", "паспорт [PII:PASSPORT]"},
+		{"почта: ivan.petrov@example.com", "почта: [PII:EMAIL:1]"},
+		{"почта: " + zwsp + "ivan.petrov@example.com", "почта: " + zwsp + "[PII:EMAIL:1]"},
+		{"почта: " + zwsp + zwsp + zwsp + "ivan.petrov@example.com", "почта: " + zwsp + zwsp + zwsp + "[PII:EMAIL:1]"},
+		{"почта: \u202eivan.petrov@example.com\u202c", "почта: \u202e[PII:EMAIL:1]\u202c"},
+		{"инн 7707083893", "инн [PII:INN:1]"},
+		{"инн " + zwsp + "7707083893", "инн " + zwsp + "[PII:INN:1]"},
+		{"инн 7707" + zwsp + "083893", "инн [PII:INN:1]"},
+		{"паспорт " + zwsp + "4509 123456", "паспорт " + zwsp + "[PII:PASSPORT:1]"},
+		{"паспорт 4509" + zwsp + " 123456", "паспорт [PII:PASSPORT:1]"},
 	}
 	for _, tc := range cases {
 		v, err := p.Check(context.Background(), guard.RailInput, tc.in)

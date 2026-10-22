@@ -1,11 +1,13 @@
 package authz
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 
 	"github.com/KirillYuzh/Gobellim/internal/core"
+	"github.com/KirillYuzh/Gobellim/internal/tool"
 	"gopkg.in/yaml.v3"
 )
 
@@ -31,7 +33,7 @@ const (
 const wildcard = "*"
 
 // ToolPermission returns the permission name for a tool, "tool:"+name.
-func ToolPermission(name string) string { return "tool:" + name }
+func ToolPermission(name string) string { return tool.ToolPermission(name) }
 
 // Role is a named set of permissions in a policy. The wildcard "*" grants every
 // permission.
@@ -58,13 +60,20 @@ func Load(path string) (*Policy, error) {
 }
 
 // Parse decodes a YAML policy with unknown fields rejected and validates its
-// version and default. Invalid input is wrapped with ErrInvalidConfig.
+// version and default. The document must hold exactly one YAML document: a
+// second one is rejected instead of silently ignored, so a policy file cannot
+// look valid while half of its roles never apply. Invalid input is wrapped
+// with ErrInvalidConfig.
 func Parse(r io.Reader) (*Policy, error) {
 	dec := yaml.NewDecoder(r)
 	dec.KnownFields(true)
 	var p Policy
 	if err := dec.Decode(&p); err != nil {
 		return nil, fmt.Errorf("authz: parse policy: %w: %w", err, core.ErrInvalidConfig)
+	}
+	var extra Policy
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("authz: policy must hold exactly one YAML document: %w", core.ErrInvalidConfig)
 	}
 	if err := p.validate(); err != nil {
 		return nil, err
@@ -95,11 +104,13 @@ func (p *Policy) grants(role, permission string) bool {
 	return false
 }
 
-// Allows reports whether any of the principal's roles grants permission. An empty
-// permission is allowed, and an unknown role grants nothing.
+// Allows reports whether any of the principal's roles grants permission. An
+// empty permission is never granted: it is a configuration mistake, and
+// treating it as allowed would turn a forgotten argument into a way around
+// RBAC. An unknown role grants nothing.
 func (p *Policy) Allows(pr core.Principal, permission string) bool {
 	if permission == "" {
-		return true
+		return false
 	}
 	for _, role := range pr.Roles {
 		if p.grants(role, permission) {
@@ -110,10 +121,11 @@ func (p *Policy) Allows(pr core.Principal, permission string) bool {
 }
 
 // Authorize returns nil when pr is allowed permission. An empty permission is
-// allowed, while a zero principal or a denied permission yields ErrUnauthorized.
+// a configuration error, a zero principal or a denied permission yields
+// ErrUnauthorized.
 func (p *Policy) Authorize(pr core.Principal, permission string) error {
 	if permission == "" {
-		return nil
+		return fmt.Errorf("authz: empty permission: %w", core.ErrInvalidConfig)
 	}
 	if pr.IsZero() {
 		return fmt.Errorf("authz: no principal for %q: %w", permission, core.ErrUnauthorized)

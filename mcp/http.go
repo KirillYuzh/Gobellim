@@ -40,7 +40,7 @@ func (h *httpTransport) Call(ctx context.Context, method string, params any) (js
 	id := h.nextID
 	h.mu.Unlock()
 
-	msgs, err := h.post(ctx, rpcRequest{JSONRPC: "2.0", ID: id, Method: method, Params: params})
+	msgs, err := h.post(ctx, rpcRequest{JSONRPC: "2.0", ID: id, Method: method, Params: params}, id)
 	if err != nil {
 		return nil, err
 	}
@@ -49,21 +49,21 @@ func (h *httpTransport) Call(ctx context.Context, method string, params any) (js
 		return nil, err
 	}
 	if resp.Error != nil {
-		return nil, resp.Error.unwrap()
+		return nil, resp.Error.wrap()
 	}
 	return resp.Result, nil
 }
 
 // Notify posts a JSON-RPC notification and discards the response.
 func (h *httpTransport) Notify(ctx context.Context, method string, params any) error {
-	_, err := h.post(ctx, rpcRequest{JSONRPC: "2.0", Method: method, Params: params})
+	_, err := h.post(ctx, rpcRequest{JSONRPC: "2.0", Method: method, Params: params}, 0)
 	return err
 }
 
 // Close is a no-op; the HTTP transport holds no connection.
 func (h *httpTransport) Close() error { return nil }
 
-func (h *httpTransport) post(ctx context.Context, v any) ([]json.RawMessage, error) {
+func (h *httpTransport) post(ctx context.Context, v any, wantID int64) ([]json.RawMessage, error) {
 	payload, err := json.Marshal(v)
 	if err != nil {
 		return nil, fmt.Errorf("mcp: %s: encode request: %w", h.cfg.Name, err)
@@ -101,7 +101,7 @@ func (h *httpTransport) post(ctx context.Context, v any) ([]json.RawMessage, err
 		return nil, fmt.Errorf("mcp: %s: status %d: %s: %w", h.cfg.Name, resp.StatusCode, strings.TrimSpace(string(body)), core.ErrProvider)
 	}
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
-		return readSSE(resp.Body, h.cfg.Name)
+		return readSSE(resp.Body, h.cfg.Name, wantID)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMessageBytes))
@@ -122,24 +122,32 @@ func (h *httpTransport) post(ctx context.Context, v any) ([]json.RawMessage, err
 	return []json.RawMessage{json.RawMessage(trimmed)}, nil
 }
 
-func readSSE(r io.Reader, name string) ([]json.RawMessage, error) {
+// readSSE reads a server-sent event stream and returns the messages it
+// carries. A streamable HTTP server may hold the stream open after it has
+// answered, so reading stops as soon as the reply with the wanted id arrives:
+// a slow stream must not look like a broken one. wantID of 0 reads to the end.
+func readSSE(r io.Reader, name string, wantID int64) ([]json.RawMessage, error) {
 	var out []json.RawMessage
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), maxMessageBytes)
 
 	var frame bytes.Buffer
-	flush := func() {
+	flush := func() bool {
 		chunk := bytes.TrimSpace(frame.Bytes())
 		frame.Reset()
-		if len(chunk) > 0 {
-			out = append(out, json.RawMessage(append([]byte(nil), chunk...)))
+		if len(chunk) == 0 {
+			return false
 		}
+		out = append(out, json.RawMessage(append([]byte(nil), chunk...)))
+		return wantID > 0 && messageHasID(chunk, wantID)
 	}
 	for sc.Scan() {
 		line := sc.Text()
 		switch {
 		case line == "":
-			flush()
+			if flush() {
+				return out, nil
+			}
 		case strings.HasPrefix(line, "data:"):
 			if frame.Len() > 0 {
 				frame.WriteByte('\n')
@@ -152,6 +160,15 @@ func readSSE(r io.Reader, name string) ([]json.RawMessage, error) {
 		return nil, fmt.Errorf("mcp: %s: read sse: %w", name, err)
 	}
 	return out, nil
+}
+
+// messageHasID reports whether the raw JSON-RPC message carries the id.
+func messageHasID(raw []byte, wantID int64) bool {
+	var resp rpcResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return false
+	}
+	return resp.ID == wantID
 }
 
 func pickResponse(msgs []json.RawMessage, id int64) (rpcResponse, error) {

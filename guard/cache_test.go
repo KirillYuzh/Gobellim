@@ -50,7 +50,7 @@ func TestCacheDoesNotAliasLayouts(t *testing.T) {
 	if d.calls != 2 {
 		t.Fatalf("detector ran %d time(s), want 2: an aliased hit skipped detection", d.calls)
 	}
-	if want := "a\u200b[PII:LAST]"; vb.Text != want {
+	if want := "a\u200b[PII:LAST:1]"; vb.Text != want {
 		t.Fatalf("masked zero-width text = %q, want %q", vb.Text, want)
 	}
 }

@@ -11,12 +11,7 @@ func SupportsNativeSchema(c Client) bool {
 	if r, ok := c.(nativeSchemaReporter); ok {
 		return r.SupportsNativeSchema()
 	}
-	switch c.(type) {
-	case *OpenAIClient, *OllamaClient:
-		return true
-	default:
-		return false
-	}
+	return false
 }
 
 // SupportsNativeSchema reports true: the OpenAI protocol carries the schema in
@@ -25,7 +20,3 @@ func (c *OpenAIClient) SupportsNativeSchema() bool { return true }
 
 // SupportsNativeSchema reports true: Ollama's format field carries the schema.
 func (c *OllamaClient) SupportsNativeSchema() bool { return true }
-
-// SupportsNativeSchema reports false: GigaChat has no native schema field, so
-// callers inline the schema.
-func (c *GigaChatClient) SupportsNativeSchema() bool { return false }

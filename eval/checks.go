@@ -6,71 +6,65 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-
-	"github.com/KirillYuzh/Gobellim/trace"
 )
 
-// Includes returns a Check that requires the final output to contain substr.
+// Includes returns a Check that requires the output to contain substr.
 func Includes(substr string) Check {
 	return func(t Trace) error {
 		if strings.Contains(output(t), substr) {
 			return nil
 		}
-		return fmt.Errorf("eval: trace %s: output does not contain %q", identify(t), substr)
+		return fmt.Errorf("eval: trace %s: output does not contain %q", traceID(t), substr)
 	}
 }
 
-// Excludes returns a Check that requires the final output not to contain substr.
+// Excludes returns a Check that requires the output not to contain substr.
 func Excludes(substr string) Check {
 	return func(t Trace) error {
 		if !strings.Contains(output(t), substr) {
 			return nil
 		}
-		return fmt.Errorf("eval: trace %s: output contains forbidden substring %q", identify(t), substr)
+		return fmt.Errorf("eval: trace %s: output contains forbidden substring %q", traceID(t), substr)
 	}
 }
 
-// Equals returns a Check that requires the final output to equal want exactly.
+// Equals returns a Check that requires the output to equal want exactly.
 func Equals(want string) Check {
 	return func(t Trace) error {
 		if output(t) == want {
 			return nil
 		}
-		return fmt.Errorf("eval: trace %s: output does not equal %q", identify(t), want)
+		return fmt.Errorf("eval: trace %s: output does not equal %q", traceID(t), want)
 	}
 }
 
-// Matches returns a Check that requires the final output to match re; a nil
-// regexp produces a check that always fails.
+// Matches returns a Check that requires the output to match re.
 func Matches(re *regexp.Regexp) Check {
 	if re == nil {
 		return func(t Trace) error {
-			return fmt.Errorf("eval: trace %s: Matches: nil regexp", identify(t))
+			return fmt.Errorf("eval: trace %s: Matches: nil regexp", traceID(t))
 		}
 	}
 	return func(t Trace) error {
 		if re.MatchString(output(t)) {
 			return nil
 		}
-		return fmt.Errorf("eval: trace %s: output does not match %s", identify(t), re.String())
+		return fmt.Errorf("eval: trace %s: output does not match %s", traceID(t), re.String())
 	}
 }
 
-// Similarity returns a Check that requires DiceSimilarity(output, want) to be
-// at least min.
+// Similarity returns a Check that requires DiceSimilarity(output, want) >= min.
 func Similarity(want string, min float64) Check {
 	return func(t Trace) error {
 		score := DiceSimilarity(output(t), want)
 		if score >= min {
 			return nil
 		}
-		return fmt.Errorf("eval: trace %s: Dice similarity %.3f is below threshold %.3f", identify(t), score, min)
+		return fmt.Errorf("eval: trace %s: Dice similarity %.3f is below threshold %.3f", traceID(t), score, min)
 	}
 }
 
-// DiceSimilarity returns the Dice coefficient over lower-cased word bigrams of
-// a and b. Inputs without bigrams score 1 when equal ignoring case and
-// surrounding space, otherwise 0.
+// DiceSimilarity returns the Dice coefficient over lower-cased word bigrams.
 func DiceSimilarity(a, b string) float64 {
 	ab := wordBigrams(a)
 	bb := wordBigrams(b)
@@ -113,60 +107,56 @@ func bigramOverlap(a, b []string) int {
 	return n
 }
 
-// CalledTool returns a Check that requires the named tool to appear among the
-// trace's tool observations, which are its SPAN observations ordered by start
-// time.
+// CalledTool requires the named tool among SPAN observations.
 func CalledTool(name string) Check {
 	return func(t Trace) error {
-		names := toolNames(t)
-		for _, n := range names {
+		for _, n := range toolNames(t) {
 			if n == name {
 				return nil
 			}
 		}
-		if len(names) == 0 {
-			return fmt.Errorf("eval: trace %s: tool %q was not called: no tool observations recorded", identify(t), name)
+		if len(toolNames(t)) == 0 {
+			return fmt.Errorf("eval: trace %s: tool %q was not called: no tool observations recorded", traceID(t), name)
 		}
-		return fmt.Errorf("eval: trace %s: tool %q was not called (called: %s)", identify(t), name, strings.Join(names, ", "))
+		return fmt.Errorf("eval: trace %s: tool %q was not called (called: %s)", traceID(t), name, strings.Join(toolNames(t), ", "))
 	}
 }
 
-// DidNotCall returns a Check that requires the named tool not to be called.
+// DidNotCall requires the named tool not to be called.
 func DidNotCall(name string) Check {
 	return func(t Trace) error {
 		for _, n := range toolNames(t) {
 			if n == name {
-				return fmt.Errorf("eval: trace %s: tool %q was called but must not be", identify(t), name)
+				return fmt.Errorf("eval: trace %s: tool %q was called but must not be", traceID(t), name)
 			}
 		}
 		return nil
 	}
 }
 
-// UsedNoTools returns a Check that requires that no tool was called.
+// UsedNoTools requires that no tool was called.
 func UsedNoTools() Check {
 	return func(t Trace) error {
 		names := toolNames(t)
 		if len(names) == 0 {
 			return nil
 		}
-		return fmt.Errorf("eval: trace %s: expected no tool calls, got %d (%s)", identify(t), len(names), strings.Join(names, ", "))
+		return fmt.Errorf("eval: trace %s: expected no tool calls, got %d (%s)", traceID(t), len(names), strings.Join(names, ", "))
 	}
 }
 
-// MaxToolCalls returns a Check that requires at most n tool calls.
+// MaxToolCalls requires at most n tool calls.
 func MaxToolCalls(n int) Check {
 	return func(t Trace) error {
 		names := toolNames(t)
 		if len(names) <= n {
 			return nil
 		}
-		return fmt.Errorf("eval: trace %s: %d tool calls exceed the maximum of %d (%s)", identify(t), len(names), n, strings.Join(names, ", "))
+		return fmt.Errorf("eval: trace %s: %d tool calls exceed the maximum of %d (%s)", traceID(t), len(names), n, strings.Join(names, ", "))
 	}
 }
 
-// ToolOrder returns a Check that requires names to occur in order as a
-// subsequence of the called tools; other calls may appear in between.
+// ToolOrder requires names to occur in order as a subsequence.
 func ToolOrder(names ...string) Check {
 	want := append([]string(nil), names...)
 	return func(t Trace) error {
@@ -175,9 +165,9 @@ func ToolOrder(names ...string) Check {
 			return nil
 		}
 		if len(got) == 0 {
-			return fmt.Errorf("eval: trace %s: tool order %v not satisfied: no tool observations recorded", identify(t), want)
+			return fmt.Errorf("eval: trace %s: tool order %v not satisfied: no tool observations recorded", traceID(t), want)
 		}
-		return fmt.Errorf("eval: trace %s: tool order %v not satisfied (called in order: %s)", identify(t), want, strings.Join(got, ", "))
+		return fmt.Errorf("eval: trace %s: tool order %v not satisfied (called in order: %s)", traceID(t), want, strings.Join(got, ", "))
 	}
 }
 
@@ -191,31 +181,29 @@ func isSubsequence(want, got []string) bool {
 	return i == len(want)
 }
 
-// NoToolErrors returns a Check that requires no tool observation to be at error
-// level or carry an ErrorKind.
+// NoToolErrors requires no tool observation at error level or with ErrorKind.
 func NoToolErrors() Check {
 	return func(t Trace) error {
 		var bad []string
 		for _, o := range toolObservations(t) {
-			if o.Level == trace.LevelError || o.ErrorKind != "" {
+			if o.Level == LevelError || o.ErrorKind != "" {
 				bad = append(bad, o.Name)
 			}
 		}
 		if len(bad) == 0 {
 			return nil
 		}
-		return fmt.Errorf("eval: trace %s: %d tool call(s) errored: %s", identify(t), len(bad), strings.Join(bad, ", "))
+		return fmt.Errorf("eval: trace %s: %d tool call(s) errored: %s", traceID(t), len(bad), strings.Join(bad, ", "))
 	}
 }
 
-// All returns a Check that passes only when every supplied check passes; a nil
-// check counts as a failure.
+// All passes only when every check passes; nil check = failure.
 func All(fs ...Check) Check {
 	return func(t Trace) error {
 		var failures []error
 		for i, f := range fs {
 			if f == nil {
-				failures = append(failures, fmt.Errorf("eval: trace %s: All: check %d is nil", identify(t), i))
+				failures = append(failures, fmt.Errorf("eval: trace %s: All: check %d is nil", traceID(t), i))
 				continue
 			}
 			if err := f(t); err != nil {
@@ -226,21 +214,20 @@ func All(fs ...Check) Check {
 			return nil
 		}
 		return fmt.Errorf("eval: trace %s: All: %d of %d checks failed: %w",
-			identify(t), len(failures), len(fs), errors.Join(failures...))
+			traceID(t), len(failures), len(fs), errors.Join(failures...))
 	}
 }
 
-// Any returns a Check that passes when at least one supplied check passes; no
-// checks at all is a failure.
+// Any passes when at least one check passes; no checks = failure.
 func Any(fs ...Check) Check {
 	return func(t Trace) error {
 		if len(fs) == 0 {
-			return fmt.Errorf("eval: trace %s: Any: no checks provided", identify(t))
+			return fmt.Errorf("eval: trace %s: Any: no checks provided", traceID(t))
 		}
 		var failures []error
 		for i, f := range fs {
 			if f == nil {
-				failures = append(failures, fmt.Errorf("eval: trace %s: Any: check %d is nil", identify(t), i))
+				failures = append(failures, fmt.Errorf("eval: trace %s: Any: check %d is nil", traceID(t), i))
 				continue
 			}
 			if err := f(t); err != nil {
@@ -250,28 +237,27 @@ func Any(fs ...Check) Check {
 			}
 		}
 		return fmt.Errorf("eval: trace %s: Any: all %d checks failed: %w",
-			identify(t), len(fs), errors.Join(failures...))
+			traceID(t), len(fs), errors.Join(failures...))
 	}
 }
 
-// Not returns a Check that fails when f passes and passes when f fails; a nil
-// check fails.
+// Not inverts a check; nil check = failure.
 func Not(f Check) Check {
 	return func(t Trace) error {
 		if f == nil {
-			return fmt.Errorf("eval: trace %s: Not: nil check", identify(t))
+			return fmt.Errorf("eval: trace %s: Not: nil check", traceID(t))
 		}
 		if err := f(t); err != nil {
 			return nil
 		}
-		return fmt.Errorf("eval: trace %s: Not: check unexpectedly passed", identify(t))
+		return fmt.Errorf("eval: trace %s: Not: check unexpectedly passed", traceID(t))
 	}
 }
 
-func toolObservations(t Trace) []trace.Observation {
-	out := make([]trace.Observation, 0, len(t.Observations))
+func toolObservations(t Trace) []Observation {
+	out := make([]Observation, 0, len(t.Observations))
 	for _, o := range t.Observations {
-		if o.Kind == trace.KindSpan {
+		if o.Kind == KindSpan {
 			out = append(out, o)
 		}
 	}

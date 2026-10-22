@@ -1,6 +1,6 @@
-# Model card — `hivetrace/gliner-guard-omni` (kit guard L2)
+# Model card — `hivetrace/gliner-guard-omni` (gobellim guard L2)
 
-This is the ML layer (L2) of kit's guard. It is **not** a safety guarantee: it is
+This is the ML layer (L2) of gobellim's guard. It is **not** a safety guarantee: it is
 the optional second layer on top of deterministic rules. Read it together with
 [`docs/concepts/security-model.md`](../../docs/concepts/security-model.md).
 
@@ -28,13 +28,13 @@ control on any path.
 
 | Metric                              | Value                                                                              | Source                              |
 | ----------------------------------- | ---------------------------------------------------------------------------------- | ----------------------------------- |
-| Weights size                        | ≈1.2 GB (fp32; ≈0.4 GB int8)                                                       | `docs/internals/architecture.md`    |
-| Peak process RSS with the model     | ≈4.5 GB (darwin/arm64, fp32, 2 sessions, `intra_op_threads` = 4)                   | `docs/internals/architecture.md`    |
-| Latency at the token ceiling        | ≈0.37 s p50 per detection window                                                   | `docs/internals/decisions.md` (D34) |
-| Before the token ceiling existed    | ≈50–71 s and ≈7.3 GB on an 8000-rune window                                        | `docs/internals/decisions.md` (D34) |
-| Parity fixtures                     | 12/12 under `-tags ort`                                                            | `docs/internals/plan.md`            |
-| Latency SLO (target, not a promise) | short input p50 ≤ 250 ms / p95 ≤ 400 ms; full tensor input p50 ≤ 800 ms per window | `docs/internals/plan.md` (A2/D53)   |
-| Quality on public corpora (F1)      | **not published** — the L2 parity gate is not closed (weights are not in git)      | `docs/internals/plan.md` (DoD v1)   |
+| Weights size                        | ≈1.2 GB (fp32; ≈0.4 GB int8)                                                       | `docs/reference/gobellim.md`    |
+| Peak process RSS with the model     | ≈4.5 GB (darwin/arm64, fp32, 2 sessions, `intra_op_threads` = 4)                   | `docs/reference/gobellim.md`    |
+| Latency at the token ceiling        | ≈0.37 s p50 per detection window                                                   | `docs/reference/gobellim.md` (D34) |
+| Before the token ceiling existed    | ≈50–71 s and ≈7.3 GB on an 8000-rune window                                        | `docs/reference/gobellim.md` (D34) |
+| Parity fixtures                     | 12/12 under `-tags ort`                                                            | `docs/reference/gobellim.md`            |
+| Latency SLO (target, not a promise) | short input p50 ≤ 250 ms / p95 ≤ 400 ms; full tensor input p50 ≤ 800 ms per window | `docs/reference/gobellim.md` (A2/D53)   |
+| Quality on public corpora (F1)      | **not published** — the L2 parity gate is not closed (weights are not in git)      | `docs/reference/gobellim.md` (DoD v1)   |
 
 L1 numbers on a public corpus (with the caveat that they do not prove
 generalisation) live in
@@ -57,4 +57,4 @@ generalisation) live in
   a silent pass.
 - **Resource cost.** Two sessions of this model dominate the process footprint;
   size your container from the measured RSS, not the file size
-  (`docs/internals/architecture.md`).
+  (`docs/reference/gobellim.md`).

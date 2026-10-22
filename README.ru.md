@@ -14,20 +14,18 @@ guardrails за одним путём вызова, проверяющим пр�
 
 ## Посмотреть за 60 секунд
 
-[demo](./demo) — чат-бот поддержки на скелете Clean Architecture с предзаполненной
-базой знаний. Первый запуск тянет образы и модель эмбеддера; после этого стек
-поднимается примерно за минуту.
+[lite-demo](./lite-demo) — небольшой сервис с собственным движком инструментов,
+workflow и клиентом GigaChat. В нём есть principal, файл политики, инструменты и
+сценарий исследования, который останавливается и ждёт ответ пользователя. Первый
+запуск тянет образы; дальше стек поднимается примерно за полминуты.
 
 ```sh
-cp demo/.env.example demo/.env                 # добавьте GIGACHAT_CREDENTIALS (пропустите, если файл уже есть)
-docker compose --env-file demo/.env \
-  -f demo/deploy/docker-compose.yml up -d
+cd lite-demo
+docker compose up -d --build
 ```
 
-Бот пишет в лог `knowledge base ready` и `bot listening` на `:8080`. Спросите его
-от `root` и от `alice`: `alice` получит отказ на погоду, потому что этот инструмент
-вырезается из её схемы до того, как его увидит модель. Ручки и готовый `curl` — в
-[demo/README.ru.md](./demo/README.ru.md).
+Откройте <http://localhost:8080> — там страница чата. Сервис слушает `:8080`.
+Ручки, статусы и готовые `curl` — в [lite-demo/README.md](./lite-demo/README.md).
 
 Поиск, типизированный вывод, guardrails и трейсы идут тем же путём вызова, что даёт
 библиотека.
@@ -62,10 +60,10 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
          return
      }
 -    answer, err := h.llm.Complete(r.Context(), req.Prompt)
-+    ctx := kit.WithPrincipal(r.Context(), kit.Principal{
++    ctx := gobellim.WithPrincipal(r.Context(), gobellim.Principal{
 +        UserID: req.UserID, Roles: req.Roles, Tenant: req.Tenant,
 +    })
-+    res, err := h.app.Chat(ctx, kit.ChatRequest{
++    res, err := h.app.Chat(ctx, gobellim.ChatRequest{
 +        Messages: []model.Message{{Role: model.RoleUser, Content: req.Prompt}},
 +    })
      if err != nil {
@@ -77,7 +75,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
  }
 ```
 
-Это всё изменение в хендлере. Приложение собирается один раз на старте (`kit.New`,
+Это всё изменение в хендлере. Приложение собирается один раз на старте (`gobellim.New`,
 ниже). `Chat` проверяет права до любого вызова модели или хранилища, прогоняет
 guard по входу, результатам инструментов и выходу, пишет трейс и отдаёт модели
 только те инструменты, которые вызывающему разрешены.
@@ -120,7 +118,7 @@ Gobellim — библиотека, а не сервис: вы сохраняет
   а поиск deny-by-default ([`store/filter.go`](./store/filter.go),
   `filter_test.go`, `filter_fuzz_test.go`).
 - **Трейсы по умолчанию несут маскированный текст.** Исходный текст сообщений не
-  сохраняется, пока вы явно не включите это ([`trace/policy.go`](./trace/policy.go),
+  сохраняется, пока вы явно не включите это ([`trace/config.go`](./trace/config.go),
   `pii_test.go`).
 - **L2 обязателен намеренно.** Внутренний security review или сертификация обычно
   требуют ML-слой. `guard.L1Only()` существует для явного L1-only и виден в
@@ -151,7 +149,7 @@ cd site && npm install && npm run dev
 ## Быстрый старт
 
 ```go
-app, err := kit.New(ctx, kit.Config{
+app, err := gobellim.New(ctx, gobellim.Config{
 	ES:      es,     // опционально: ваш клиент store.ES (поиск, память, трейсы)
 	LLM:     llm,    // vLLM, Ollama, OpenAI-совместимый API или GigaChat
 	Policy:  policy, // authz.Load("policy.yaml")
@@ -165,14 +163,14 @@ if err := app.Setup(ctx); err != nil { // один раз создаёт инд�
 }
 
 // Инструмент — типизированная Go-функция: схема и валидация берутся из типа.
-if _, err := kit.Tool(app, "get_weather", getWeather, kit.Desc("Текущая погода в городе.")); err != nil {
+if _, err := gobellim.Tool(app, "get_weather", getWeather, gobellim.Desc("Текущая погода в городе.")); err != nil {
 	return err
 }
 
 // У каждого вызова есть личность вызывающего.
-ctx = kit.WithPrincipal(ctx, kit.Principal{UserID: "u-1", Roles: []string{"user"}, Tenant: "acme"})
+ctx = gobellim.WithPrincipal(ctx, gobellim.Principal{UserID: "u-1", Roles: []string{"user"}, Tenant: "acme"})
 
-res, err := app.Chat(ctx, kit.ChatRequest{
+res, err := app.Chat(ctx, gobellim.ChatRequest{
 	System:   "Ты ассистент поддержки. Отвечай кратко.",
 	Messages: []model.Message{{Role: model.RoleUser, Content: "Какая погода в Москве?"}},
 })
@@ -281,8 +279,8 @@ g, err := eval.ScoreBinary(expected, actual)      // TP/FP/FN/TN, precision, rec
 ## Что дальше
 
 - [Документация →](./docs)
-- [Руководства (how-to) →](./docs/guides)
-- [Запускаемый пример →](./demo)
+- [Руководства →](./docs/README.md)
+- [Запускаемый пример →](./lite-demo)
 
 ## Участие
 

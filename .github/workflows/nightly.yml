@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  GO_VERSION: "1.24"
+  GO_VERSION: "1.26"
   # Matches the C API headers bundled with github.com/yalue/onnxruntime_go v1.36.0.
   ORT_VERSION: "1.29.0"
   # Matches github.com/daulet/tokenizers v1.27.0 in go.mod.
@@ -81,6 +81,15 @@ jobs:
           test -f .ort/lib/libtokenizers.a
           test -f .ort/lib/libonnxruntime.so
 
+      # The PR loop only type-checks -tags ort; this is where the ML path is
+      # actually executed. Same native runtime as the parity gate below.
+      - name: ort-tagged tests (embed, guard)
+        env:
+          CGO_ENABLED: "1"
+          CGO_LDFLAGS: -L${{ github.workspace }}/.ort/lib
+          KIT_ORT_LIB: ${{ github.workspace }}/.ort/lib/libonnxruntime.so
+        run: |
+          go test -tags ort -count=1 ./embed/... ./guard/...
       - name: parity gate
         env:
           CGO_ENABLED: "1"
@@ -91,3 +100,23 @@ jobs:
             --dir ../models \
             --fixtures ../guard/gliner/testdata \
             --min-agreement 1.0
+
+  fuzz:
+    name: fuzz (short run)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      # The fuzz targets only ever ran as ordinary seed tests. This job lets
+      # the fuzzer explore them for a bounded time; pure Go, no native runtime.
+      - name: go test -fuzz (store, guard)
+        run: |
+          set -euo pipefail
+          go test -run '^$' -fuzz=FuzzCompileFilter -fuzztime=30s ./store/
+          go test -run '^$' -fuzz=FuzzRRF -fuzztime=30s ./store/
+          go test -run '^$' -fuzz=FuzzCanonicalize -fuzztime=30s ./guard/
+          go test -run '^$' -fuzz=FuzzDecodedVariants -fuzztime=30s ./guard/
