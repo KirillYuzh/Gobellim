@@ -10,33 +10,25 @@ import (
 	"some-project/internal/session"
 )
 
-// startIn — запуск исследования. Param приходит, если пользователь назвал
-// параметр P сразу.
+// startIn — запуск исследования. Всё, что нужно сценарию, приходит из запроса:
+// ветку выбирает пользователь кнопкой, а тема уже есть в query.
 type startIn struct {
 	Query string `json:"query" jsonschema:"description=Тема исследования"`
-	Param string `json:"param,omitempty" jsonschema:"description=Параметр P, если пользователь назвал его сразу"`
 }
 
 // researchState — состояние сценария. Переходы считаются по этим полям, ветку
 // выбирает код, а не модель.
 type researchState struct {
 	Query  string
-	Param  string
 	Path   string
 	Topic  string
 	Result string
 }
 
-// newResearch объявляет сценарий: параметр P, путь A или B, а в пути B ещё один
+// newResearch объявляет сценарий: сразу путь A или B, а в пути B ещё один
 // вопрос. Вопросы, ответы, хранение запусков и пауза живут в пакете session.
 func newResearch() *session.Session[researchState] {
 	return session.New[researchState]("research").
-		AskText("param", "Какой параметр P использовать в исследовании?",
-			func(st *researchState, answer string) error {
-				st.Param = answer
-				return nil
-			},
-			session.SkipIf(func(st *researchState) bool { return st.Param != "" })).
 		AskChoice("path", "Что сделать: путь A (готовый текст) или путь B (вопрос и уточнение)?",
 			[]string{"A", "B"},
 			func(st *researchState, answer string) error {
@@ -46,7 +38,7 @@ func newResearch() *session.Session[researchState] {
 		Branch(func(st *researchState) string { return st.Path }).
 		Case("A", func(f *session.Session[researchState]) {
 			f.Do("finish_a", func(_ context.Context, st *researchState) error {
-				st.Result = "Путь A: заготовленный текст исследования по «" + st.Param + "»."
+				st.Result = "Путь A: заготовленный текст исследования по «" + st.Query + "»."
 				return nil
 			})
 		}).
@@ -58,10 +50,10 @@ func newResearch() *session.Session[researchState] {
 				}).
 				Do("finish_b", func(_ context.Context, st *researchState) error {
 					if st.Topic == "X" {
-						st.Result = "Ответ X: пример кода по «" + st.Param + "»."
+						st.Result = "Ответ X: пример кода по «" + st.Query + "»."
 						return nil
 					}
-					st.Result = "Ответ Y: объяснение по «" + st.Param + "» своими словами."
+					st.Result = "Ответ Y: объяснение по «" + st.Query + "» своими словами."
 					return nil
 				})
 		})
@@ -85,10 +77,7 @@ func (u *UseCase) startResearch(ctx context.Context, in startIn) (entity.Result,
 	if !ok {
 		return entity.Result{}, fmt.Errorf("research: no principal: %w", entity.ErrInternal)
 	}
-	res, err := u.research.Start(ctx, principal(user), &researchState{
-		Query: query,
-		Param: strings.TrimSpace(in.Param),
-	})
+	res, err := u.research.Start(ctx, principal(user), &researchState{Query: query})
 	if err != nil {
 		return entity.Result{}, mapSessionError(err)
 	}

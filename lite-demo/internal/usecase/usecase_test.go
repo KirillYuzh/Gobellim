@@ -123,7 +123,7 @@ func TestChatReturnsQuestion(t *testing.T) {
 	if res.Status != "awaiting_user" || res.RunID == "" || res.Question == nil {
 		t.Fatalf("response = %+v", res)
 	}
-	if res.Question.Input != string(session.InputText) {
+	if res.Question.Input != string(session.InputChoice) {
 		t.Fatalf("question = %+v", res.Question)
 	}
 	// run_id — ключ запуска приложения, модель его не видит.
@@ -133,36 +133,30 @@ func TestChatReturnsQuestion(t *testing.T) {
 	}
 }
 
-// resume — ответ пользователя прямо в приложение, без модели.
-func resume(t *testing.T, uc *UseCase, runID string, req entity.ResumeRequest) entity.ResumeResponse {
+func step(t *testing.T, uc *UseCase, runID, choice string) entity.ResumeResponse {
 	t.Helper()
-	res, err := uc.ResumeResearch(supportCtx(), runID, req)
+	res, err := uc.ResumeResearch(supportCtx(), runID, entity.ResumeRequest{User: user("support"), Choice: choice})
 	if err != nil {
-		t.Fatalf("resume: %v", err)
+		t.Fatalf("resume %q: %v", choice, err)
 	}
 	return res
 }
 
-func TestResearchAsksParamThenPath(t *testing.T) {
+func TestResearchAsksPath(t *testing.T) {
 	uc := newUseCase(t, &fakeLLM{}, entity.Budget{})
 
 	start, err := uc.startResearch(supportCtx(), startIn{Query: "go modules"})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	if start.Status != "awaiting_user" || start.RunID == "" || !strings.Contains(start.Prompt, "параметр") {
+	if start.Status != "awaiting_user" || start.RunID == "" || !strings.Contains(start.Prompt, "путь") {
 		t.Fatalf("start = %+v", start)
 	}
-
-	path := resume(t, uc, start.RunID, entity.ResumeRequest{User: user("support"), Text: "go modules"})
-	if path.Status != "awaiting_user" || path.RunID != start.RunID || path.Question == nil {
-		t.Fatalf("path question = %+v", path)
-	}
-	if path.Question.Input != string(session.InputChoice) || len(path.Question.Options) != 2 {
-		t.Fatalf("question = %+v", path.Question)
+	if start.Input != string(session.InputChoice) || len(start.Options) != 2 {
+		t.Fatalf("start = %+v, want the A/B choice first", start)
 	}
 
-	done := resume(t, uc, start.RunID, entity.ResumeRequest{User: user("support"), Choice: "A"})
+	done := step(t, uc, start.RunID, "A")
 	if done.Status != "completed" || !strings.Contains(done.Answer, "Путь A") {
 		t.Fatalf("done = %+v", done)
 	}
@@ -173,7 +167,7 @@ func TestResearchPathBAsksTopic(t *testing.T) {
 		t.Run(choice, func(t *testing.T) {
 			uc := newUseCase(t, &fakeLLM{}, entity.Budget{})
 
-			start, err := uc.startResearch(supportCtx(), startIn{Query: "go", Param: "go modules"})
+			start, err := uc.startResearch(supportCtx(), startIn{Query: "go modules"})
 			if err != nil {
 				t.Fatalf("start: %v", err)
 			}
@@ -181,12 +175,12 @@ func TestResearchPathBAsksTopic(t *testing.T) {
 				t.Fatalf("start = %+v", start)
 			}
 
-			topic := resume(t, uc, start.RunID, entity.ResumeRequest{User: user("support"), Choice: "B"})
+			topic := step(t, uc, start.RunID, "B")
 			if topic.Status != "awaiting_user" || topic.Question == nil || len(topic.Question.Options) != 2 {
 				t.Fatalf("topic question = %+v", topic)
 			}
 
-			done := resume(t, uc, start.RunID, entity.ResumeRequest{User: user("support"), Choice: choice})
+			done := step(t, uc, start.RunID, choice)
 			if done.Status != "completed" || !strings.Contains(done.Answer, want) {
 				t.Fatalf("done = %+v", done)
 			}
@@ -196,7 +190,7 @@ func TestResearchPathBAsksTopic(t *testing.T) {
 
 func TestResearchRejectsBadChoice(t *testing.T) {
 	uc := newUseCase(t, &fakeLLM{}, entity.Budget{})
-	start, err := uc.startResearch(supportCtx(), startIn{Query: "go", Param: "p"})
+	start, err := uc.startResearch(supportCtx(), startIn{Query: "go"})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -222,7 +216,7 @@ func TestResearchForeignRunIsNotFound(t *testing.T) {
 	}
 	other := entity.User{ID: "u-2", Tenant: "acme", Roles: []string{"support"}}
 	_, err = uc.ResumeResearch(entity.WithUser(context.Background(), other), start.RunID,
-		entity.ResumeRequest{User: other, Text: "p"})
+		entity.ResumeRequest{User: other, Choice: "A"})
 	if !errors.Is(err, entity.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
@@ -230,13 +224,19 @@ func TestResearchForeignRunIsNotFound(t *testing.T) {
 
 func TestResearchResumeIsIdempotent(t *testing.T) {
 	uc := newUseCase(t, &fakeLLM{}, entity.Budget{})
-	start, err := uc.startResearch(supportCtx(), startIn{Query: "go", Param: "p"})
+	start, err := uc.startResearch(supportCtx(), startIn{Query: "go"})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	req := entity.ResumeRequest{User: user("support"), ResumeID: "r1", Choice: "A"}
-	first := resume(t, uc, start.RunID, req)
-	again := resume(t, uc, start.RunID, req)
+	first, err := uc.ResumeResearch(supportCtx(), start.RunID, req)
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	again, err := uc.ResumeResearch(supportCtx(), start.RunID, req)
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
 	if first != again {
 		t.Fatalf("retry returned %+v, want %+v", again, first)
 	}

@@ -52,11 +52,7 @@ curl -s http://localhost:8080/v1/chat \
   }'
 # → {"status":"awaiting_user","run_id":"run-...","question":{...}}
 
-# answer the parameter question, then pick path A
-curl -s http://localhost:8080/v1/research/run-.../resume \
-  -H 'Content-Type: application/json' \
-  -d '{"user": {"id": "u-1", "tenant": "acme", "roles": ["support"]}, "text": "go modules"}'
-
+# answer the path question
 curl -s http://localhost:8080/v1/research/run-.../resume \
   -H 'Content-Type: application/json' \
   -d '{"user": {"id": "u-1", "tenant": "acme", "roles": ["support"]}, "choice": "A"}'

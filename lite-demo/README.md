@@ -13,9 +13,11 @@ workflow.
 
 `research` — сценарий с паузой. Модель его только запускает, дальше ведёт код:
 
-1. спрашивает параметр P, если он не пришёл с запуском;
-2. спрашивает путь: A (готовый текст) или B (ещё один вопрос);
-3. в пути B спрашивает тему и отдаёт ответ X или Y.
+1. сразу спрашивает путь: A (готовый текст) или B (ещё один вопрос);
+2. в пути B спрашивает тему и отдаёт ответ X или Y.
+
+Отдельного вопроса перед выбором нет: тема уже есть в запросе, а ветвление
+зависит только от нажатой кнопки.
 
 Ветку выбирает код по состоянию. Модель не выбирает переход и не видит
 `run_id`.
@@ -146,19 +148,20 @@ go run ./cmd/lite-demo
 `internal/tools` — типизированный движок. Схема аргументов выводится из `In`,
 результат проверяется по схеме `Out`, а права по умолчанию — `tool:<name>`:
 
-```go
+````go
 tools.New("link", link,
 	tools.Desc("Добавить ссылку в конец ответа. Приложение сделает это само."),
 	tools.Read(),
 )
 
+```go
 tools.New("start_research", u.startResearch,
 	tools.Desc("Начать исследование по теме."),
 	tools.Read(),
 )
-```
+````
 
-Ветку модель не выбирает: в аргументах только тема и, если известен, параметр P.
+Ветку модель не выбирает: в аргументах только тема запроса.
 
 `Registry` собирает каталог один раз; ошибка объявления и повтор имени видны в
 `Build`, а не в рантайме.
@@ -172,12 +175,6 @@ tools.New("start_research", u.startResearch,
 ```go
 func newResearch() *session.Session[researchState] {
 	return session.New[researchState]("research").
-		AskText("param", "Какой параметр P использовать?",
-			func(st *researchState, answer string) error {
-				st.Param = answer
-				return nil
-			},
-			session.SkipIf(func(st *researchState) bool { return st.Param != "" })).
 		AskChoice("path", "Путь A или B?", []string{"A", "B"},
 			func(st *researchState, answer string) error {
 				st.Path = answer

@@ -11,23 +11,18 @@
 
 ## Пример
 
-Сценарий из демо: спросить параметр, спросить путь A или B, в пути B задать ещё
-один вопрос.
+Сценарий из демо: сразу выбор пути A или B, а в пути B ещё один вопрос.
 
 ```go
 type researchState struct {
-	Param  string
+	Query  string
+	Param  string // свободный вопрос, если он нужен сценарию
 	Path   string
 	Topic  string
 	Result string
 }
 
 research := session.New[researchState]("research").
-	AskText("param", "Какой параметр P использовать?",
-		func(st *researchState, answer string) error {
-			st.Param = answer
-			return nil
-		}).
 	AskChoice("path", "Что сделать: путь A или путь B?", []string{"A", "B"},
 		func(st *researchState, answer string) error {
 			st.Path = answer
@@ -36,7 +31,7 @@ research := session.New[researchState]("research").
 	Branch(func(st *researchState) string { return st.Path }).
 	Case("A", func(f *session.Session[researchState]) {
 		f.Do("finish_a", func(_ context.Context, st *researchState) error {
-			st.Result = "Путь A: " + st.Param
+			st.Result = "Путь A: " + st.Query
 			return nil
 		})
 	}).
@@ -70,13 +65,19 @@ case session.StatusCompleted:
 }
 ```
 
-Если у состояния уже есть ответ, вопрос можно пропустить:
+Свободный ответ объявляется так же: `AskText`. Если ответ уже есть в
+состоянии, вопрос можно пропустить:
 
 ```go
-AskText("param", "...", apply, session.SkipIf(func(st *researchState) bool {
-	return st.Param != ""
-}))
+AskText("param", "Какой параметр использовать?",
+	func(st *researchState, answer string) error {
+		st.Param = answer
+		return nil
+	},
+	session.SkipIf(func(st *researchState) bool { return st.Param != "" }))
 ```
+
+`SkipIf` не создаёт паузу: шаг сразу идёт дальше.
 
 ## Resume: продолжить с ответом
 
@@ -140,12 +141,12 @@ store := session.NewMemoryStore[researchState](
 research := session.New[researchState]("research").WithStore(store)
 ```
 
-| Свойство     | Поведение                                                    |
-| ------------ | ------------------------------------------------------------ |
-| TTL          | по умолчанию 15 минут, затем `ErrNotFound`                    |
-| Лимиты       | 1000 запусков всего, 10 на владельца; вытесняется старейший   |
-| Владение     | чужой `UserID`, `Tenant` или `ChatID` даёт `ErrNotFound`      |
-| Перезапуск   | процесс упал — незавершённые запуски теряются                 |
+| Свойство        | Поведение                                                   |
+| --------------- | ----------------------------------------------------------- |
+| TTL             | по умолчанию 15 минут, затем `ErrNotFound`                  |
+| Лимиты          | 1000 запусков всего, 10 на владельца; вытесняется старейший |
+| Владение        | чужой `UserID`, `Tenant` или `ChatID` даёт `ErrNotFound`    |
+| Перезапуск      | процесс упал — незавершённые запуски теряются               |
 | Идемпотентность | повтор с тем же `ResumeID` возвращает сохранённый результат |
 
 Чужой запуск отдаётся как «не найдено» намеренно: сервис не подтверждает, что
