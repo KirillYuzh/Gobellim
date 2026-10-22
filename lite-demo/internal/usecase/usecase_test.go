@@ -72,7 +72,7 @@ func msg(text string) []entity.Message {
 func TestChatRunsToolsAndAnswers(t *testing.T) {
 	llm := &fakeLLM{responses: []entity.Completion{
 		{ToolCalls: []entity.ToolCall{{Name: "link"}}},
-		{Content: "готово"},
+		{Content: "готово https://example.invalid/go-doc (mock)"},
 	}}
 	uc := newUseCase(t, llm, &fakeMock{}, entity.Budget{})
 

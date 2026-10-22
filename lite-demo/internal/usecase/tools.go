@@ -16,7 +16,7 @@ type queryIn struct {
 
 // link — обычная заглушка: возвращает готовую ссылку, в сеть не ходит.
 func link(context.Context, struct{}) (entity.Result, error) {
-	return entity.Result{Display: "https://example.invalid/go-doc (mock)"}, nil
+	return entity.Result{Body: "https://example.invalid/go-doc (mock)"}, nil
 }
 
 // researchState — состояние сценария. Mock в состоянии, чтобы шаги вызывали

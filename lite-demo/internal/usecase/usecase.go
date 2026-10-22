@@ -43,7 +43,7 @@ func New(d Deps) (*UseCase, error) {
 
 	set, err := tools.NewRegistry().Register(
 		tools.New("link", link,
-			tools.Desc("Добавить заготовленную mock-ссылку в конец ответа."), tools.Read()),
+			tools.Desc("Вернуть заготовленную mock-ссылку."), tools.Read()),
 		tools.New("research", u.research,
 			tools.Desc("База знаний, затем mock-upstream и ветка по коду ответа."), tools.Egress()),
 	).Build()

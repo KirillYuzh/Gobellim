@@ -96,7 +96,6 @@ func (s *session) chat(ctx context.Context, in []entity.Message) (entity.ChatRes
 	specs := s.specs()
 	msgs = append([]entity.Message{{Role: "system", Content: systemPrompt(specs)}}, msgs...)
 
-	var display string
 	var calls []entity.ToolCall
 	last := ""
 	for step := 0; step < s.a.budget.MaxSteps; step++ {
@@ -109,7 +108,7 @@ func (s *session) chat(ctx context.Context, in []entity.Message) (entity.ChatRes
 		}
 		last = resp.Content
 		if len(resp.ToolCalls) == 0 {
-			return entity.ChatResponse{Status: "ok", Answer: appendDisplay(resp.Content, display), ToolCalls: calls}, nil
+			return entity.ChatResponse{Status: "ok", Answer: resp.Content, ToolCalls: calls}, nil
 		}
 		if len(resp.ToolCalls) > s.a.budget.MaxToolCallsPerStep {
 			return entity.ChatResponse{Status: "budget", Answer: resp.Content, ToolCalls: calls}, nil
@@ -139,9 +138,6 @@ func (s *session) chat(ctx context.Context, in []entity.Message) (entity.ChatRes
 				return entity.ChatResponse{
 					Status: "need_input", Question: res.Question, Query: lastUser(msgs), ToolCalls: calls,
 				}, nil
-			}
-			if res.Display != "" {
-				display = res.Display
 			}
 			calls = append(calls, tc)
 			toolMsgs = append(toolMsgs, toolMessage(tc.Name, res))
@@ -247,16 +243,6 @@ func systemPrompt(specs []entity.ToolSpec) string {
 			"Факты и ссылки из инструментов помечены как mock.",
 		strings.Join(names, ", "),
 	)
-}
-
-func appendDisplay(answer, display string) string {
-	if display == "" || strings.Contains(answer, display) {
-		return answer
-	}
-	if answer = strings.TrimSpace(answer); answer != "" {
-		answer += "\n\n"
-	}
-	return answer + display
 }
 
 func toolMessage(name string, res entity.Result) entity.Message {

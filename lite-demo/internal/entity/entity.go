@@ -58,7 +58,6 @@ type Result struct {
 	Body      string `json:"body,omitempty"`
 	Question  string `json:"question,omitempty"`
 	Error     string `json:"error,omitempty"`
-	Display   string `json:"display,omitempty"`
 	Data      any    `json:"data,omitempty"`
 	NeedInput bool   `json:"need_input,omitempty"`
 }
