@@ -13,20 +13,26 @@ workflow.
 
 Модель отвечает на вопрос и может вызвать инструмент:
 
-| Инструмент | Право           | Что делает                                    |
-| ---------- | --------------- | --------------------------------------------- |
-| `link`     | `tool:link`     | дописывает mock-ссылку в конец ответа         |
-| `research` | `tool:research` | база знаний → upstream → ветка по коду ответа |
+| Инструмент | Право           | Что делает                            |
+| ---------- | --------------- | ------------------------------------- |
+| `link`     | `tool:link`     | дописывает mock-ссылку в конец ответа |
+| `research` | `tool:research` | mock-workflow с ветками               |
 
-`research` — workflow из трёх шагов. Ветка `a` отдаёт тело A вместе с чанками,
-`b` возвращает `need_input` и вопрос, `other` — безопасный текст ошибки. Шаги
-вызывают обычные функции мока, без вложенных инструментов.
+`research` — workflow, ветку которого выбирает модель аргументом `branch`:
+
+- `a` — готовый факт;
+- `b` — вопрос пользователю: про функции или про потоки;
+- `other` — ошибка upstream.
+
+После ответа пользователя сценарий продолжается: модель кладёт ответ в `query`,
+и ветка становится `functions` или `threads`. Все данные — заглушки, внешних
+сервисов нет.
 
 ## Один путь
 
 Каждый инструмент, который назвала модель, идёт через одну функцию
-`session.call`: право → бюджет → схема аргументов → обработчик. Вложенных
-вызовов нет: шаги `research` вызывают обычные функции мока.
+`session.call`: право → бюджет → схема аргументов → обработчик. Шаги `research`
+— обычные функции, вложенных инструментов нет.
 
 ```mermaid
 sequenceDiagram
@@ -68,33 +74,30 @@ curl -s http://localhost:8080/v1/chat \
   -H 'Content-Type: application/json' \
   -d '{
     "user": {"id": "u-1", "tenant": "acme", "roles": ["support"]},
-    "messages": [{"role": "user", "content": "Найди в базе знаний, что такое go modules"}]
+    "messages": [{"role": "user", "content": "Сделай research по go modules, ветка a"}]
   }'
 ```
 
 ## Локально
 
-Нужны mockd и ключ `GIGACHAT_API_KEY` в `lite-demo/.env`:
+Нужен только ключ `GIGACHAT_API_KEY` в `lite-demo/.env`:
 
 ```sh
 set -a; . ./.env; set +a
-go run ./cmd/mockd &
 go run ./cmd/lite-demo
 ```
-
-По умолчанию сервис ждёт mock-сервис на `http://localhost:8081`.
 
 ## API
 
 `POST /v1/chat`, `GET /healthz`.
 
-Статусы чата: `ok`, `need_input`, `max_steps`, `budget`.
+Статусы чата: `ok`, `max_steps`, `budget`.
 
 | Код | Когда                                     |
 | --- | ----------------------------------------- |
 | 400 | битый JSON, лишние поля, нет пользователя |
 | 403 | policy запретила действие                 |
-| 502 | не ответил GigaChat или mock-сервис       |
+| 502 | не ответил GigaChat                       |
 | 504 | истёк дедлайн запроса                     |
 | 500 | внутренняя ошибка                         |
 
@@ -128,15 +131,17 @@ go run ./cmd/lite-demo
 
 ```go
 tools.New("link", link,
-	tools.Desc("Добавить mock-ссылку в конец ответа"),
+	tools.Desc("Добавить ссылку в конец ответа. Приложение сделает это само."),
 	tools.Read(),
 )
 
 tools.New("research", u.research,
-	tools.Desc("База знаний, upstream и ветка по коду ответа"),
-	tools.Egress(),
+	tools.Desc("Mock-сценарий. Ветки: a — факт, b — вопрос, functions и threads — ответ, other — ошибка."),
+	tools.Read(),
 )
 ```
+
+Ветку `branch` модель выбирает сама: в схеме это enum, а не свободная строка.
 
 `Registry` собирает каталог один раз; ошибка объявления и повтор имени видны в
 `Build`, а не в рантайме.
@@ -148,25 +153,22 @@ tools.New("research", u.research,
 под-workflow по состоянию.
 
 ```go
-func researchKB(ctx context.Context, st *researchState) error {
-	chunks, err := st.Mock.KB(ctx, st.Query)
-	st.KB = chunks
-	return err
-}
+var researchFlow = workflow.New[researchState]("research").
+	Branch("route", researchRoute, map[string]*workflow.Flow[researchState]{
+		"a":         workflow.New[researchState]("a").Then("answer", researchA),
+		"b":         workflow.New[researchState]("b").Then("ask", researchAsk),
+		"functions": workflow.New[researchState]("functions").Then("answer", researchFunctions),
+		"threads":   workflow.New[researchState]("threads").Then("answer", researchThreads),
+		"other":     workflow.New[researchState]("other").Then("report", researchOther),
+	})
 
-func researchLookup(ctx context.Context, st *researchState) error {
-	out, err := st.Mock.Lookup(ctx, st.Query)
-	st.Lookup = out
-	return err
+func researchAsk(_ context.Context, st *researchState) error {
+	st.Result = entity.Result{Code: "b", Body: "Спроси у пользователя..."}
+	return nil
 }
-
-flow := workflow.New[researchState]("research").
-	Then("kb", researchKB).
-	Then("lookup", researchLookup).
-	Branch("route", researchRoute, routes)
 ```
 
-Ошибка шага останавливает цепочку и возвращается с путём `research/kb`. `Run`
+Ошибка шага останавливает цепочку и возвращается с путём `research/ask`. `Run`
 проверяет циклы и дубли имён, ограничивает глубину и число шагов, ловит панику
 шага, а паника observer возвращает `ErrObserver`.
 
@@ -175,7 +177,6 @@ flow := workflow.New[researchState]("research").
 | Путь                  | Что                                                        |
 | --------------------- | ---------------------------------------------------------- |
 | `cmd/lite-demo`       | точка входа сервиса                                        |
-| `cmd/mockd`           | mock базы знаний и upstream                                |
 | `internal/app`        | сборка зависимостей, сервер, graceful shutdown             |
 | `internal/agent`      | системная часть: цикл модель → инструменты, права и бюджет |
 | `internal/config`     | окружение и проверки старта                                |
@@ -184,7 +185,6 @@ flow := workflow.New[researchState]("research").
 | `internal/errmap`     | ошибка → HTTP-код и безопасное сообщение                   |
 | `internal/llm`        | клиент GigaChat `/v1/chat/completions`                     |
 | `internal/policy`     | роли и права, deny by default                              |
-| `internal/repository` | клиент mock-сервиса                                        |
 | `internal/routes`     | таблица маршрутов и recover                                |
 | `internal/tools`      | движок инструментов: схема, каталог, вызов                 |
 | `internal/usecase`    | сценарии: чат, инструменты и health                        |
@@ -198,7 +198,6 @@ flow := workflow.New[researchState]("research").
 | `APP_ENV`           | dev                                                 | `prod` отклоняется                     |
 | `HTTP_ADDR`         | `:8080`                                             | адрес сервера                          |
 | `POLICY_PATH`       | `policy.json`                                       | файл прав                              |
-| `MOCK_BASE_URL`     | `http://localhost:8081`                             | mock-сервис                            |
 | `GIGACHAT_API_KEY`  | из `.env`                                           | OAuth-ключ, обязателен                 |
 | `GIGACHAT_MODEL`    | `GigaChat-2`                                        | модель                                 |
 | `GIGACHAT_BASE_URL` | `https://api.giga.chat`                             | API                                    |

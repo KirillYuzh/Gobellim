@@ -25,7 +25,8 @@ cd lite-demo
 docker compose up -d --build
 ```
 
-The service listens on `:8080`, the mock service on `:8081`.
+The service listens on `:8080`. Every tool in the demo is a stub: no mock service,
+no outbound calls except GigaChat.
 
 ### Requests for every scenario
 
@@ -41,17 +42,36 @@ curl -s http://localhost:8080/v1/chat \
     "messages": [{"role": "user", "content": "Добавь ссылку на документацию по Go."}]
   }'
 
-# research, branch a (role support)
+# research, branch a (role support): the model picks branch a
 curl -s http://localhost:8080/v1/chat \
   -H 'Content-Type: application/json' \
   -d '{
     "user": {"id": "u-1", "tenant": "acme", "roles": ["support"]},
-    "messages": [{"role": "user", "content": "Сделай research по go modules."}]
+    "messages": [{"role": "user", "content": "Сделай research по go modules, ветка a."}]
   }'
 
-# research, branch b: status need_input (second research call)
-# research, branch other: safe error text (third research call)
-# mockd answers a, b, other in a circle, so repeat the same request
+# research, branch b: the model asks which topic the user wants
+curl -s http://localhost:8080/v1/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user": {"id": "u-1", "tenant": "acme", "roles": ["support"]},
+    "messages": [{"role": "user", "content": "Сделай research по go modules, ветка b."}]
+  }'
+
+# research, branch other: safe error text
+# ... replace "ветка a" above with "ветка other"
+
+# branch b continued: the answer picks functions or threads
+curl -s http://localhost:8080/v1/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user": {"id": "u-1", "tenant": "acme", "roles": ["support"]},
+    "messages": [
+      {"role": "user", "content": "Сделай research по go modules, ветка b."},
+      {"role": "assistant", "content": "Что конкретно узнать: про функции или про потоки?"},
+      {"role": "user", "content": "Про функции."}
+    ]
+  }'
 
 # forbidden: the guest role has no chat permission
 curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/v1/chat \

@@ -1,34 +1,14 @@
-x-app: &app
-  image: some-project:local
-
 services:
-  mockd:
-    <<: *app
+  app:
     build:
       context: .
       dockerfile: Dockerfile
-    entrypoint: ["/usr/local/bin/mockd"]
-    environment:
-      MOCK_ADDR: ":8081"
-    ports:
-      - "8081:8081"
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/healthz"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-
-  app:
-    <<: *app
-    depends_on:
-      mockd:
-        condition: service_healthy
+    image: some-project:local
     env_file:
       - .env
     environment:
       HTTP_ADDR: ":8080"
       POLICY_PATH: "/policy.json"
-      MOCK_BASE_URL: "http://mockd:8081"
     ports:
       - "${APP_PORT:-8080}:8080"
     healthcheck:

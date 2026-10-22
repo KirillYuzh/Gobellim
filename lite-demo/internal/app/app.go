@@ -15,7 +15,6 @@ import (
 	"some-project/internal/controller"
 	"some-project/internal/llm"
 	"some-project/internal/policy"
-	"some-project/internal/repository"
 	"some-project/internal/routes"
 	"some-project/internal/usecase"
 )
@@ -31,7 +30,6 @@ func Run(cfg config.Config, log *slog.Logger) error {
 		LLM: llm.NewGigaChat(
 			cfg.GigaChatKey, cfg.GigaChatModel, cfg.GigaChatBaseURL, cfg.GigaChatAuthURL, cfg.GigaChatScope,
 		),
-		Mock:   repository.NewMockd(cfg.MockURL),
 		Policy: pol,
 		Logger: log,
 	})
@@ -39,7 +37,7 @@ func Run(cfg config.Config, log *slog.Logger) error {
 		return err
 	}
 
-	log.Info("service ready", "tools", uc.Health().Tools, "gigachat", cfg.GigaChatModel, "mock", cfg.MockURL)
+	log.Info("service ready", "tools", uc.Health().Tools, "gigachat", cfg.GigaChatModel)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

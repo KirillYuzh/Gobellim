@@ -9,20 +9,12 @@ import (
 	"some-project/internal/agent"
 	"some-project/internal/entity"
 	"some-project/internal/policy"
-	"some-project/internal/repository"
 	"some-project/internal/tools"
 )
-
-// Mock — второй сервис, к которому ходят шаги сценария.
-type Mock interface {
-	KB(ctx context.Context, query string) ([]entity.Chunk, error)
-	Lookup(ctx context.Context, query string) (repository.Lookup, error)
-}
 
 // Deps — зависимости сценариев.
 type Deps struct {
 	LLM    agent.LLM
-	Mock   Mock
 	Policy *policy.Policy
 	Logger *slog.Logger
 	Budget entity.Budget
@@ -31,21 +23,22 @@ type Deps struct {
 // UseCase знает модель, права и инструменты. HTTP он не знает.
 type UseCase struct {
 	agent *agent.Agent
-	mock  Mock
 }
 
 // New собирает каталог инструментов и агент.
 func New(d Deps) (*UseCase, error) {
-	if d.LLM == nil || d.Mock == nil || d.Policy == nil {
-		return nil, fmt.Errorf("usecase: LLM, mock и policy обязательны: %w", entity.ErrConfig)
+	if d.LLM == nil || d.Policy == nil {
+		return nil, fmt.Errorf("usecase: LLM и policy обязательны: %w", entity.ErrConfig)
 	}
-	u := &UseCase{mock: d.Mock}
+	u := &UseCase{}
 
 	set, err := tools.NewRegistry().Register(
 		tools.New("link", link,
-			tools.Desc("Добавить ссылку на документацию в конец ответа. Приложение сделает это само."), tools.Read()),
+			tools.Desc("Добавить ссылку в конец ответа. Приложение сделает это само."), tools.Read()),
 		tools.New("research", u.research,
-			tools.Desc("База знаний, затем mock-upstream и ветка по коду ответа."), tools.Egress()),
+			tools.Desc("Mock-сценарий. Ветки: a — готовый факт; b — только если пользователь ещё не ответил, тогда задай ему вопрос про функции или потоки; "+
+				"functions или threads — если пользователь уже ответил, какой темы он хочет; other — ошибка upstream."),
+			tools.Read()),
 	).Build()
 	if err != nil {
 		return nil, err

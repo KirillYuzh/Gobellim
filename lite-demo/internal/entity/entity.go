@@ -43,33 +43,20 @@ type ChatRequest struct {
 	Messages []Message `json:"messages"`
 }
 
-// ChatResponse — ответ сервиса. Status: ok, need_input, max_steps или budget.
+// ChatResponse — ответ сервиса. Status: ok, max_steps или budget.
 type ChatResponse struct {
 	Status    string     `json:"status"`
 	Answer    string     `json:"answer,omitempty"`
-	Question  string     `json:"question,omitempty"`
-	Query     string     `json:"query,omitempty"`
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 }
 
 // Result — результат инструмента; уходит модели как JSON.
 // Поле Append модели не показывают: его дописывает сервис в конец ответа.
 type Result struct {
-	Code      string `json:"code,omitempty"`
-	Body      string `json:"body,omitempty"`
-	Question  string `json:"question,omitempty"`
-	Error     string `json:"error,omitempty"`
-	Append    string `json:"append,omitempty"`
-	Data      any    `json:"data,omitempty"`
-	NeedInput bool   `json:"need_input,omitempty"`
-}
-
-// Chunk — фрагмент базы знаний.
-type Chunk struct {
-	ID    string  `json:"id"`
-	Text  string  `json:"text"`
-	Score float64 `json:"score"`
-	Mock  bool    `json:"mock"`
+	Code   string `json:"code,omitempty"`
+	Body   string `json:"body,omitempty"`
+	Error  string `json:"error,omitempty"`
+	Append string `json:"append,omitempty"`
 }
 
 // CompletionRequest — то, что уходит в LLM.

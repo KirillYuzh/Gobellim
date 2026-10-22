@@ -13,25 +13,14 @@ import (
 	"some-project/internal/controller"
 	"some-project/internal/entity"
 	"some-project/internal/policy"
-	"some-project/internal/repository"
 	"some-project/internal/routes"
 	"some-project/internal/usecase"
 )
 
-type staticLLM struct{ content string }
+type stubLLM struct{}
 
-func (l staticLLM) Chat(_ context.Context, _ entity.CompletionRequest) (entity.Completion, error) {
-	return entity.Completion{Content: l.content}, nil
-}
-
-type stubMock struct{}
-
-func (stubMock) KB(context.Context, string) ([]entity.Chunk, error) {
-	return []entity.Chunk{{ID: "1", Text: "chunk", Mock: true}}, nil
-}
-
-func (stubMock) Lookup(context.Context, string) (repository.Lookup, error) {
-	return repository.Lookup{Code: "a", Body: "body"}, nil
+func (stubLLM) Chat(_ context.Context, _ entity.CompletionRequest) (entity.Completion, error) {
+	return entity.Completion{Content: "ok"}, nil
 }
 
 func newHandler(t *testing.T) http.Handler {
@@ -40,8 +29,7 @@ func newHandler(t *testing.T) http.Handler {
 		"user": {"chat", "tool:link"},
 	}}
 	uc, err := usecase.New(usecase.Deps{
-		LLM:    staticLLM{content: "ok"},
-		Mock:   stubMock{},
+		LLM:    stubLLM{},
 		Policy: p,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})

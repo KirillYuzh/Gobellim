@@ -6,12 +6,13 @@ import (
 	"strings"
 
 	"some-project/internal/entity"
-	"some-project/internal/repository"
 	"some-project/internal/workflow"
 )
 
-type queryIn struct {
-	Query string `json:"query"`
+// researchIn — аргументы сценария. Ветку выбирает модель.
+type researchIn struct {
+	Query  string `json:"query" jsonschema:"description=Тема исследования"`
+	Branch string `json:"branch" jsonschema:"enum=a,enum=b,enum=other,enum=functions,enum=threads,description=Ветка: a — готовый факт, b — задать пользователю вопрос про функции или потоки, functions и threads — ответ на этот вопрос, other — ошибка upstream"`
 }
 
 // link — заглушка: модель получает только подтверждение, а ссылку сервис
@@ -23,69 +24,74 @@ func link(context.Context, struct{}) (entity.Result, error) {
 	}, nil
 }
 
-// researchState — состояние сценария. Mock в состоянии, чтобы шаги вызывали
-// обычные функции, без обвязки инструментов.
+// researchState — состояние сценария.
 type researchState struct {
-	Mock   Mock
 	Query  string
-	KB     []entity.Chunk
-	Lookup repository.Lookup
+	Branch string
 	Result entity.Result
 }
 
-// researchFlow: база знаний, upstream и ветка по коду ответа.
+// researchFlow: ветку выбирает модель, включая продолжение после вопроса.
 var researchFlow = workflow.New[researchState]("research").
-	Then("kb", researchKB).
-	Then("lookup", researchLookup).
 	Branch("route", researchRoute, map[string]*workflow.Flow[researchState]{
-		"a":     workflow.New[researchState]("a").Then("relay", researchRelay),
-		"b":     workflow.New[researchState]("b").Then("ask", researchAsk),
-		"other": workflow.New[researchState]("other").Then("report", researchReport),
+		"a":         workflow.New[researchState]("a").Then("answer", researchA),
+		"b":         workflow.New[researchState]("b").Then("ask", researchAsk),
+		"functions": workflow.New[researchState]("functions").Then("answer", researchFunctions),
+		"threads":   workflow.New[researchState]("threads").Then("answer", researchThreads),
+		"other":     workflow.New[researchState]("other").Then("report", researchOther),
 	})
 
-func researchKB(ctx context.Context, st *researchState) error {
-	chunks, err := st.Mock.KB(ctx, st.Query)
-	st.KB = chunks
-	return err
-}
-
-func researchLookup(ctx context.Context, st *researchState) error {
-	out, err := st.Mock.Lookup(ctx, st.Query)
-	st.Lookup = out
-	return err
-}
-
+// researchRoute: готовый ответ пользователя в запросе важнее ветки, потому что
+// модель часто оставляет branch=b на продолжении, а тему переносит в query.
 func researchRoute(st *researchState) string {
-	if st.Lookup.Code == "" {
-		return "other"
+	q := strings.ToLower(st.Query)
+	switch {
+	case strings.Contains(q, "функц"), strings.Contains(q, "function"):
+		return "functions"
+	case strings.Contains(q, "поток"), strings.Contains(q, "горутин"),
+		strings.Contains(q, "goroutine"), strings.Contains(q, "thread"):
+		return "threads"
+	case st.Branch == "":
+		return "a"
 	}
-	return st.Lookup.Code
+	return st.Branch
 }
 
-func researchRelay(_ context.Context, st *researchState) error {
-	st.Result = entity.Result{Code: "a", Body: st.Lookup.Body, Data: st.KB}
+func researchA(_ context.Context, st *researchState) error {
+	st.Result = entity.Result{Code: "a", Body: "Mock-факт A: `go build ./...` собирает все пакеты модуля."}
 	return nil
 }
 
+// researchAsk отдаёт вопрос пользователю. Ответ пользователя модель передаёт
+// следующей веткой: functions или threads.
 func researchAsk(_ context.Context, st *researchState) error {
-	st.Result = entity.Result{Code: "b", Question: st.Lookup.Question, NeedInput: true}
-	return nil
-}
-
-func researchReport(_ context.Context, st *researchState) error {
-	msg := st.Lookup.Error
-	if msg == "" {
-		msg = "upstream returned an unknown code"
+	st.Result = entity.Result{
+		Code: "b",
+		Body: "Спроси у пользователя, что именно он хочет узнать: про функции или про потоки?",
 	}
-	st.Result = entity.Result{Code: "other", Error: msg}
 	return nil
 }
 
-func (u *UseCase) research(ctx context.Context, in queryIn) (entity.Result, error) {
+func researchFunctions(_ context.Context, st *researchState) error {
+	st.Result = entity.Result{Code: "b", Body: "Mock-ответ: функции в Go — значения первого класса, их можно передавать и возвращать."}
+	return nil
+}
+
+func researchThreads(_ context.Context, st *researchState) error {
+	st.Result = entity.Result{Code: "b", Body: "Mock-ответ: потоки в Go — это горутины, запускаются словом `go`."}
+	return nil
+}
+
+func researchOther(_ context.Context, st *researchState) error {
+	st.Result = entity.Result{Code: "other", Error: "mock-upstream вернул неизвестный код"}
+	return nil
+}
+
+func (u *UseCase) research(ctx context.Context, in researchIn) (entity.Result, error) {
 	if strings.TrimSpace(in.Query) == "" {
 		return entity.Result{}, fmt.Errorf("query is required: %w", entity.ErrInvalid)
 	}
-	st := researchState{Mock: u.mock, Query: in.Query}
+	st := researchState{Query: in.Query, Branch: in.Branch}
 	if err := researchFlow.Run(ctx, &st); err != nil {
 		return entity.Result{}, err
 	}

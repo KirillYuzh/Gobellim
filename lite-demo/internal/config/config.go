@@ -12,7 +12,6 @@ import (
 type Config struct {
 	Addr            string
 	PolicyPath      string
-	MockURL         string
 	GigaChatKey     string
 	GigaChatModel   string
 	GigaChatBaseURL string
@@ -28,7 +27,6 @@ func Load() (Config, error) {
 	c := Config{
 		Addr:            env("HTTP_ADDR", ":8080"),
 		PolicyPath:      env("POLICY_PATH", "policy.json"),
-		MockURL:         env("MOCK_BASE_URL", "http://localhost:8081"),
 		GigaChatKey:     os.Getenv("GIGACHAT_API_KEY"),
 		GigaChatModel:   env("GIGACHAT_MODEL", "GigaChat-2"),
 		GigaChatBaseURL: env("GIGACHAT_BASE_URL", "https://api.giga.chat"),
@@ -45,8 +43,6 @@ func Load() (Config, error) {
 		return Config{}, errors.New("lite-demo is a demo: APP_ENV=prod is not supported")
 	case c.RequestTimeout <= 0:
 		return Config{}, errors.New("REQUEST_TIMEOUT must be > 0")
-	case c.MockURL == "":
-		return Config{}, errors.New("MOCK_BASE_URL is required")
 	case c.GigaChatKey == "":
 		return Config{}, errors.New("GIGACHAT_API_KEY is required: put it in lite-demo/.env")
 	}

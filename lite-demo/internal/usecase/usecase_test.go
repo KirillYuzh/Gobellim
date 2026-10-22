@@ -11,7 +11,6 @@ import (
 	"some-project/internal/agent"
 	"some-project/internal/entity"
 	"some-project/internal/policy"
-	"some-project/internal/repository"
 )
 
 type fakeLLM struct {
@@ -33,32 +32,17 @@ func (f *fakeLLM) Chat(_ context.Context, req entity.CompletionRequest) (entity.
 	return resp, nil
 }
 
-type fakeMock struct {
-	lookup repository.Lookup
-}
-
-func (f *fakeMock) KB(_ context.Context, query string) ([]entity.Chunk, error) {
-	return []entity.Chunk{{ID: "1", Text: "chunk:" + query, Score: 1, Mock: true}}, nil
-}
-
-func (f *fakeMock) Lookup(_ context.Context, _ string) (repository.Lookup, error) {
-	if f.lookup.Code == "" {
-		return repository.Lookup{Code: "a", Body: "body A"}, nil
-	}
-	return f.lookup, nil
-}
-
 func user(role string) entity.User {
 	return entity.User{ID: "u-1", Tenant: "acme", Roles: []string{role}}
 }
 
-func newUseCase(t *testing.T, llm agent.LLM, mock Mock, budget entity.Budget) *UseCase {
+func newUseCase(t *testing.T, llm agent.LLM, budget entity.Budget) *UseCase {
 	t.Helper()
 	p := &policy.Policy{Default: "deny", Roles: map[string][]string{
 		"user":    {"chat", "tool:link"},
 		"support": {"chat", "tool:link", "tool:research"},
 	}}
-	uc, err := New(Deps{LLM: llm, Mock: mock, Policy: p, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Budget: budget})
+	uc, err := New(Deps{LLM: llm, Policy: p, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Budget: budget})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -74,13 +58,13 @@ func TestChatRunsToolsAndAnswers(t *testing.T) {
 		{ToolCalls: []entity.ToolCall{{Name: "link"}}},
 		{Content: "готово"},
 	}}
-	uc := newUseCase(t, llm, &fakeMock{}, entity.Budget{})
+	uc := newUseCase(t, llm, entity.Budget{})
 
 	res, err := uc.Chat(context.Background(), entity.ChatRequest{User: user("user"), Messages: msg("найди")})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
-	if res.Status != "ok" || !strings.Contains(res.Answer, "готово") || !strings.Contains(res.Answer, "example.invalid") {
+	if res.Status != "ok" || res.Answer != "готово\n\nhttps://example.invalid/go-doc (mock)" {
 		t.Fatalf("response = %+v", res)
 	}
 	if len(res.ToolCalls) != 1 || res.ToolCalls[0].Name != "link" {
@@ -94,30 +78,14 @@ func TestChatRunsToolsAndAnswers(t *testing.T) {
 		t.Fatalf("no tool message was sent back to the model: %+v", last.Messages)
 	}
 	// Ссылку модель видеть не должна: иначе она вставит её второй раз.
-	if got := last.Messages[len(last.Messages)-1].Content; strings.Contains(got, "example.invalid") {
-		t.Fatalf("tool message leaks the link: %s", got)
-	}
-}
-
-func TestChatStopsForInput(t *testing.T) {
-	llm := &fakeLLM{responses: []entity.Completion{
-		{ToolCalls: []entity.ToolCall{{Name: "research", Args: map[string]any{"query": "go"}}}},
-	}}
-	mock := &fakeMock{lookup: repository.Lookup{Code: "b", Question: "версия?"}}
-	uc := newUseCase(t, llm, mock, entity.Budget{})
-
-	res, err := uc.Chat(context.Background(), entity.ChatRequest{User: user("support"), Messages: msg("найди")})
-	if err != nil {
-		t.Fatalf("Chat: %v", err)
-	}
-	if res.Status != "need_input" || res.Question != "версия?" || res.Answer != "" {
-		t.Fatalf("response = %+v", res)
+	if got := last.Messages[len(last.Messages)-1].Content; got != `{"body":"Готово: ссылка добавлена в конец ответа."}` {
+		t.Fatalf("tool message = %s", got)
 	}
 }
 
 func TestChatStopsAtMaxSteps(t *testing.T) {
 	llm := &fakeLLM{loop: true}
-	uc := newUseCase(t, llm, &fakeMock{}, entity.Budget{MaxSteps: 2, MaxToolCallsPerStep: 1})
+	uc := newUseCase(t, llm, entity.Budget{MaxSteps: 2, MaxToolCallsPerStep: 1})
 
 	res, err := uc.Chat(context.Background(), entity.ChatRequest{User: user("user"), Messages: msg("найди")})
 	if err != nil {
@@ -129,36 +97,42 @@ func TestChatStopsAtMaxSteps(t *testing.T) {
 }
 
 func TestChatNeedsPermission(t *testing.T) {
-	uc := newUseCase(t, &fakeLLM{}, &fakeMock{}, entity.Budget{})
+	uc := newUseCase(t, &fakeLLM{}, entity.Budget{})
 	_, err := uc.Chat(context.Background(), entity.ChatRequest{User: user("guest"), Messages: msg("hi")})
 	if !errors.Is(err, entity.ErrUnauthorized) {
 		t.Fatalf("err = %v, want ErrUnauthorized", err)
 	}
 }
 
-func TestResearchWorkflowBranches(t *testing.T) {
-	llm := &fakeLLM{responses: []entity.Completion{
-		{ToolCalls: []entity.ToolCall{{Name: "research", Args: map[string]any{"query": "go"}}}},
-		{Content: "готово"},
-	}}
-	uc := newUseCase(t, llm, &fakeMock{}, entity.Budget{})
-
-	res, err := uc.Chat(context.Background(), entity.ChatRequest{User: user("support"), Messages: msg("research go")})
-	if err != nil {
-		t.Fatalf("Chat: %v", err)
+func TestResearchRoute(t *testing.T) {
+	cases := []struct {
+		branch, query, want string
+	}{
+		{"", "go modules", "a"},
+		{"a", "go modules", "a"},
+		{"b", "go modules", "b"},
+		{"other", "go modules", "other"},
+		{"b", "go modules functions", "functions"},
+		{"b", "go modules потоки", "threads"},
+		{"", "горутины в go", "threads"},
+		{"b", "go modules функции", "functions"},
 	}
-	if res.Status != "ok" {
-		t.Fatalf("response = %+v", res)
-	}
-	// Во втором запросе уже есть результат инструмента research.
-	var toolMsg string
-	for _, m := range llm.requests[1].Messages {
-		if m.Role == "tool" && m.Name == "research" {
-			toolMsg = m.Content
+	for _, tc := range cases {
+		if got := researchRoute(&researchState{Branch: tc.branch, Query: tc.query}); got != tc.want {
+			t.Fatalf("branch %q, query %q: route = %q, want %q", tc.branch, tc.query, got, tc.want)
 		}
 	}
-	if !strings.Contains(toolMsg, `"code":"a"`) || !strings.Contains(toolMsg, `"data"`) {
-		t.Fatalf("research result = %s, want code a and kb data", toolMsg)
+}
+
+func TestResearchFollowupBranches(t *testing.T) {
+	for branch, want := range map[string]string{"functions": "функции", "threads": "горутины"} {
+		st := researchState{Query: "go", Branch: branch}
+		if err := researchFlow.Run(context.Background(), &st); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if st.Result.Code != "b" || !strings.Contains(st.Result.Body, want) {
+			t.Fatalf("branch %q: result = %+v", branch, st.Result)
+		}
 	}
 }
 
@@ -166,7 +140,7 @@ func TestResearchNeedsPermission(t *testing.T) {
 	llm := &fakeLLM{responses: []entity.Completion{
 		{ToolCalls: []entity.ToolCall{{Name: "research", Args: map[string]any{"query": "go"}}}},
 	}}
-	uc := newUseCase(t, llm, &fakeMock{}, entity.Budget{})
+	uc := newUseCase(t, llm, entity.Budget{})
 
 	_, err := uc.Chat(context.Background(), entity.ChatRequest{User: user("user"), Messages: msg("research go")})
 	if !errors.Is(err, entity.ErrUnauthorized) {

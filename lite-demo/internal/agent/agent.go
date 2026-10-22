@@ -136,11 +136,6 @@ func (s *session) chat(ctx context.Context, in []entity.Message) (entity.ChatRes
 				s.a.log.Error("tool failed", "tool", tc.Name, "user", s.user.ID, "err", err)
 				res = entity.Result{Error: publicError(err)}
 			}
-			if res.NeedInput {
-				return entity.ChatResponse{
-					Status: "need_input", Question: res.Question, Query: lastUser(msgs), ToolCalls: calls,
-				}, nil
-			}
 			calls = append(calls, tc)
 			extra = append(extra, res.Append)
 			toolMsgs = append(toolMsgs, toolMessage(tc.Name, res))
@@ -288,15 +283,6 @@ func dropLinks(s string) string {
 		}
 	}
 	return strings.TrimRight(strings.Join(lines, "\n"), " :;,-—")
-}
-
-func lastUser(msgs []entity.Message) string {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == "user" {
-			return msgs[i].Content
-		}
-	}
-	return ""
 }
 
 func callKey(tc entity.ToolCall) string {
