@@ -1,4 +1,4 @@
-// Package errmap is the only place where an error becomes an HTTP response.
+// Package errmap — единственное место, где ошибка превращается в HTTP-ответ.
 package errmap
 
 import (
@@ -11,12 +11,12 @@ import (
 	"some-project/pkg/rest"
 )
 
-// Status chooses the HTTP code. Client cancellation and the deadline go first:
-// any intermediate error may have wrapped them.
+// Status выбирает HTTP-код. Отмена клиентом и дедлайн проверяются первыми:
+// их мог обернуть любой промежуточный слой.
 func Status(err error) int {
 	switch {
 	case errors.Is(err, context.Canceled):
-		return 499 // client closed request
+		return 499 // клиент закрыл запрос
 	case errors.Is(err, context.DeadlineExceeded):
 		return http.StatusGatewayTimeout
 	case errors.Is(err, entity.ErrInvalid):
@@ -34,7 +34,7 @@ func Status(err error) int {
 	}
 }
 
-// Message is the safe text for the client: no upstream or policy details.
+// Message — безопасный текст для клиента: без деталей upstream и политики.
 func Message(err error) string {
 	switch {
 	case errors.Is(err, entity.ErrInvalid):
@@ -56,7 +56,7 @@ func Message(err error) string {
 	}
 }
 
-// Write sends the error and logs 5xx with the cause.
+// Write отправляет ошибку и логирует 5xx вместе с причиной.
 func Write(w http.ResponseWriter, log *slog.Logger, err error) {
 	status := Status(err)
 	if status >= 500 && status != 499 && log != nil {

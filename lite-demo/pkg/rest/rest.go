@@ -1,4 +1,4 @@
-// Package rest is the JSON boundary: response writing and request binding.
+// Package rest — граница JSON: запись ответа и разбор запроса.
 package rest
 
 import (
@@ -11,7 +11,7 @@ import (
 
 const maxBody = 1 << 20
 
-// JSON writes the response; an encode error goes to the log, not into silence.
+// JSON пишет ответ; ошибка кодирования уходит в лог, а не в тишину.
 func JSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
@@ -20,8 +20,8 @@ func JSON(w http.ResponseWriter, status int, v any) {
 	}
 }
 
-// Bind decodes exactly one JSON object: bounded body, no unknown fields, no
-// trailing data.
+// Bind разбирает ровно один JSON-объект: тело ограничено, неизвестные поля
+// запрещены, хвоста после объекта нет.
 func Bind(w http.ResponseWriter, r *http.Request, v any) error {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody))
 	dec.DisallowUnknownFields()

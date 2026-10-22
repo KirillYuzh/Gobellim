@@ -15,7 +15,7 @@ type User struct {
 	Roles  []string `json:"roles"`
 }
 
-// Validate checks the shape of the principal.
+// Validate проверяет форму principal.
 func (u User) Validate() error {
 	if u.ID == "" || u.Tenant == "" || len(u.Roles) == 0 {
 		return fmt.Errorf("user id, tenant and roles are required: %w", ErrInvalid)

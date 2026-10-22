@@ -1,6 +1,6 @@
-// Package tools is a small, typed tool engine: a declaration derives a JSON
-// Schema from its argument type, the registry compiles a deterministic set, and
-// every invocation validates the arguments and the result.
+// Package tools — небольшой типизированный движок инструментов: объявление
+// выводит JSON Schema из типа аргументов, реестр собирает детерминированный
+// набор, а каждый вызов проверяет аргументы и результат.
 package tools
 
 import (
@@ -13,20 +13,20 @@ import (
 	stjs "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-// Effect is the side-effect class of a tool. The demo reports it in the log;
-// the permission in the policy file is what actually gates the call.
+// Effect — класс побочного эффекта инструмента. Демо пишет его в лог;
+// реально вызов ограничивает разрешение из файла политики.
 type Effect int
 
 const (
-	// EffectRead means the tool only reads state.
+	// EffectRead — инструмент только читает состояние.
 	EffectRead Effect = iota
-	// EffectWrite means the tool mutates state.
+	// EffectWrite — инструмент меняет состояние.
 	EffectWrite
-	// EffectEgress means the tool sends data outside the service.
+	// EffectEgress — инструмент отправляет данные за пределы сервиса.
 	EffectEgress
 )
 
-// String returns the effect name.
+// String возвращает имя эффекта.
 func (e Effect) String() string {
 	switch e {
 	case EffectRead:
@@ -40,23 +40,23 @@ func (e Effect) String() string {
 	}
 }
 
-// Policy declares a tool's effect. It is an Option, so it is passed straight to
-// New. The zero value is read-only.
+// Policy объявляет эффект инструмента. Это Option, поэтому передаётся прямо в
+// New. Нулевое значение — только чтение.
 type Policy struct{ effect Effect }
 
-// Effect returns the declared effect.
+// Effect возвращает объявленный эффект.
 func (p Policy) Effect() Effect { return p.effect }
 
-// apply implements Option.
+// apply реализует Option.
 func (p Policy) apply(o *options) { o.effect = p.effect }
 
-// Read returns a read-only policy, the zero value.
+// Read — политика только для чтения, нулевое значение.
 func Read() Policy { return Policy{} }
 
-// Write returns a policy for a tool that mutates state.
+// Write — политика для инструмента, который меняет состояние.
 func Write() Policy { return Policy{effect: EffectWrite} }
 
-// Egress returns a policy for a tool that calls another service.
+// Egress — политика для инструмента, который ходит в другой сервис.
 func Egress() Policy { return Policy{effect: EffectEgress} }
 
 type options struct {
@@ -65,24 +65,24 @@ type options struct {
 	effect      Effect
 }
 
-// Option configures a tool declaration.
+// Option настраивает объявление инструмента.
 type Option interface{ apply(*options) }
 
 type optionFunc func(*options)
 
 func (f optionFunc) apply(o *options) { f(o) }
 
-// Desc sets the description shown to the model.
+// Desc задаёт описание, которое видит модель.
 func Desc(s string) Option { return optionFunc(func(o *options) { o.description = s }) }
 
-// Perm overrides the default tool:<name> permission.
+// Perm переопределяет разрешение по умолчанию tool:<name>.
 func Perm(p string) Option { return optionFunc(func(o *options) { o.permission = p }) }
 
-// ToolPermission returns the default RBAC permission for a tool.
+// ToolPermission возвращает разрешение RBAC по умолчанию для инструмента.
 func ToolPermission(name string) string { return "tool:" + name }
 
-// Def is the runtime contract of a declared tool: enough to describe it to the
-// model, gate it by permission, and invoke it.
+// Def — контракт объявленного инструмента во время работы: его хватает,
+// чтобы описать инструмент модели, ограничить вызов разрешением и выполнить его.
 type Def interface {
 	Name() string
 	Description() string
@@ -93,8 +93,8 @@ type Def interface {
 	Err() error
 }
 
-// Tool is a typed tool declaration. In is the argument type, Out the result
-// type. Create one with New and register it via Registry.
+// Tool — типизированное объявление инструмента. In — тип аргументов, Out — тип
+// результата. Создаётся через New, регистрируется через Registry.
 type Tool[In, Out any] struct {
 	name        string
 	desc        string
@@ -107,9 +107,9 @@ type Tool[In, Out any] struct {
 	err         error
 }
 
-// New declares a typed tool. The JSON Schema is derived from In, and the result
-// is serialized from Out and checked against Out's schema. Declaration errors
-// surface at Registry.Build.
+// New объявляет типизированный инструмент. JSON Schema выводится из In,
+// результат сериализуется из Out и сверяется со схемой Out. Ошибки объявления
+// всплывают в Registry.Build.
 func New[In, Out any](name string, fn func(context.Context, In) (Out, error), opts ...Option) *Tool[In, Out] {
 	t := &Tool[In, Out]{name: name, fn: fn}
 	if name == "" {
@@ -156,26 +156,26 @@ func New[In, Out any](name string, fn func(context.Context, In) (Out, error), op
 	return t
 }
 
-// Name returns the tool name.
+// Name возвращает имя инструмента.
 func (t *Tool[In, Out]) Name() string { return t.name }
 
-// Description returns the description shown to the model.
+// Description возвращает описание для модели.
 func (t *Tool[In, Out]) Description() string { return t.desc }
 
-// Permission returns the RBAC permission the tool is gated by.
+// Permission возвращает разрешение RBAC, которым ограничен инструмент.
 func (t *Tool[In, Out]) Permission() string { return t.permission }
 
-// Effect returns the declared effect.
+// Effect возвращает объявленный эффект.
 func (t *Tool[In, Out]) Effect() Effect { return t.effect }
 
-// Schema returns the input JSON Schema.
+// Schema возвращает JSON Schema аргументов.
 func (t *Tool[In, Out]) Schema() json.RawMessage { return t.schema }
 
-// Err returns any declaration error, or nil.
+// Err возвращает ошибку объявления или nil.
 func (t *Tool[In, Out]) Err() error { return t.err }
 
-// Invoke validates args against the input schema, runs the typed function,
-// validates the result against the output schema, and returns it as JSON.
+// Invoke проверяет аргументы по входной схеме, вызывает типизированную функцию,
+// проверяет результат по выходной схеме и возвращает его как JSON.
 func (t *Tool[In, Out]) Invoke(ctx context.Context, args json.RawMessage) (string, error) {
 	if t.err != nil {
 		return "", t.err
@@ -218,20 +218,20 @@ func (t *Tool[In, Out]) Invoke(ctx context.Context, args json.RawMessage) (strin
 
 var _ Def = (*Tool[int, int])(nil)
 
-// Registry collects declarations and compiles them into a Set.
+// Registry собирает объявления и компилирует их в Set.
 type Registry struct {
 	defs []Def
 	seen map[string]struct{}
 	errs []error
 }
 
-// NewRegistry returns an empty registry.
+// NewRegistry возвращает пустой реестр.
 func NewRegistry() *Registry {
 	return &Registry{seen: make(map[string]struct{})}
 }
 
-// Register adds declarations and returns the registry, so calls chain. A nil
-// Def is ignored; a declaration error or a duplicate name is kept for Build.
+// Register добавляет объявления и возвращает реестр, чтобы вызовы сцеплялись.
+// nil Def пропускается; ошибка объявления или повтор имени копятся до Build.
 func (r *Registry) Register(defs ...Def) *Registry {
 	for _, def := range defs {
 		if def == nil {
@@ -247,7 +247,7 @@ func (r *Registry) Register(defs ...Def) *Registry {
 	return r
 }
 
-// Build validates every declaration and returns the immutable set.
+// Build проверяет все объявления и возвращает неизменяемый набор.
 func (r *Registry) Build() (*Set, error) {
 	errs := append([]error(nil), r.errs...)
 	set := &Set{byName: make(map[string]Def, len(r.defs)), order: make([]string, 0, len(r.defs))}
@@ -265,13 +265,13 @@ func (r *Registry) Build() (*Set, error) {
 	return set, nil
 }
 
-// Set is an immutable, compiled set of tools.
+// Set — неизменяемый скомпилированный набор инструментов.
 type Set struct {
 	byName map[string]Def
 	order  []string
 }
 
-// Get returns the definition for name, or nil.
+// Get возвращает объявление по имени или nil.
 func (s *Set) Get(name string) Def {
 	if s == nil {
 		return nil
@@ -279,7 +279,7 @@ func (s *Set) Get(name string) Def {
 	return s.byName[name]
 }
 
-// All returns the definitions in registration order.
+// All возвращает объявления в порядке регистрации.
 func (s *Set) All() []Def {
 	if s == nil {
 		return nil
@@ -291,7 +291,7 @@ func (s *Set) All() []Def {
 	return out
 }
 
-// Len returns the number of tools.
+// Len возвращает число инструментов.
 func (s *Set) Len() int {
 	if s == nil {
 		return 0
@@ -299,7 +299,7 @@ func (s *Set) Len() int {
 	return len(s.order)
 }
 
-// Names returns the tool names in lexical order.
+// Names возвращает имена инструментов в лексикографическом порядке.
 func (s *Set) Names() []string {
 	if s == nil {
 		return nil

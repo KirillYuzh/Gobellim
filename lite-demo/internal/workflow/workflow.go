@@ -1,9 +1,9 @@
-// Package workflow is a deterministic, typed state machine: a scenario runs its
-// steps in the declared order regardless of what the model does, and a branch
-// chooses a sub-flow from the state.
+// Package workflow — детерминированная типизированная машина состояний: сценарий
+// выполняет шаги в объявленном порядке независимо от того, что делает модель, а
+// ветка выбирает подпоток по состоянию.
 //
-// A step receives the same typed state pointer and mutates it explicitly, so a
-// typo in a field is a compile error rather than a zero value from a map.
+// Шаг получает тот же типизированный указатель на состояние и меняет его явно,
+// поэтому опечатка в поле — ошибка компиляции, а не нулевое значение из map.
 package workflow
 
 import (
@@ -13,35 +13,35 @@ import (
 	"time"
 )
 
-// ErrInvalid marks a malformed flow: an empty or duplicate step name, a nil
-// callback, a missing branch, a cycle, or a nil state.
+// ErrInvalid отмечает битый поток: пустое или повторяющееся имя шага, nil-колбэк,
+// отсутствующая ветка, цикл или nil-состояние.
 var ErrInvalid = errors.New("workflow: invalid")
 
-// ErrObserver marks an observer that panicked. The panic is recovered and
-// returned as an error instead of crashing the process.
+// ErrObserver отмечает панику в наблюдателе. Паника перехватывается и
+// возвращается ошибкой, а не роняет процесс.
 var ErrObserver = errors.New("workflow: observer failed")
 
 const (
-	// maxDepth bounds nested branch flows.
+	// maxDepth ограничивает вложенность веток.
 	maxDepth = 32
-	// maxSteps bounds the steps of a single Run, including nested flows.
+	// maxSteps ограничивает число шагов одного Run вместе с вложенными потоками.
 	maxSteps = 1000
 )
 
-// Step is one named mutation of the state.
+// Step — одно именованное изменение состояния.
 type Step[S any] struct {
 	Name string
 	Run  func(ctx context.Context, st *S) error
 }
 
-// Branch chooses one sub-flow from the state. Decide returns a route name.
+// Branch выбирает подпоток по состоянию. Decide возвращает имя маршрута.
 type Branch[S any] struct {
 	Name   string
 	Decide func(st *S) string
 	Routes map[string]*Flow[S]
 }
 
-// Event is what an observer sees after one step.
+// Event — то, что наблюдатель видит после шага.
 type Event[S any] struct {
 	Flow     string
 	Step     string
@@ -50,16 +50,16 @@ type Event[S any] struct {
 	Duration time.Duration
 }
 
-// Observer is called after every step. A panicking observer does not crash the
-// flow: its panic becomes ErrObserver.
+// Observer вызывается после каждого шага. Паника в нём не роняет поток:
+// она превращается в ErrObserver.
 type Observer[S any] interface {
 	Step(ctx context.Context, ev Event[S])
 }
 
-// ObserverFunc adapts a function to Observer.
+// ObserverFunc превращает функцию в Observer.
 type ObserverFunc[S any] func(ctx context.Context, ev Event[S])
 
-// Step calls the underlying function.
+// Step вызывает исходную функцию.
 func (f ObserverFunc[S]) Step(ctx context.Context, ev Event[S]) { f(ctx, ev) }
 
 type node[S any] struct {
@@ -67,41 +67,42 @@ type node[S any] struct {
 	branch *Branch[S]
 }
 
-// Flow is an ordered list of steps and branches over one state type.
+// Flow — упорядоченный список шагов и веток над одним типом состояния.
 type Flow[S any] struct {
 	name  string
 	nodes []node[S]
 	obs   Observer[S]
 }
 
-// New returns an empty flow with the given name. The name is used in error
-// paths and observer events.
+// New возвращает пустой поток с заданным именем. Имя попадает в тексты ошибок
+// и в события наблюдателя.
 func New[S any](name string) *Flow[S] {
 	return &Flow[S]{name: name}
 }
 
-// Name returns the flow name.
+// Name возвращает имя потока.
 func (f *Flow[S]) Name() string { return f.name }
 
-// Then appends a step and returns the flow, so calls chain.
+// Then добавляет шаг и возвращает поток, чтобы вызовы сцеплялись.
 func (f *Flow[S]) Then(name string, run func(context.Context, *S) error) *Flow[S] {
 	f.nodes = append(f.nodes, node[S]{step: &Step[S]{Name: name, Run: run}})
 	return f
 }
 
-// Branch appends a branch and returns the flow, so calls chain.
+// Branch добавляет ветку и возвращает поток, чтобы вызовы сцеплялись.
 func (f *Flow[S]) Branch(name string, decide func(*S) string, routes map[string]*Flow[S]) *Flow[S] {
 	f.nodes = append(f.nodes, node[S]{branch: &Branch[S]{Name: name, Decide: decide, Routes: routes}})
 	return f
 }
 
-// WithObserver sets the observer called after every step and returns the flow.
+// WithObserver задаёт наблюдателя, вызываемого после каждого шага, и возвращает
+// поток.
 func (f *Flow[S]) WithObserver(o Observer[S]) *Flow[S] {
 	f.obs = o
 	return f
 }
 
-// Validate reports the first structural problem of the flow tree.
+// Validate сообщает о первой структурной проблеме дерева потоков.
 func (f *Flow[S]) Validate() error {
 	if f == nil {
 		return fmt.Errorf("%w: nil flow", ErrInvalid)
@@ -163,8 +164,8 @@ func (f *Flow[S]) validate(path map[*Flow[S]]bool) error {
 	return nil
 }
 
-// Run validates the flow and executes it against st. A step error stops the
-// chain and carries the path as "flow/step".
+// Run проверяет поток и выполняет его над st. Ошибка шага останавливает цепочку
+// и несёт путь вида "поток/шаг".
 func (f *Flow[S]) Run(ctx context.Context, st *S) error {
 	if st == nil {
 		return fmt.Errorf("%w: nil state", ErrInvalid)
@@ -219,7 +220,7 @@ func (f *Flow[S]) run(ctx context.Context, st *S, path map[*Flow[S]]bool, depth 
 	return nil
 }
 
-// decide isolates a user callback: a panic in it is an error, not a crash.
+// decide изолирует пользовательский колбэк: паника в нём — ошибка, а не падение.
 func decide[S any](flowName string, b *Branch[S], st *S) (route string, err error) {
 	defer func() {
 		if rec := recover(); rec != nil {

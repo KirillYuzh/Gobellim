@@ -1,4 +1,4 @@
-// Package repository holds clients of external systems.
+// Package repository — клиенты внешних систем.
 package repository
 
 import (
@@ -15,18 +15,18 @@ import (
 
 const maxResponseBytes = 4 << 20
 
-// Mockd is the client of the mock service.
+// Mockd — клиент mock-сервиса.
 type Mockd struct {
 	base string
 	hc   *http.Client
 }
 
-// NewMockd creates the client.
+// NewMockd создаёт клиент.
 func NewMockd(base string) *Mockd {
 	return &Mockd{base: base, hc: &http.Client{Timeout: 10 * time.Second}}
 }
 
-// Lookup is the upstream/lookup answer.
+// Lookup — ответ upstream/lookup.
 type Lookup struct {
 	Code     string `json:"code"`
 	Body     string `json:"body"`
@@ -34,14 +34,14 @@ type Lookup struct {
 	Error    string `json:"error"`
 }
 
-// Followup is the upstream/followup answer.
+// Followup — ответ upstream/followup.
 type Followup struct {
 	Code  string `json:"code"`
 	Body  string `json:"body"`
 	Error string `json:"error"`
 }
 
-// KB returns the mock knowledge-base chunks.
+// KB возвращает чанки mock-базы знаний.
 func (c *Mockd) KB(ctx context.Context, query string) ([]entity.Chunk, error) {
 	var out struct {
 		Chunks []entity.Chunk `json:"chunks"`
@@ -52,7 +52,7 @@ func (c *Mockd) KB(ctx context.Context, query string) ([]entity.Chunk, error) {
 	return out.Chunks, nil
 }
 
-// Lookup calls upstream/lookup.
+// Lookup вызывает upstream/lookup.
 func (c *Mockd) Lookup(ctx context.Context, query string) (Lookup, error) {
 	var out Lookup
 	if err := c.post(ctx, "/upstream/lookup", map[string]any{"query": query}, &out); err != nil {
@@ -61,7 +61,7 @@ func (c *Mockd) Lookup(ctx context.Context, query string) (Lookup, error) {
 	return out, nil
 }
 
-// Followup calls upstream/followup.
+// Followup вызывает upstream/followup.
 func (c *Mockd) Followup(ctx context.Context, query, input string) (Followup, error) {
 	var out Followup
 	if err := c.post(ctx, "/upstream/followup", map[string]any{"query": query, "input": input}, &out); err != nil {

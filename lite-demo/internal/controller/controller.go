@@ -1,5 +1,4 @@
-// Package controller is the HTTP boundary: bind the request, call the usecase,
-// write the response.
+// Package controller — HTTP-граница: разбор запроса, вызов usecase, ответ.
 package controller
 
 import (
@@ -15,14 +14,14 @@ import (
 	"some-project/pkg/rest"
 )
 
-// Controller holds the HTTP dependencies.
+// Controller — зависимости HTTP-слоя.
 type Controller struct {
 	uc      *usecase.UseCase
 	log     *slog.Logger
 	timeout time.Duration
 }
 
-// New builds the controller.
+// New собирает контроллер.
 func New(uc *usecase.UseCase, log *slog.Logger, timeout time.Duration) *Controller {
 	if log == nil {
 		log = slog.Default()
@@ -38,7 +37,7 @@ func (c *Controller) decode(w http.ResponseWriter, r *http.Request, v any) bool 
 	return true
 }
 
-// ctx gives one request one deadline: the step budget is not a time budget.
+// ctx даёт одному запросу один дедлайн: бюджет шагов не заменяет бюджет времени.
 func (c *Controller) ctx(r *http.Request) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(r.Context(), c.timeout)
 }

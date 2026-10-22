@@ -9,7 +9,7 @@ import (
 	stjs "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-// SchemaFor derives a JSON Schema from a Go type.
+// SchemaFor выводит JSON Schema из типа Go.
 func SchemaFor[T any]() (json.RawMessage, error) {
 	var v T
 	if !reflect.ValueOf(v).IsValid() {
@@ -30,7 +30,7 @@ func reflectSchema(v any) (json.RawMessage, error) {
 	}
 	delete(m, "$schema")
 	delete(m, "$id")
-	// A struct gets a closed schema; a map keeps its value schema.
+	// Для структуры схема закрытая; у map остаётся схема значений.
 	if m["type"] == "object" {
 		hasProps := false
 		if props, ok := m["properties"].(map[string]any); ok && len(props) > 0 {
@@ -48,7 +48,7 @@ func reflectSchema(v any) (json.RawMessage, error) {
 	return out, nil
 }
 
-// CompileSchema compiles a raw JSON Schema under name.
+// CompileSchema компилирует сырую JSON Schema под именем name.
 func CompileSchema(name string, raw json.RawMessage) (*stjs.Schema, error) {
 	var doc any
 	if err := json.Unmarshal(raw, &doc); err != nil {

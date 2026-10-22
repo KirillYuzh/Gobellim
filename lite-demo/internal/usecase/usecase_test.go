@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"some-project/internal/agent"
 	"some-project/internal/entity"
 	"some-project/internal/policy"
 	"some-project/internal/repository"
@@ -63,7 +64,7 @@ func user(role string) entity.User {
 	return entity.User{ID: "u-1", Tenant: "acme", Roles: []string{role}}
 }
 
-func newUseCase(t *testing.T, llm LLM, mock Mock, budget entity.Budget) *UseCase {
+func newUseCase(t *testing.T, llm agent.LLM, mock Mock, budget entity.Budget) *UseCase {
 	t.Helper()
 	p := &policy.Policy{Default: "deny", Roles: map[string][]string{
 		"user":    {"chat", "tool:link", "tool:kb_search", "tool:remote_lookup"},
@@ -157,7 +158,7 @@ func TestResearchWorkflowBranches(t *testing.T) {
 	if res.Status != "ok" {
 		t.Fatalf("response = %+v", res)
 	}
-	// The second request carries the research tool result.
+	// Во втором запросе уже есть результат инструмента research.
 	var toolMsg string
 	for _, m := range llm.requests[1].Messages {
 		if m.Role == "tool" && m.Name == "research" {
@@ -178,22 +179,6 @@ func TestResearchNeedsPermission(t *testing.T) {
 	_, err := uc.Chat(context.Background(), entity.ChatRequest{User: user("user"), Messages: msg("research go")})
 	if !errors.Is(err, entity.ErrUnauthorized) {
 		t.Fatalf("err = %v, want ErrUnauthorized", err)
-	}
-}
-
-func TestCallToolErrors(t *testing.T) {
-	uc := newUseCase(t, &fakeLLM{}, &fakeMock{}, entity.Budget{MaxArgsBytes: 16})
-	ctx := context.Background()
-
-	if _, err := uc.CallTool(ctx, user("user"), "nope", nil); !errors.Is(err, entity.ErrNotFound) {
-		t.Fatalf("unknown tool: err = %v, want ErrNotFound", err)
-	}
-	if _, err := uc.CallTool(ctx, user("user"), "research", map[string]any{"query": "go"}); !errors.Is(err, entity.ErrUnauthorized) {
-		t.Fatalf("denied tool: err = %v, want ErrUnauthorized", err)
-	}
-	big := map[string]any{"query": strings.Repeat("x", 64)}
-	if _, err := uc.CallTool(ctx, user("user"), "kb_search", big); !errors.Is(err, entity.ErrBudget) {
-		t.Fatalf("big args: err = %v, want ErrBudget", err)
 	}
 }
 

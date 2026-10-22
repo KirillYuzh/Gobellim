@@ -1,4 +1,4 @@
-// Package config reads the environment and rejects an unusable start.
+// Package config читает окружение и отказывается стартовать с непригодной конфигурацией.
 package config
 
 import (
@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Config is everything the service reads from the environment.
+// Config — всё, что сервис читает из окружения.
 type Config struct {
 	Addr           string
 	PolicyPath     string
@@ -19,8 +19,8 @@ type Config struct {
 	Env            string
 }
 
-// Load reads the environment. An error here refuses to start instead of
-// silently falling back.
+// Load читает окружение. Ошибка здесь отменяет старт, а не приводит
+// к тихому откату на дефолты.
 func Load() (Config, error) {
 	c := Config{
 		Addr:        env("HTTP_ADDR", ":8080"),

@@ -1,7 +1,7 @@
-// Command mockd is the mock second service: a knowledge base and an upstream.
+// Command mockd — заглушка второго сервиса: база знаний и upstream.
 //
-// The lookup code is chosen round-robin (a → b → other), not randomly: the demo
-// must be reproducible.
+// Код в lookup выбирается по кругу (a → b → other), а не случайно: демо
+// должно воспроизводиться.
 package main
 
 import (
@@ -60,7 +60,7 @@ func handleKB(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	// This is a fixture, not a search: the chunks do not depend on the query.
+	// Это фикстура, а не поиск: чанки не зависят от запроса.
 	writeJSON(w, http.StatusOK, map[string]any{
 		"query": req.Query,
 		"chunks": []entity.Chunk{

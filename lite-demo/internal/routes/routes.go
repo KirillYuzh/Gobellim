@@ -1,4 +1,4 @@
-// Package routes is the route table.
+// Package routes — таблица маршрутов.
 package routes
 
 import (
@@ -9,14 +9,12 @@ import (
 	"some-project/pkg/rest"
 )
 
-// New builds the mux. A panic at the boundary gives 500 instead of a dropped
-// connection.
+// New собирает mux. Паника на границе отдаёт 500 вместо оборванного соединения.
 func New(c *controller.Controller) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", c.Health)
 	mux.HandleFunc("POST /v1/chat", c.Chat)
 	mux.HandleFunc("POST /v1/followup", c.Followup)
-	mux.HandleFunc("POST /v1/tools/{name}", c.Tool)
 	return recoverer(mux)
 }
 

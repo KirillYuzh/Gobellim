@@ -27,9 +27,9 @@ workflow.
 
 ## Один путь
 
-Каждый вызов инструмента — от модели, из `research` или из `POST /v1/tools` —
-идёт через одну функцию `Session.CallTool`: право → бюджет → схема аргументов →
-типизированный обработчик. Второго пути нет.
+Каждый вызов инструмента, из модели или из `research`, идёт через одну
+функцию `Session.CallTool`: право → бюджет → схема аргументов → типизированный
+обработчик. Второго пути нет.
 
 ```mermaid
 sequenceDiagram
@@ -78,14 +78,6 @@ curl -s http://localhost:8080/v1/chat \
   }'
 ```
 
-Прямой вызов инструмента, без модели:
-
-```sh
-curl -s http://localhost:8080/v1/tools/kb_search \
-  -H 'Content-Type: application/json' \
-  -d '{"user": {"id": "u-1", "tenant": "acme", "roles": ["user"]}, "args": {"query": "go modules"}}'
-```
-
 Второй шаг сценария B:
 
 ```sh
@@ -107,7 +99,7 @@ go run ./cmd/lite-demo
 
 ## API
 
-`POST /v1/chat`, `POST /v1/followup`, `POST /v1/tools/{name}`, `GET /healthz`.
+`POST /v1/chat`, `POST /v1/followup`, `GET /healthz`.
 
 Статусы чата: `ok`, `need_input`, `max_steps`, `budget`.
 
@@ -193,23 +185,24 @@ flow := workflow.New[researchState]("research").
 
 ## Структура
 
-| Путь                  | Что                                                |
-| --------------------- | -------------------------------------------------- |
-| `cmd/lite-demo`       | точка входа сервиса                                |
-| `cmd/mockd`           | mock базы знаний и upstream                        |
-| `internal/app`        | сборка зависимостей, сервер, graceful shutdown     |
-| `internal/config`     | окружение и проверки старта                        |
-| `internal/controller` | HTTP-граница: разбор запроса, вызов usecase, ответ |
-| `internal/entity`     | типы домена и ошибки-сентинелы                     |
-| `internal/errmap`     | ошибка → HTTP-код и безопасное сообщение           |
-| `internal/llm`        | клиент Ollama `/api/chat`                          |
-| `internal/policy`     | роли и права, deny by default                      |
-| `internal/repository` | клиент mock-сервиса                                |
-| `internal/routes`     | таблица маршрутов и recover                        |
-| `internal/tools`      | движок инструментов: схема, каталог, вызов         |
-| `internal/usecase`    | сценарии: чат, followup, инструменты, бюджет       |
-| `internal/workflow`   | типизированный workflow с ветками                  |
-| `pkg/rest`            | JSON-ответ и разбор тела запроса                   |
+| Путь                  | Что                                                        |
+| --------------------- | ---------------------------------------------------------- |
+| `cmd/lite-demo`       | точка входа сервиса                                        |
+| `cmd/mockd`           | mock базы знаний и upstream                                |
+| `internal/app`        | сборка зависимостей, сервер, graceful shutdown             |
+| `internal/agent`      | системная часть: цикл модель → инструменты, права и бюджет |
+| `internal/config`     | окружение и проверки старта                                |
+| `internal/controller` | HTTP-граница: разбор запроса, вызов usecase, ответ         |
+| `internal/entity`     | типы домена и ошибки-сентинелы                             |
+| `internal/errmap`     | ошибка → HTTP-код и безопасное сообщение                   |
+| `internal/llm`        | клиент Ollama `/api/chat`                                  |
+| `internal/policy`     | роли и права, deny by default                              |
+| `internal/repository` | клиент mock-сервиса                                        |
+| `internal/routes`     | таблица маршрутов и recover                                |
+| `internal/tools`      | движок инструментов: схема, каталог, вызов                 |
+| `internal/usecase`    | сценарии: чат, followup и health                           |
+| `internal/workflow`   | типизированный workflow с ветками                          |
+| `pkg/rest`            | JSON-ответ и разбор тела запроса                           |
 
 ## Настройки
 

@@ -1,5 +1,5 @@
-// Package llm adapts Ollama's /api/chat to the demo's types. It is internal: the
-// example owns its provider adapter instead of importing a library's.
+// Package llm адаптирует /api/chat Ollama к типам демо. Пакет внутренний:
+// пример держит собственный адаптер провайдера, а не берёт библиотечный.
 package llm
 
 import (
@@ -16,14 +16,14 @@ import (
 
 const maxResponseBytes = 4 << 20
 
-// Ollama is the /api/chat client.
+// Ollama — клиент /api/chat.
 type Ollama struct {
 	base  string
 	model string
 	hc    *http.Client
 }
 
-// NewOllama creates the client.
+// NewOllama создаёт клиент.
 func NewOllama(base, model string) *Ollama {
 	return &Ollama{base: base, model: model, hc: &http.Client{Timeout: 90 * time.Second}}
 }
@@ -60,7 +60,7 @@ type apiResponse struct {
 	Error string `json:"error,omitempty"`
 }
 
-// Chat sends the history and the available tools to Ollama.
+// Chat отправляет историю и доступные инструменты в Ollama.
 func (c *Ollama) Chat(ctx context.Context, req entity.CompletionRequest) (entity.Completion, error) {
 	body := apiRequest{Model: c.model, Stream: false, Tools: req.Tools}
 	for _, m := range req.Messages {

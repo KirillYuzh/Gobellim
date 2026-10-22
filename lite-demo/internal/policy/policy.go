@@ -1,4 +1,4 @@
-// Package policy is a role-to-permission map with deny by default.
+// Package policy — карта «роль → разрешения» с запретом по умолчанию.
 package policy
 
 import (
@@ -9,13 +9,13 @@ import (
 	"some-project/internal/entity"
 )
 
-// Policy is the role-permission map.
+// Policy — карта ролей и разрешений.
 type Policy struct {
 	Default string              `json:"default"`
 	Roles   map[string][]string `json:"roles"`
 }
 
-// Load reads policy.json. A missing default means deny.
+// Load читает policy.json. Отсутствующий default означает запрет.
 func Load(path string) (*Policy, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -38,8 +38,8 @@ func Load(path string) (*Policy, error) {
 	return &p, nil
 }
 
-// Allows grants a permission if any role has it or has "*". Without an explicit
-// grant the default applies.
+// Allows выдаёт разрешение, если оно есть у любой роли или у роли есть "*".
+// Без явного разрешения действует default.
 func (p *Policy) Allows(u entity.User, permission string) bool {
 	if permission == "" {
 		return false

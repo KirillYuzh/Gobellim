@@ -1,4 +1,4 @@
-// Package app assembles the dependencies and owns the server lifecycle.
+// Package app собирает зависимости и владеет жизненным циклом сервера.
 package app
 
 import (
@@ -20,7 +20,7 @@ import (
 	"some-project/internal/usecase"
 )
 
-// Run builds and runs the service until SIGINT or SIGTERM.
+// Run собирает и запускает сервис до SIGINT или SIGTERM.
 func Run(cfg config.Config, log *slog.Logger) error {
 	pol, err := policy.Load(cfg.PolicyPath)
 	if err != nil {
@@ -44,8 +44,8 @@ func Run(cfg config.Config, log *slog.Logger) error {
 		Handler:           routes.New(controller.New(uc, log, cfg.RequestTimeout)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		// WriteTimeout is aligned with the request deadline, otherwise a
-		// successful turn is cut off while writing.
+		// WriteTimeout согласован с дедлайном запроса, иначе успешный
+		// ход обрывается на записи.
 		WriteTimeout: cfg.RequestTimeout + 10*time.Second,
 		IdleTimeout:  60 * time.Second,
 	}

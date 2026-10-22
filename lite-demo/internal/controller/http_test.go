@@ -95,21 +95,6 @@ func TestChatRejectsBadRequests(t *testing.T) {
 	}
 }
 
-func TestToolEndpoint(t *testing.T) {
-	h := newHandler(t)
-	rec := do(t, h, http.MethodPost, "/v1/tools/kb_search",
-		`{"user":{"id":"u","tenant":"t","roles":["user"]},"args":{"query":"go"}}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body)
-	}
-
-	rec = do(t, h, http.MethodPost, "/v1/tools/nope",
-		`{"user":{"id":"u","tenant":"t","roles":["user"]},"args":{}}`)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404, body = %s", rec.Code, rec.Body)
-	}
-}
-
 func TestHealth(t *testing.T) {
 	rec := do(t, newHandler(t), http.MethodGet, "/healthz", "")
 	if rec.Code != http.StatusOK {

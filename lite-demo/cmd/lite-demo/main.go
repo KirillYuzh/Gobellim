@@ -1,4 +1,4 @@
-// Command lite-demo is the HTTP demo service.
+// Command lite-demo — HTTP-демо-сервис.
 package main
 
 import (
