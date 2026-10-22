@@ -11,22 +11,23 @@ workflow.
 
 ## Сценарий
 
-Модель отвечает на вопрос и может вызвать инструмент:
+`research` — сценарий с паузой. Модель его только запускает, дальше ведёт код:
 
-| Инструмент | Право           | Что делает                            |
-| ---------- | --------------- | ------------------------------------- |
-| `link`     | `tool:link`     | дописывает mock-ссылку в конец ответа |
-| `research` | `tool:research` | mock-workflow с ветками               |
+1. спрашивает параметр P, если он не пришёл с запуском;
+2. спрашивает путь: A (готовый текст) или B (ещё один вопрос);
+3. в пути B спрашивает тему и отдаёт ответ X или Y.
 
-`research` — workflow, ветку которого выбирает модель аргументом `branch`:
+Ветку выбирает код по состоянию. Модель не выбирает переход и не видит
+`run_id`.
 
-- `a` — готовый факт;
-- `b` — вопрос пользователю: про функции или про потоки;
-- `other` — ошибка upstream.
+| Инструмент       | Право                 | Что делает                            |
+| ---------------- | --------------------- | ------------------------------------- |
+| `link`           | `tool:link`           | дописывает mock-ссылку в конец ответа |
+| `start_research` | `tool:start_research` | запускает сценарий и отдаёт вопрос    |
 
-После ответа пользователя сценарий продолжается: модель кладёт ответ в `query`,
-и ветка становится `functions` или `threads`. Все данные — заглушки, внешних
-сервисов нет.
+Продолжение — отдельный эндпоинт `POST /v1/research/{run_id}/resume`, а не
+инструмент. Пользователь отвечает приложению, приложение применяет ответ и
+продолжает сценарий с того шага, где он остановился.
 
 ## Один путь
 
@@ -67,15 +68,30 @@ docker compose up -d --build
 Ключ `GIGACHAT_API_KEY` лежит в `lite-demo/.env`; compose передаёт его
 контейнеру через `env_file`.
 
-Запрос:
+Откройте <http://localhost:8080> — там страница чата. Она встроена в бинарник,
+сборка фронтенда не нужна.
+
+Через `curl` сценарий выглядит так:
 
 ```sh
+# 1. запуск: модель вызывает start_research, сценарий останавливается на вопросе
 curl -s http://localhost:8080/v1/chat \
   -H 'Content-Type: application/json' \
   -d '{
     "user": {"id": "u-1", "tenant": "acme", "roles": ["support"]},
-    "messages": [{"role": "user", "content": "Сделай research по go modules, ветка a"}]
+    "messages": [{"role": "user", "content": "Проведи исследование по go modules"}]
   }'
+# → {"status":"awaiting_user","run_id":"run-...","question":{...}}
+
+# 2. ответ на вопрос: текст
+curl -s http://localhost:8080/v1/research/run-.../resume \
+  -H 'Content-Type: application/json' \
+  -d '{"user": {"id": "u-1", "tenant": "acme", "roles": ["support"]}, "text": "go modules"}'
+
+# 3. ответ на вопрос: вариант
+curl -s http://localhost:8080/v1/research/run-.../resume \
+  -H 'Content-Type: application/json' \
+  -d '{"user": {"id": "u-1", "tenant": "acme", "roles": ["support"]}, "choice": "A"}'
 ```
 
 ## Локально
@@ -89,17 +105,18 @@ go run ./cmd/lite-demo
 
 ## API
 
-`POST /v1/chat`, `GET /healthz`.
+`POST /v1/chat`, `POST /v1/research/{run_id}/resume`, `GET /healthz`, `GET /`.
 
-Статусы чата: `ok`, `max_steps`, `budget`.
+Статусы: `ok`, `awaiting_user`, `max_steps`, `budget`.
 
-| Код | Когда                                     |
-| --- | ----------------------------------------- |
-| 400 | битый JSON, лишние поля, нет пользователя |
-| 403 | policy запретила действие                 |
-| 502 | не ответил GigaChat                       |
-| 504 | истёк дедлайн запроса                     |
-| 500 | внутренняя ошибка                         |
+| Код | Когда                                          |
+| --- | ---------------------------------------------- |
+| 400 | битый JSON, лишние поля, ответ не по вариантам |
+| 403 | policy запретила действие                      |
+| 404 | запуск неизвестен, истёк или чужой             |
+| 502 | не ответил GigaChat                            |
+| 504 | истёк дедлайн запроса                          |
+| 500 | внутренняя ошибка                              |
 
 Текст ошибки всегда безопасный: детали upstream и policy остаются в логе.
 
@@ -112,7 +129,7 @@ go run ./cmd/lite-demo
   "default": "deny",
   "roles": {
     "user": ["chat", "tool:link"],
-    "support": ["chat", "tool:link", "tool:research"]
+    "support": ["chat", "tool:link", "tool:start_research", "research"]
   }
 }
 ```
@@ -135,42 +152,52 @@ tools.New("link", link,
 	tools.Read(),
 )
 
-tools.New("research", u.research,
-	tools.Desc("Mock-сценарий. Ветки: a — факт, b — вопрос, functions и threads — ответ, other — ошибка."),
+tools.New("start_research", u.startResearch,
+	tools.Desc("Начать исследование по теме."),
 	tools.Read(),
 )
 ```
 
-Ветку `branch` модель выбирает сама: в схеме это enum, а не свободная строка.
+Ветку модель не выбирает: в аргументах только тема и, если известен, параметр P.
 
 `Registry` собирает каталог один раз; ошибка объявления и повтор имени видны в
 `Build`, а не в рантайме.
 
-## Workflow
+## Сессия
 
-`internal/workflow` — типизированный state machine. Шаг получает `*S` и меняет
-его явно, поэтому опечатка в поле — ошибка компиляции. Ветка выбирает
-под-workflow по состоянию.
+`internal/session` — копия пакета `flow/session` из библиотеки: объявление
+вопросов, пауза, продолжение, хранилище запусков. `internal/workflow` — копия
+`flow/workflow`: шаги, ветки и `Suspend`.
 
 ```go
-var researchFlow = workflow.New[researchState]("research").
-	Branch("route", researchRoute, map[string]*workflow.Flow[researchState]{
-		"a":         workflow.New[researchState]("a").Then("answer", researchA),
-		"b":         workflow.New[researchState]("b").Then("ask", researchAsk),
-		"functions": workflow.New[researchState]("functions").Then("answer", researchFunctions),
-		"threads":   workflow.New[researchState]("threads").Then("answer", researchThreads),
-		"other":     workflow.New[researchState]("other").Then("report", researchOther),
-	})
-
-func researchAsk(_ context.Context, st *researchState) error {
-	st.Result = entity.Result{Code: "b", Body: "Спроси у пользователя..."}
-	return nil
+func newResearch() *session.Session[researchState] {
+	return session.New[researchState]("research").
+		AskText("param", "Какой параметр P использовать?",
+			func(st *researchState, answer string) error {
+				st.Param = answer
+				return nil
+			},
+			session.SkipIf(func(st *researchState) bool { return st.Param != "" })).
+		AskChoice("path", "Путь A или B?", []string{"A", "B"},
+			func(st *researchState, answer string) error {
+				st.Path = answer
+				return nil
+			}).
+		Branch(func(st *researchState) string { return st.Path }).
+		Case("A", func(f *session.Session[researchState]) {
+			f.Do("finish_a", finishA)
+		}).
+		Case("B", func(f *session.Session[researchState]) {
+			f.AskChoice("topic", "Что показать?", []string{"X", "Y"}, applyTopic).
+				Do("finish_b", finishB)
+		})
 }
 ```
 
-Ошибка шага останавливает цепочку и возвращается с путём `research/ask`. `Run`
-проверяет циклы и дубли имён, ограничивает глубину и число шагов, ловит панику
-шага, а паника observer возвращает `ErrObserver`.
+`Start` возвращает либо вопрос с `run_id`, либо готовое состояние. `Resume`
+проверяет ответ по объявлению вопроса, применяет его и продолжает ровно с шага
+паузы. Чужой запуск, истёкший TTL и ответ не по вариантам отсекаются до
+продолжения.
 
 ## Структура
 
@@ -188,7 +215,9 @@ func researchAsk(_ context.Context, st *researchState) error {
 | `internal/routes`     | таблица маршрутов и recover                                |
 | `internal/tools`      | движок инструментов: схема, каталог, вызов                 |
 | `internal/usecase`    | сценарии: чат, инструменты и health                        |
-| `internal/workflow`   | типизированный workflow с ветками                          |
+| `internal/session`    | копия `flow/session`: вопросы, пауза, хранилище запусков   |
+| `internal/workflow`   | копия `flow/workflow`: шаги, ветки, `Suspend`              |
+| `web`                 | страница чата, встроенная в бинарник                       |
 | `pkg/rest`            | JSON-ответ и разбор тела запроса                           |
 
 ## Настройки

@@ -63,12 +63,12 @@ func (a *Agent) Tools() *tools.Set { return a.tools }
 func (a *Agent) Budget() entity.Budget { return a.budget }
 
 // Chat прогоняет историю через модель и инструменты.
-func (a *Agent) Chat(ctx context.Context, user entity.User, in []entity.Message) (entity.ChatResponse, error) {
-	s, err := a.session(user)
+func (a *Agent) Chat(ctx context.Context, req entity.ChatRequest) (entity.ChatResponse, error) {
+	s, err := a.session(req.User)
 	if err != nil {
 		return entity.ChatResponse{}, err
 	}
-	return s.chat(ctx, in)
+	return s.chat(ctx, req)
 }
 
 func (a *Agent) session(user entity.User) (*session, error) {
@@ -86,34 +86,37 @@ type session struct {
 }
 
 // chat — цикл «модель → инструменты → модель» с ограничением шагов.
-func (s *session) chat(ctx context.Context, in []entity.Message) (entity.ChatResponse, error) {
+func (s *session) chat(ctx context.Context, req entity.ChatRequest) (entity.ChatResponse, error) {
 	if err := s.authorize("chat"); err != nil {
 		return entity.ChatResponse{}, err
 	}
-	msgs, err := s.prepare(in)
+	history, err := s.prepare(req.Messages)
 	if err != nil {
 		return entity.ChatResponse{}, err
 	}
 	specs := s.specs()
-	msgs = append([]entity.Message{{Role: "system", Content: systemPrompt(specs)}}, msgs...)
+	base := systemPrompt(specs)
 
 	var calls []entity.ToolCall
 	var extra []string
-	last := ""
+	var pending *entity.Result
+	note, last := "", ""
+
 	for step := 0; step < s.a.budget.MaxSteps; step++ {
 		if err := ctx.Err(); err != nil {
 			return entity.ChatResponse{ToolCalls: calls}, err
 		}
+		msgs := append([]entity.Message{{Role: "system", Content: withNote(base, note)}}, history...)
 		resp, err := s.a.llm.Chat(ctx, entity.CompletionRequest{Messages: msgs, Tools: specs})
 		if err != nil {
 			return entity.ChatResponse{ToolCalls: calls}, fmt.Errorf("llm: %w: %w", err, entity.ErrUpstream)
 		}
 		last = resp.Content
 		if len(resp.ToolCalls) == 0 {
-			return entity.ChatResponse{Status: "ok", Answer: appendSuffix(resp.Content, extra), ToolCalls: calls}, nil
+			return reply("ok", resp.Content, extra, calls, pending), nil
 		}
 		if len(resp.ToolCalls) > s.a.budget.MaxToolCallsPerStep {
-			return entity.ChatResponse{Status: "budget", Answer: appendSuffix(resp.Content, extra), ToolCalls: calls}, nil
+			return reply("budget", resp.Content, extra, calls, nil), nil
 		}
 
 		// Повтор внутри шага считаем циклом модели: побочный эффект не
@@ -138,12 +141,21 @@ func (s *session) chat(ctx context.Context, in []entity.Message) (entity.ChatRes
 			}
 			calls = append(calls, tc)
 			extra = append(extra, res.Append)
+			if n := stepNote(res); n != "" {
+				note = n
+			}
+			switch res.Status {
+			case "awaiting_user":
+				pending = &res
+			case "completed":
+				pending = nil
+			}
 			toolMsgs = append(toolMsgs, toolMessage(tc.Name, res))
 		}
-		msgs = append(msgs, entity.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls})
-		msgs = append(msgs, toolMsgs...)
+		history = append(history, entity.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls})
+		history = append(history, toolMsgs...)
 	}
-	return entity.ChatResponse{Status: "max_steps", Answer: appendSuffix(last, extra), ToolCalls: calls}, nil
+	return reply("max_steps", last, extra, calls, nil), nil
 }
 
 func (s *session) call(ctx context.Context, tc entity.ToolCall) (entity.Result, error) {
@@ -172,7 +184,7 @@ func (s *session) call(ctx context.Context, tc entity.ToolCall) (entity.Result, 
 	}
 
 	s.a.log.Info("tool", "name", def.Name(), "effect", def.Effect().String(), "user", s.user.ID)
-	out, err := def.Invoke(ctx, raw)
+	out, err := def.Invoke(entity.WithUser(ctx, s.user), raw)
 	if err != nil {
 		return entity.Result{}, err
 	}
@@ -236,16 +248,54 @@ func systemPrompt(specs []entity.ToolSpec) string {
 	}
 	return fmt.Sprintf(
 		"Ты помощник по Go. Отвечай кратко.\n"+
-			"Доступные инструменты: %s. Вызывай их, когда пользователь просит ссылку, данные из базы знаний или research.\n"+
+			"Доступные инструменты: %s. Вызывай их, когда пользователь просит ссылку или исследование.\n"+
 			"Не отвечай, что инструмента нет: он есть в списке tools. Если инструмент вернул ошибку, скажи о ней.",
 		strings.Join(names, ", "),
 	)
 }
 
-// toolMessage — результат для модели. Служебное поле Append вырезаем: иначе
-// модель увидит ссылку и вставит её в ответ второй раз.
+// reply собирает ответ. Пауза делает статус awaiting_user: приложение получает
+// run_id и типизированный вопрос, а модель — только текст вопроса.
+func reply(status, content string, extra []string, calls []entity.ToolCall, pending *entity.Result) entity.ChatResponse {
+	out := entity.ChatResponse{Status: status, Answer: appendSuffix(content, extra), ToolCalls: calls}
+	if status == "ok" && pending != nil {
+		out.Status = "awaiting_user"
+		out.RunID = pending.RunID
+		out.Question = &entity.Question{Prompt: pending.Prompt, Input: pending.Input, Options: pending.Options}
+	}
+	return out
+}
+
+// withNote добавляет к системному промпту инструкцию текущего шага.
+func withNote(base, note string) string {
+	if note == "" {
+		return base
+	}
+	return base + "\n" + note
+}
+
+// stepNote — инструкция на шаг после вызова инструмента. Её формирует агент:
+// сам результат остаётся данными, а не командой модели. RunID здесь нет:
+// продолжает сценарий приложение, а не модель.
+func stepNote(res entity.Result) string {
+	switch res.Status {
+	case "awaiting_user":
+		note := fmt.Sprintf("Сценарий приостановлен и ждёт ответа пользователя. Задай ему вопрос: %q.", res.Prompt)
+		if len(res.Options) > 0 {
+			note += " Варианты: " + strings.Join(res.Options, ", ") + "."
+		}
+		return note
+	case "completed":
+		return "Сценарий завершён. Верни пользователю результат: " + res.Body
+	}
+	return ""
+}
+
+// toolMessage — результат для модели. Служебные поля вырезаем: Append нужен
+// приложению для хвоста ответа, RunID — ключ запуска, а не знание для модели.
 func toolMessage(name string, res entity.Result) entity.Message {
 	res.Append = ""
+	res.RunID = ""
 	raw, err := json.Marshal(res)
 	if err != nil {
 		raw = []byte(`{"error":"tool result is not JSON"}`)

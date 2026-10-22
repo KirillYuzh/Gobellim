@@ -182,3 +182,66 @@ func TestObserverIsInheritedBySubFlows(t *testing.T) {
 		t.Fatalf("observer saw %q, want sub/step", got)
 	}
 }
+
+func TestSuspendAndResume(t *testing.T) {
+	ctx := context.Background()
+	flow := New[state]("ask").
+		Then("first", func(ctx context.Context, st *state) error {
+			if st.code != "" {
+				return nil
+			}
+			return Suspend(ctx, "q1")
+		}).
+		Then("second", func(ctx context.Context, st *state) error {
+			if len(st.order) > 0 {
+				return nil
+			}
+			return Suspend(ctx, "q2")
+		})
+
+	st := &state{}
+	exec, err := flow.Start(ctx, st)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if exec.Done() || exec.Suspension() == nil || exec.Suspension().Payload != "q1" {
+		t.Fatalf("first pause = %+v", exec.Suspension())
+	}
+	if exec.Suspension().Flow != "ask" || exec.Suspension().Step != "first" {
+		t.Fatalf("pause path = %s/%s", exec.Suspension().Flow, exec.Suspension().Step)
+	}
+
+	if err := exec.Resume(ctx, func(s *state) error {
+		s.code = "answer"
+		return nil
+	}); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if exec.Suspension() == nil || exec.Suspension().Payload != "q2" {
+		t.Fatalf("second pause = %+v", exec.Suspension())
+	}
+
+	if err := exec.Resume(ctx, func(s *state) error {
+		s.order = append(s.order, "ready")
+		return nil
+	}); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if !exec.Done() || exec.Suspension() != nil {
+		t.Fatalf("execution is not done: done=%v pause=%+v", exec.Done(), exec.Suspension())
+	}
+	if err := exec.Resume(ctx, nil); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("resume after done: err = %v, want ErrInvalid", err)
+	}
+}
+
+func TestRunReturnsSuspension(t *testing.T) {
+	flow := New[state]("ask").Then("q", func(ctx context.Context, _ *state) error {
+		return Suspend(ctx, "q")
+	})
+	err := flow.Run(context.Background(), &state{})
+	var susp *Suspension
+	if !errors.As(err, &susp) || susp.Payload != "q" {
+		t.Fatalf("err = %v, want suspension", err)
+	}
+}

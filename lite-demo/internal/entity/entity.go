@@ -2,6 +2,7 @@
 package entity
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 )
@@ -37,26 +38,59 @@ type ToolCall struct {
 	Args map[string]any `json:"args,omitempty"`
 }
 
+// ChatRequest — один ход диалога. RunID продолжает приостановленный сценарий.
 // ChatRequest — один ход диалога.
 type ChatRequest struct {
 	User     User      `json:"user"`
 	Messages []Message `json:"messages"`
 }
 
-// ChatResponse — ответ сервиса. Status: ok, max_steps или budget.
+// ResumeRequest — ответ пользователя на вопрос приостановленного сценария.
+// Text для свободного ответа, Choice для выбора из Options. ResumeID делает
+// повтор безопасным.
+type ResumeRequest struct {
+	User     User   `json:"user"`
+	ResumeID string `json:"resume_id,omitempty"`
+	Text     string `json:"text,omitempty"`
+	Choice   string `json:"choice,omitempty"`
+}
+
+// ChatResponse — ответ сервиса. Status: ok, awaiting_input, max_steps или budget.
 type ChatResponse struct {
 	Status    string     `json:"status"`
 	Answer    string     `json:"answer,omitempty"`
+	RunID     string     `json:"run_id,omitempty"`
+	Question  *Question  `json:"question,omitempty"`
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 }
 
-// Result — результат инструмента; уходит модели как JSON.
-// Поле Append модели не показывают: его дописывает сервис в конец ответа.
+// Question — типизированный вопрос приостановленного сценария. Input говорит
+// клиенту, что присылать в resume: text или choice.
+type Question struct {
+	Prompt  string   `json:"prompt"`
+	Input   string   `json:"input"`
+	Options []string `json:"options,omitempty"`
+}
+
+// ResumeResponse — результат продолжения: готовый ответ или следующий вопрос.
+type ResumeResponse struct {
+	Status   string    `json:"status"`
+	RunID    string    `json:"run_id"`
+	Answer   string    `json:"answer,omitempty"`
+	Question *Question `json:"question,omitempty"`
+}
+
+// Result — результат инструмента; уходит модели как JSON. Status: completed или
+// awaiting_user. RunID и Append модели не показывают: они нужны приложению.
 type Result struct {
-	Code   string `json:"code,omitempty"`
-	Body   string `json:"body,omitempty"`
-	Error  string `json:"error,omitempty"`
-	Append string `json:"append,omitempty"`
+	Status  string   `json:"status,omitempty"`
+	Body    string   `json:"body,omitempty"`
+	RunID   string   `json:"run_id,omitempty"`
+	Prompt  string   `json:"prompt,omitempty"`
+	Input   string   `json:"input,omitempty"`
+	Options []string `json:"options,omitempty"`
+	Error   string   `json:"error,omitempty"`
+	Append  string   `json:"append,omitempty"`
 }
 
 // CompletionRequest — то, что уходит в LLM.
@@ -129,4 +163,18 @@ type Health struct {
 	Status string   `json:"status"`
 	Tools  []string `json:"tools"`
 	Budget Budget   `json:"budget"`
+}
+
+type userKey struct{}
+
+// WithUser кладёт principal в контекст: инструменты и сценарии видят, от чьего
+// имени идёт вызов.
+func WithUser(ctx context.Context, u User) context.Context {
+	return context.WithValue(ctx, userKey{}, u)
+}
+
+// UserFrom достаёт principal из контекста.
+func UserFrom(ctx context.Context) (User, bool) {
+	u, ok := ctx.Value(userKey{}).(User)
+	return u, ok
 }

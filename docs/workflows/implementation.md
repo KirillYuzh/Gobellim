@@ -6,33 +6,43 @@
 
 ## Пакеты и границы
 
-| Пакет           | Роль                                                  |
-| --------------- | ----------------------------------------------------- |
-| `flow/workflow` | `Flow[S]`, `Step[S]`, `Branch[S]`, `Observer`, лимиты |
-| `flow`          | `Step[In, Out]`, схемы, snapshot, `Suspend`, `Resume` |
-| `internal/core` | `ErrInvalidConfig` и `ErrInvalidArgs`                 |
+| Пакет           | Роль                                                               |
+| --------------- | ------------------------------------------------------------------ |
+| `flow/workflow` | `Flow[S]`, `Step[S]`, `Branch[S]`, `Observer`, `Execution`, лимиты |
+| `flow/session`  | `Session[S]`: вопросы, продолжение, хранилище запусков             |
+| `flow`          | `Step[In, Out]`, схемы, snapshot, `Suspend`, `Resume`              |
+| `internal/core` | `ErrInvalidConfig` и `ErrInvalidArgs`                              |
 
 `flow` не импортирует `workflow`. Это два независимых слоя: сценарий и
-отдельный шаг с проверкой границы.
+отдельный шаг с проверкой границы. `session` собирается поверх `workflow` и
+добавляет вопросы пользователю и хранилище запусков.
 
 ## Поток Run
 
 ```mermaid
 flowchart TD
-    A["Run(ctx, st)"] --> B{"st nil?"}
+    A["Start(ctx, st)"] --> B{"st nil?"}
     B -- да --> C["ErrInvalid"]
     B -- нет --> D["Validate: имена, дубли, nil, циклы"]
-    D --> E["run(depth=0, steps=0)"]
-    E --> F{"ctx.Err()?"}
-    F -- да --> G["вернуть err"]
-    F -- нет --> H["steps++, предел 1000"]
-    H --> I{"узел"}
-    I -- step --> J["runStep: recover, observe"]
-    I -- branch --> K["decide: recover"]
-    K --> L{"route найден?"}
-    L -- нет --> M["ErrInvalid: no branch"]
-    L -- да --> N["sub.run(depth+1)"]
+    D --> E["стек: [{flow, next: 0}]"]
+    E --> F{"стек пуст?"}
+    F -- да --> Z["done = true"]
+    F -- нет --> G{"ctx.Err()?"}
+    G -- да --> H["вернуть err"]
+    G -- нет --> I["steps++, предел 1000"]
+    I --> J{"узел"}
+    J -- step --> K["runStep: recover, observe"]
+    K -- "*Suspension" --> Y["susp = пауза, стоп"]
+    J -- branch --> L["decide: recover"]
+    L --> M{"route найден?"}
+    M -- нет --> N["ErrInvalid: no branch"]
+    M -- да --> O["push под-flow в стек"]
+    O --> F
 ```
+
+Обход идёт не рекурсией, а явным стеком кадров. Кадр — это flow и номер
+следующего узла. Поэтому `Start` можно остановить на любом шаге и потом
+продолжить с того же места.
 
 ## Ключевые типы
 
@@ -116,6 +126,44 @@ Observer получает `Event` с именем flow, именем шага, �
 
 Observer передаётся вниз по дереву. Если у под-flow есть свой, он заменяет
 родительский. Свойство проверено тестом `TestObserverIsInheritedBySubFlows`.
+
+### Пауза и продолжение
+
+Шаг может вернуть `workflow.Suspend(ctx, payload)`. Это не ошибка сценария, а
+сигнал остановиться: `runStep` распознаёт `*Suspension` через `errors.As`,
+запоминает её в `Execution` и не оборачивает в путь `flow/step`.
+
+```go
+type Execution[S any] struct {
+	st    *S
+	stack []frame[S]
+	steps int
+	susp  *Suspension
+	done  bool
+}
+```
+
+Номер узла в кадре уже сдвинут вперёд, поэтому `Resume` начинает со следующего
+узла, а не повторяет шаг-вопрос. `Resume` принимает функцию `apply`:
+
+```go
+func (e *Execution[S]) Resume(ctx context.Context, apply func(*S) error) error
+```
+
+`apply` вызывается ровно один раз и только пока сценарий ждёт ответа. Ошибка
+`apply` отменяет продолжение и оставляет паузу. Так состояние меняется в одном
+месте, и сценарий не может продолжиться с полуприменённым ответом.
+
+`Run` остаётся удобным вариантом для сценариев без пауз: он возвращает
+`*Suspension` как ошибку, чтобы вызов не прошёл молча.
+
+### Сессия поверх потока
+
+`flow/session` строит `Flow` из объявлений `AskText`, `AskChoice`, `Do`,
+`Branch` и `Case`. Вопрос — это шаг, который возвращает `Suspend` с указателем
+на объявление; по нему `Resume` находит функцию применения ответа, проверяет
+ответ по вариантам и хранит запуск в `MemoryStore` с TTL, лимитами и
+проверкой владельца.
 
 ## Что делает flow.Step
 
@@ -214,12 +262,15 @@ Snapshot может прийти из внешнего хранилища, по�
 
 - `flow/workflow/workflow_test.go`: порядок шагов и веток, путь ошибки,
   контекст, паники шага, `Decide` и observer, наследование observer, нили,
-  цикл, отсутствующий маршрут.
+  цикл, отсутствующий маршрут, пауза и продолжение.
+- `flow/session/session_test.go`: вопрос и ответ, ветки A/B, отказ по
+  вариантам, чужой запуск, идемпотентность, TTL, лимиты, битые объявления.
 - `flow/flow_test.go`: типизированный шаг, композиция, suspend/resume, чужая
   и битая snapshot, отказ payload, отменённый контекст, типы без схемы.
 
 ## Смотрите также
 
 - [Рабочие процессы](./README.md)
+- [Сессия с вопросами](./session.md)
 - [Инструменты](../tools/README.md)
 - [Справочник API](../reference/gobellim.md)

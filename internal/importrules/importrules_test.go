@@ -108,9 +108,12 @@ var rules = []rule{
 	},
 	{
 		name:    "flow-internal-leaves-only",
-		desc:    "flow is an optional module (D85) that used to be a core primitive (D67): it may import only internal/** leaves — never the kit façade (import cycle), never internal/call, never the core family (authz/guard/model/embed/chunk/store/trace), never a sibling or transport package (eval/rerank/mcp/webfetch); stdlib and the two jsonschema libraries of D67 are outside this rule",
+		desc:    "flow is an optional module (D85) that used to be a core primitive (D67): it may import only internal/** leaves and packages of its own module (session on top of workflow), but never the module root (import cycle), never internal/call, never the core family (authz/guard/model/embed/chunk/store/trace), never a sibling or transport package (eval/rerank/mcp/webfetch); stdlib and the two jsonschema libraries of D67 are outside this rule",
 		applies: func(pkg string) bool { return rootOf(pkg) == "flow" },
 		allows: func(pkg, imported string) bool {
+			if rootOf(imported) == "flow" {
+				return imported != "flow"
+			}
 			return isUnderInternal(imported) && !isCallPrimitive(imported)
 		},
 	},
@@ -289,6 +292,14 @@ func TestFlowInternalLeavesOnly(t *testing.T) {
 		} {
 			if !r.allows("flow", dir) {
 				t.Errorf("flow may import %s", dir)
+			}
+		}
+	})
+
+	t.Run("allows its own packages", func(t *testing.T) {
+		for _, dir := range []string{"flow/workflow", "flow/session"} {
+			if !r.allows("flow/session", dir) {
+				t.Errorf("flow/session may import %s", dir)
 			}
 		}
 	})

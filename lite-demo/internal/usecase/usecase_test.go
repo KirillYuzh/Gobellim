@@ -11,6 +11,7 @@ import (
 	"some-project/internal/agent"
 	"some-project/internal/entity"
 	"some-project/internal/policy"
+	"some-project/internal/session"
 )
 
 type fakeLLM struct {
@@ -40,7 +41,7 @@ func newUseCase(t *testing.T, llm agent.LLM, budget entity.Budget) *UseCase {
 	t.Helper()
 	p := &policy.Policy{Default: "deny", Roles: map[string][]string{
 		"user":    {"chat", "tool:link"},
-		"support": {"chat", "tool:link", "tool:research"},
+		"support": {"chat", "tool:link", "tool:start_research", "research"},
 	}}
 	uc, err := New(Deps{LLM: llm, Policy: p, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Budget: budget})
 	if err != nil {
@@ -51,6 +52,10 @@ func newUseCase(t *testing.T, llm agent.LLM, budget entity.Budget) *UseCase {
 
 func msg(text string) []entity.Message {
 	return []entity.Message{{Role: "user", Content: text}}
+}
+
+func supportCtx() context.Context {
+	return entity.WithUser(context.Background(), user("support"))
 }
 
 func TestChatRunsToolsAndAnswers(t *testing.T) {
@@ -104,45 +109,160 @@ func TestChatNeedsPermission(t *testing.T) {
 	}
 }
 
-func TestResearchRoute(t *testing.T) {
-	cases := []struct {
-		branch, query, want string
-	}{
-		{"", "go modules", "a"},
-		{"a", "go modules", "a"},
-		{"b", "go modules", "b"},
-		{"other", "go modules", "other"},
-		{"b", "go modules functions", "functions"},
-		{"b", "go modules потоки", "threads"},
-		{"", "горутины в go", "threads"},
-		{"b", "go modules функции", "functions"},
+func TestChatReturnsQuestion(t *testing.T) {
+	llm := &fakeLLM{responses: []entity.Completion{
+		{ToolCalls: []entity.ToolCall{{Name: "start_research", Args: map[string]any{"query": "go"}}}},
+		{Content: "Какой параметр P?"},
+	}}
+	uc := newUseCase(t, llm, entity.Budget{})
+
+	res, err := uc.Chat(context.Background(), entity.ChatRequest{User: user("support"), Messages: msg("исследуй go")})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
 	}
-	for _, tc := range cases {
-		if got := researchRoute(&researchState{Branch: tc.branch, Query: tc.query}); got != tc.want {
-			t.Fatalf("branch %q, query %q: route = %q, want %q", tc.branch, tc.query, got, tc.want)
-		}
+	if res.Status != "awaiting_user" || res.RunID == "" || res.Question == nil {
+		t.Fatalf("response = %+v", res)
+	}
+	if res.Question.Input != string(session.InputText) {
+		t.Fatalf("question = %+v", res.Question)
+	}
+	// run_id — ключ запуска приложения, модель его не видит.
+	toolMsg := llm.requests[1].Messages[len(llm.requests[1].Messages)-1]
+	if strings.Contains(toolMsg.Content, res.RunID) || strings.Contains(toolMsg.Content, "run_id") {
+		t.Fatalf("tool message leaks the run id: %s", toolMsg.Content)
 	}
 }
 
-func TestResearchFollowupBranches(t *testing.T) {
-	for branch, want := range map[string]string{"functions": "функции", "threads": "горутины"} {
-		st := researchState{Query: "go", Branch: branch}
-		if err := researchFlow.Run(context.Background(), &st); err != nil {
-			t.Fatalf("Run: %v", err)
-		}
-		if st.Result.Code != "b" || !strings.Contains(st.Result.Body, want) {
-			t.Fatalf("branch %q: result = %+v", branch, st.Result)
-		}
+// resume — ответ пользователя прямо в приложение, без модели.
+func resume(t *testing.T, uc *UseCase, runID string, req entity.ResumeRequest) entity.ResumeResponse {
+	t.Helper()
+	res, err := uc.ResumeResearch(supportCtx(), runID, req)
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	return res
+}
+
+func TestResearchAsksParamThenPath(t *testing.T) {
+	uc := newUseCase(t, &fakeLLM{}, entity.Budget{})
+
+	start, err := uc.startResearch(supportCtx(), startIn{Query: "go modules"})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if start.Status != "awaiting_user" || start.RunID == "" || !strings.Contains(start.Prompt, "параметр") {
+		t.Fatalf("start = %+v", start)
+	}
+
+	path := resume(t, uc, start.RunID, entity.ResumeRequest{User: user("support"), Text: "go modules"})
+	if path.Status != "awaiting_user" || path.RunID != start.RunID || path.Question == nil {
+		t.Fatalf("path question = %+v", path)
+	}
+	if path.Question.Input != string(session.InputChoice) || len(path.Question.Options) != 2 {
+		t.Fatalf("question = %+v", path.Question)
+	}
+
+	done := resume(t, uc, start.RunID, entity.ResumeRequest{User: user("support"), Choice: "A"})
+	if done.Status != "completed" || !strings.Contains(done.Answer, "Путь A") {
+		t.Fatalf("done = %+v", done)
+	}
+}
+
+func TestResearchPathBAsksTopic(t *testing.T) {
+	for choice, want := range map[string]string{"X": "Ответ X", "Y": "Ответ Y"} {
+		t.Run(choice, func(t *testing.T) {
+			uc := newUseCase(t, &fakeLLM{}, entity.Budget{})
+
+			start, err := uc.startResearch(supportCtx(), startIn{Query: "go", Param: "go modules"})
+			if err != nil {
+				t.Fatalf("start: %v", err)
+			}
+			if start.Status != "awaiting_user" || !strings.Contains(start.Prompt, "путь") {
+				t.Fatalf("start = %+v", start)
+			}
+
+			topic := resume(t, uc, start.RunID, entity.ResumeRequest{User: user("support"), Choice: "B"})
+			if topic.Status != "awaiting_user" || topic.Question == nil || len(topic.Question.Options) != 2 {
+				t.Fatalf("topic question = %+v", topic)
+			}
+
+			done := resume(t, uc, start.RunID, entity.ResumeRequest{User: user("support"), Choice: choice})
+			if done.Status != "completed" || !strings.Contains(done.Answer, want) {
+				t.Fatalf("done = %+v", done)
+			}
+		})
+	}
+}
+
+func TestResearchRejectsBadChoice(t *testing.T) {
+	uc := newUseCase(t, &fakeLLM{}, entity.Budget{})
+	start, err := uc.startResearch(supportCtx(), startIn{Query: "go", Param: "p"})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	_, err = uc.ResumeResearch(supportCtx(), start.RunID, entity.ResumeRequest{User: user("support"), Choice: "C"})
+	if !errors.Is(err, entity.ErrInvalid) {
+		t.Fatalf("err = %v, want ErrInvalid", err)
+	}
+}
+
+func TestResearchUnknownRun(t *testing.T) {
+	uc := newUseCase(t, &fakeLLM{}, entity.Budget{})
+	_, err := uc.ResumeResearch(supportCtx(), "run-nope", entity.ResumeRequest{User: user("support"), Choice: "A"})
+	if !errors.Is(err, entity.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestResearchForeignRunIsNotFound(t *testing.T) {
+	uc := newUseCase(t, &fakeLLM{}, entity.Budget{})
+	start, err := uc.startResearch(supportCtx(), startIn{Query: "go"})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	other := entity.User{ID: "u-2", Tenant: "acme", Roles: []string{"support"}}
+	_, err = uc.ResumeResearch(entity.WithUser(context.Background(), other), start.RunID,
+		entity.ResumeRequest{User: other, Text: "p"})
+	if !errors.Is(err, entity.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestResearchResumeIsIdempotent(t *testing.T) {
+	uc := newUseCase(t, &fakeLLM{}, entity.Budget{})
+	start, err := uc.startResearch(supportCtx(), startIn{Query: "go", Param: "p"})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	req := entity.ResumeRequest{User: user("support"), ResumeID: "r1", Choice: "A"}
+	first := resume(t, uc, start.RunID, req)
+	again := resume(t, uc, start.RunID, req)
+	if first != again {
+		t.Fatalf("retry returned %+v, want %+v", again, first)
+	}
+	req.ResumeID, req.Choice = "r2", "B"
+	if _, err := uc.ResumeResearch(supportCtx(), start.RunID, req); !errors.Is(err, entity.ErrInvalid) {
+		t.Fatalf("err = %v, want ErrInvalid for a finished run", err)
 	}
 }
 
 func TestResearchNeedsPermission(t *testing.T) {
 	llm := &fakeLLM{responses: []entity.Completion{
-		{ToolCalls: []entity.ToolCall{{Name: "research", Args: map[string]any{"query": "go"}}}},
+		{ToolCalls: []entity.ToolCall{{Name: "start_research", Args: map[string]any{"query": "go"}}}},
 	}}
 	uc := newUseCase(t, llm, entity.Budget{})
 
 	_, err := uc.Chat(context.Background(), entity.ChatRequest{User: user("user"), Messages: msg("research go")})
+	if !errors.Is(err, entity.ErrUnauthorized) {
+		t.Fatalf("err = %v, want ErrUnauthorized", err)
+	}
+}
+
+func TestResumeNeedsPermission(t *testing.T) {
+	uc := newUseCase(t, &fakeLLM{}, entity.Budget{})
+	guest := entity.User{ID: "u-2", Tenant: "acme", Roles: []string{"guest"}}
+	_, err := uc.ResumeResearch(entity.WithUser(context.Background(), guest), "run-x",
+		entity.ResumeRequest{User: guest, Choice: "A"})
 	if !errors.Is(err, entity.ErrUnauthorized) {
 		t.Fatalf("err = %v, want ErrUnauthorized", err)
 	}

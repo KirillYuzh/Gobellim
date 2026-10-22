@@ -163,59 +163,150 @@ func (f *Flow[S]) validate(path map[*Flow[S]]bool) error {
 	return nil
 }
 
-// Run validates the flow and executes it against st. A step error stops the
-// chain and carries the path as "flow/step".
-func (f *Flow[S]) Run(ctx context.Context, st *S) error {
-	if st == nil {
-		return fmt.Errorf("%w: nil state", ErrInvalid)
-	}
-	if err := f.Validate(); err != nil {
-		return err
-	}
-	n := 0
-	return f.run(ctx, st, map[*Flow[S]]bool{}, 0, &n, f.obs)
+// Suspension pauses a flow at a step. Payload is typed by the caller: it is the
+// question a human-in-the-loop flow is waiting for.
+type Suspension struct {
+	Flow    string
+	Step    string
+	Payload any
 }
 
-func (f *Flow[S]) run(ctx context.Context, st *S, path map[*Flow[S]]bool, depth int, steps *int, obs Observer[S]) error {
-	if depth > maxDepth {
-		return fmt.Errorf("%w: %s: nesting deeper than %d", ErrInvalid, f.name, maxDepth)
-	}
-	if path[f] {
-		return fmt.Errorf("%w: %s: cycle", ErrInvalid, f.name)
-	}
-	path[f] = true
-	defer delete(path, f)
+// Error implements error, so a step pauses the flow by returning it.
+func (s *Suspension) Error() string {
+	return fmt.Sprintf("workflow: suspended at %s/%s", s.Flow, s.Step)
+}
 
-	if f.obs != nil {
-		obs = f.obs
+// Suspend pauses the current step. Start returns the execution with the
+// suspension, Run returns the *Suspension error, and Resume continues right
+// after the step that suspended.
+func Suspend(ctx context.Context, payload any) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	for _, n := range f.nodes {
+	return &Suspension{Payload: payload}
+}
+
+// Execution is a started flow: the state, the position of every frame and the
+// pending suspension.
+type Execution[S any] struct {
+	st    *S
+	stack []frame[S]
+	steps int
+	susp  *Suspension
+	done  bool
+}
+
+type frame[S any] struct {
+	flow *Flow[S]
+	next int
+	obs  Observer[S]
+}
+
+// Start validates the flow and runs it until it suspends or ends. A suspension
+// is not a failure: it is visible through Suspension.
+func (f *Flow[S]) Start(ctx context.Context, st *S) (*Execution[S], error) {
+	if st == nil {
+		return nil, fmt.Errorf("%w: nil state", ErrInvalid)
+	}
+	if err := f.Validate(); err != nil {
+		return nil, err
+	}
+	e := &Execution[S]{st: st, stack: []frame[S]{{flow: f, obs: f.obs}}}
+	if err := e.run(ctx); err != nil {
+		var susp *Suspension
+		if !errors.As(err, &susp) {
+			return nil, err
+		}
+	}
+	return e, nil
+}
+
+// Run executes the flow. A suspended flow is reported as a *Suspension error.
+func (f *Flow[S]) Run(ctx context.Context, st *S) error {
+	e, err := f.Start(ctx, st)
+	if err != nil {
+		return err
+	}
+	if susp := e.Suspension(); susp != nil {
+		return susp
+	}
+	return nil
+}
+
+// State returns the state of the execution.
+func (e *Execution[S]) State() *S { return e.st }
+
+// Done reports that the flow reached its end.
+func (e *Execution[S]) Done() bool { return e.done }
+
+// Suspension returns the pending suspension or nil.
+func (e *Execution[S]) Suspension() *Suspension { return e.susp }
+
+// Resume continues the flow right after the step that suspended. apply runs
+// exactly once, while the flow is suspended; an error from apply aborts the
+// resume and leaves the flow suspended.
+func (e *Execution[S]) Resume(ctx context.Context, apply func(*S) error) error {
+	if e.done || e.susp == nil {
+		return fmt.Errorf("%w: nothing to resume", ErrInvalid)
+	}
+	if apply == nil {
+		return fmt.Errorf("%w: apply is required", ErrInvalid)
+	}
+	if err := apply(e.st); err != nil {
+		return err
+	}
+	e.susp = nil
+	if err := e.run(ctx); err != nil {
+		var susp *Suspension
+		if !errors.As(err, &susp) {
+			return err
+		}
+	}
+	return nil
+}
+
+// run executes nodes down the frame stack until the stack is empty. A pause is
+// returned as a *Suspension and remembered in e.susp.
+func (e *Execution[S]) run(ctx context.Context) error {
+	for len(e.stack) > 0 {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		*steps++
-		if *steps > maxSteps {
-			return fmt.Errorf("%w: %s: more than %d steps", ErrInvalid, f.name, maxSteps)
+		if len(e.stack) > maxDepth {
+			return fmt.Errorf("%w: nesting deeper than %d", ErrInvalid, maxDepth)
+		}
+		top := &e.stack[len(e.stack)-1]
+		if top.next >= len(top.flow.nodes) {
+			e.stack = e.stack[:len(e.stack)-1]
+			continue
+		}
+		n := top.flow.nodes[top.next]
+		top.next++
+		e.steps++
+		if e.steps > maxSteps {
+			return fmt.Errorf("%w: %s: more than %d steps", ErrInvalid, top.flow.name, maxSteps)
 		}
 		if n.step != nil {
-			if err := f.runStep(ctx, n.step, st, obs); err != nil {
+			if err := e.runStep(ctx, top, n.step); err != nil {
 				return err
 			}
 			continue
 		}
-		b := n.branch
-		route, err := decide(f.name, b, st)
+		route, err := decide(top.flow.name, n.branch, e.st)
 		if err != nil {
 			return err
 		}
-		sub, ok := b.Routes[route]
+		sub, ok := n.branch.Routes[route]
 		if !ok || sub == nil {
-			return fmt.Errorf("%w: %s/%s: no branch %q", ErrInvalid, f.name, b.Name, route)
+			return fmt.Errorf("%w: %s/%s: no branch %q", ErrInvalid, top.flow.name, n.branch.Name, route)
 		}
-		if err := sub.run(ctx, st, path, depth+1, steps, obs); err != nil {
-			return err
+		obs := top.obs
+		if sub.obs != nil {
+			obs = sub.obs
 		}
+		e.stack = append(e.stack, frame[S]{flow: sub, obs: obs})
 	}
+	e.done = true
 	return nil
 }
 
@@ -229,19 +320,25 @@ func decide[S any](flowName string, b *Branch[S], st *S) (route string, err erro
 	return b.Decide(st), nil
 }
 
-func (f *Flow[S]) runStep(ctx context.Context, s *Step[S], st *S, obs Observer[S]) (err error) {
+func (e *Execution[S]) runStep(ctx context.Context, fr *frame[S], s *Step[S]) (err error) {
 	start := time.Now()
 	defer func() {
 		if rec := recover(); rec != nil {
-			err = fmt.Errorf("%s/%s: panic: %v", f.name, s.Name, rec)
+			err = fmt.Errorf("%s/%s: panic: %v", fr.flow.name, s.Name, rec)
 		} else if err != nil {
-			err = fmt.Errorf("%s/%s: %w", f.name, s.Name, err)
+			var susp *Suspension
+			if errors.As(err, &susp) {
+				susp.Flow, susp.Step = fr.flow.name, s.Name
+				e.susp = susp
+			} else {
+				err = fmt.Errorf("%s/%s: %w", fr.flow.name, s.Name, err)
+			}
 		}
-		if oerr := observe(ctx, obs, f.name, s.Name, st, err, time.Since(start)); oerr != nil && err == nil {
+		if oerr := observe(ctx, fr.obs, fr.flow.name, s.Name, e.st, err, time.Since(start)); oerr != nil && err == nil {
 			err = oerr
 		}
 	}()
-	return s.Run(ctx, st)
+	return s.Run(ctx, e.st)
 }
 
 func observe[S any](ctx context.Context, obs Observer[S], flowName, stepName string, st *S, err error, d time.Duration) (oerr error) {

@@ -16,6 +16,7 @@ const ORDER = [
   "tools/implementation.md",
   "workflows",
   "workflows/README.md",
+  "workflows/session.md",
   "workflows/implementation.md",
   "guard",
   "guard/README.md",

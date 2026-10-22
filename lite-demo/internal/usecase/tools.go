@@ -2,17 +2,69 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"some-project/internal/entity"
-	"some-project/internal/workflow"
+	"some-project/internal/session"
 )
 
-// researchIn — аргументы сценария. Ветку выбирает модель.
-type researchIn struct {
-	Query  string `json:"query" jsonschema:"description=Тема исследования"`
-	Branch string `json:"branch" jsonschema:"enum=a,enum=b,enum=other,enum=functions,enum=threads,description=Ветка: a — готовый факт, b — задать пользователю вопрос про функции или потоки, functions и threads — ответ на этот вопрос, other — ошибка upstream"`
+// startIn — запуск исследования. Param приходит, если пользователь назвал
+// параметр P сразу.
+type startIn struct {
+	Query string `json:"query" jsonschema:"description=Тема исследования"`
+	Param string `json:"param,omitempty" jsonschema:"description=Параметр P, если пользователь назвал его сразу"`
+}
+
+// researchState — состояние сценария. Переходы считаются по этим полям, ветку
+// выбирает код, а не модель.
+type researchState struct {
+	Query  string
+	Param  string
+	Path   string
+	Topic  string
+	Result string
+}
+
+// newResearch объявляет сценарий: параметр P, путь A или B, а в пути B ещё один
+// вопрос. Вопросы, ответы, хранение запусков и пауза живут в пакете session.
+func newResearch() *session.Session[researchState] {
+	return session.New[researchState]("research").
+		AskText("param", "Какой параметр P использовать в исследовании?",
+			func(st *researchState, answer string) error {
+				st.Param = answer
+				return nil
+			},
+			session.SkipIf(func(st *researchState) bool { return st.Param != "" })).
+		AskChoice("path", "Что сделать: путь A (готовый текст) или путь B (вопрос и уточнение)?",
+			[]string{"A", "B"},
+			func(st *researchState, answer string) error {
+				st.Path = answer
+				return nil
+			}).
+		Branch(func(st *researchState) string { return st.Path }).
+		Case("A", func(f *session.Session[researchState]) {
+			f.Do("finish_a", func(_ context.Context, st *researchState) error {
+				st.Result = "Путь A: заготовленный текст исследования по «" + st.Param + "»."
+				return nil
+			})
+		}).
+		Case("B", func(f *session.Session[researchState]) {
+			f.AskChoice("topic", "Что показать по теме?", []string{"X", "Y"},
+				func(st *researchState, answer string) error {
+					st.Topic = answer
+					return nil
+				}).
+				Do("finish_b", func(_ context.Context, st *researchState) error {
+					if st.Topic == "X" {
+						st.Result = "Ответ X: пример кода по «" + st.Param + "»."
+						return nil
+					}
+					st.Result = "Ответ Y: объяснение по «" + st.Param + "» своими словами."
+					return nil
+				})
+		})
 }
 
 // link — заглушка: модель получает только подтверждение, а ссылку сервис
@@ -24,76 +76,53 @@ func link(context.Context, struct{}) (entity.Result, error) {
 	}, nil
 }
 
-// researchState — состояние сценария.
-type researchState struct {
-	Query  string
-	Branch string
-	Result entity.Result
-}
-
-// researchFlow: ветку выбирает модель, включая продолжение после вопроса.
-var researchFlow = workflow.New[researchState]("research").
-	Branch("route", researchRoute, map[string]*workflow.Flow[researchState]{
-		"a":         workflow.New[researchState]("a").Then("answer", researchA),
-		"b":         workflow.New[researchState]("b").Then("ask", researchAsk),
-		"functions": workflow.New[researchState]("functions").Then("answer", researchFunctions),
-		"threads":   workflow.New[researchState]("threads").Then("answer", researchThreads),
-		"other":     workflow.New[researchState]("other").Then("report", researchOther),
-	})
-
-// researchRoute: готовый ответ пользователя в запросе важнее ветки, потому что
-// модель часто оставляет branch=b на продолжении, а тему переносит в query.
-func researchRoute(st *researchState) string {
-	q := strings.ToLower(st.Query)
-	switch {
-	case strings.Contains(q, "функц"), strings.Contains(q, "function"):
-		return "functions"
-	case strings.Contains(q, "поток"), strings.Contains(q, "горутин"),
-		strings.Contains(q, "goroutine"), strings.Contains(q, "thread"):
-		return "threads"
-	case st.Branch == "":
-		return "a"
-	}
-	return st.Branch
-}
-
-func researchA(_ context.Context, st *researchState) error {
-	st.Result = entity.Result{Code: "a", Body: "Mock-факт A: `go build ./...` собирает все пакеты модуля."}
-	return nil
-}
-
-// researchAsk отдаёт вопрос пользователю. Ответ пользователя модель передаёт
-// следующей веткой: functions или threads.
-func researchAsk(_ context.Context, st *researchState) error {
-	st.Result = entity.Result{
-		Code: "b",
-		Body: "Спроси у пользователя, что именно он хочет узнать: про функции или про потоки?",
-	}
-	return nil
-}
-
-func researchFunctions(_ context.Context, st *researchState) error {
-	st.Result = entity.Result{Code: "b", Body: "Mock-ответ: функции в Go — значения первого класса, их можно передавать и возвращать."}
-	return nil
-}
-
-func researchThreads(_ context.Context, st *researchState) error {
-	st.Result = entity.Result{Code: "b", Body: "Mock-ответ: потоки в Go — это горутины, запускаются словом `go`."}
-	return nil
-}
-
-func researchOther(_ context.Context, st *researchState) error {
-	st.Result = entity.Result{Code: "other", Error: "mock-upstream вернул неизвестный код"}
-	return nil
-}
-
-func (u *UseCase) research(ctx context.Context, in researchIn) (entity.Result, error) {
-	if strings.TrimSpace(in.Query) == "" {
+func (u *UseCase) startResearch(ctx context.Context, in startIn) (entity.Result, error) {
+	query := strings.TrimSpace(in.Query)
+	if query == "" {
 		return entity.Result{}, fmt.Errorf("query is required: %w", entity.ErrInvalid)
 	}
-	st := researchState{Query: in.Query, Branch: in.Branch}
-	if err := researchFlow.Run(ctx, &st); err != nil {
-		return entity.Result{}, err
+	user, ok := entity.UserFrom(ctx)
+	if !ok {
+		return entity.Result{}, fmt.Errorf("research: no principal: %w", entity.ErrInternal)
 	}
-	return st.Result, nil
+	res, err := u.research.Start(ctx, principal(user), &researchState{
+		Query: query,
+		Param: strings.TrimSpace(in.Param),
+	})
+	if err != nil {
+		return entity.Result{}, mapSessionError(err)
+	}
+	return toToolResult(res), nil
+}
+
+// toToolResult переводит результат сценария в результат инструмента. Модель
+// видит только статус и вопрос, RunID вырезает агент.
+func toToolResult(res session.Result[researchState]) entity.Result {
+	out := entity.Result{Status: string(res.Status), RunID: res.RunID}
+	if res.Question != nil {
+		out.Prompt = res.Question.Prompt
+		out.Input = string(res.Question.Input)
+		out.Options = res.Question.Options
+		return out
+	}
+	out.Body = res.State.Result
+	return out
+}
+
+// principal переводит пользователя демо в principal сценария.
+func principal(u entity.User) session.Principal {
+	return session.Principal{UserID: u.ID, Tenant: u.Tenant}
+}
+
+// mapSessionError переводит ошибки сценария в доменные: чужой запуск отдаётся
+// как «не найдено», кривой ответ — как некорректный запрос.
+func mapSessionError(err error) error {
+	switch {
+	case errors.Is(err, session.ErrNotFound):
+		return fmt.Errorf("%w: %w", err, entity.ErrNotFound)
+	case errors.Is(err, session.ErrInvalid):
+		return fmt.Errorf("%w: %w", err, entity.ErrInvalid)
+	default:
+		return err
+	}
 }

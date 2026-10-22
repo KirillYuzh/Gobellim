@@ -16,16 +16,17 @@ guardrails behind one permission-checked call path.
 
 The [lite-demo](./lite-demo) is a small service with its own tool engine,
 workflow and GigaChat client. It shows a principal, a policy file, two tools
-(`link` and `research`) and a deterministic research workflow. The first run
-pulls the images; the service calls GigaChat over HTTPS with the key from
-`lite-demo/.env`.
+(`link` and `start_research`) and a research scenario that pauses for the user.
+The first run pulls the images; the service calls GigaChat over HTTPS with the key
+from `lite-demo/.env`.
 
 ```sh
 cd lite-demo
 docker compose up -d --build
 ```
 
-The service listens on `:8080`. Every tool in the demo is a stub: no mock service,
+Open <http://localhost:8080> for the chat page, or use the requests below. The
+service listens on `:8080`. Every tool in the demo is a stub: no mock service,
 no outbound calls except GigaChat.
 
 ### Requests for every scenario
@@ -42,36 +43,25 @@ curl -s http://localhost:8080/v1/chat \
     "messages": [{"role": "user", "content": "Добавь ссылку на документацию по Go."}]
   }'
 
-# research, branch a (role support): the model picks branch a
+# research start (role support): the scenario suspends on a question
 curl -s http://localhost:8080/v1/chat \
   -H 'Content-Type: application/json' \
   -d '{
     "user": {"id": "u-1", "tenant": "acme", "roles": ["support"]},
-    "messages": [{"role": "user", "content": "Сделай research по go modules, ветка a."}]
+    "messages": [{"role": "user", "content": "Проведи исследование по go modules."}]
   }'
+# → {"status":"awaiting_user","run_id":"run-...","question":{...}}
 
-# research, branch b: the model asks which topic the user wants
-curl -s http://localhost:8080/v1/chat \
+# answer the parameter question, then pick path A
+curl -s http://localhost:8080/v1/research/run-.../resume \
   -H 'Content-Type: application/json' \
-  -d '{
-    "user": {"id": "u-1", "tenant": "acme", "roles": ["support"]},
-    "messages": [{"role": "user", "content": "Сделай research по go modules, ветка b."}]
-  }'
+  -d '{"user": {"id": "u-1", "tenant": "acme", "roles": ["support"]}, "text": "go modules"}'
 
-# research, branch other: safe error text
-# ... replace "ветка a" above with "ветка other"
-
-# branch b continued: the answer picks functions or threads
-curl -s http://localhost:8080/v1/chat \
+curl -s http://localhost:8080/v1/research/run-.../resume \
   -H 'Content-Type: application/json' \
-  -d '{
-    "user": {"id": "u-1", "tenant": "acme", "roles": ["support"]},
-    "messages": [
-      {"role": "user", "content": "Сделай research по go modules, ветка b."},
-      {"role": "assistant", "content": "Что конкретно узнать: про функции или про потоки?"},
-      {"role": "user", "content": "Про функции."}
-    ]
-  }'
+  -d '{"user": {"id": "u-1", "tenant": "acme", "roles": ["support"]}, "choice": "A"}'
+
+# path B asks one more question (X or Y) before it answers
 
 # forbidden: the guest role has no chat permission
 curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/v1/chat \

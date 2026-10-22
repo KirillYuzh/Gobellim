@@ -2,16 +2,18 @@
 
 Детерминированные цепочки действий: Workflows.
 
-Два уровня:
+Три уровня:
 
 | Пакет           | Что                                                                    |
 | --------------- | ---------------------------------------------------------------------- |
 | `flow/workflow` | `Flow[S]`: детерминированный сценарий из шагов и веток                 |
+| `flow/session`  | `Session[S]`: сценарий с вопросами пользователю и продолжением         |
 | `flow`          | `Step[In, Out]`: один типизированный шаг с JSON Schema и приостановкой |
 
 `Flow` нужен, когда сценарий задаёт разработчик: порядок шагов не зависит от
-модели. `Step` нужен, когда шаг вызывается отдельно и его вход/выход нужно
-проверить по схеме.
+модели. `Session` нужен, когда по ходу сценария нужно спросить пользователя.
+`Step` нужен, когда шаг вызывается отдельно и его вход/выход нужно проверить по
+схеме.
 
 ## Flow: сценарий
 
@@ -66,6 +68,32 @@ func main() {
 }
 ```
 
+## Сценарий с вопросами
+
+Когда ответ пользователя нужен посреди сценария, `Flow` оборачивается в
+`flow/session`. Вопросы объявляются в том же месте, где шаги, а продолжение
+приходит отдельным вызовом.
+
+```go
+research := session.New[researchState]("research").
+	AskText("param", "Какой параметр P?", applyParam).
+	AskChoice("path", "Путь A или B?", []string{"A", "B"}, applyPath).
+	Branch(func(st *researchState) string { return st.Path }).
+	Case("A", func(f *session.Session[researchState]) { f.Do("finish", finishA) })
+
+res, err := research.Start(ctx, principal, &st)
+// res.Status == session.StatusAwaitingUser, res.Question, res.RunID
+
+res, err = research.Resume(ctx, session.ResumeRequest{
+	RunID: res.RunID, Principal: principal, Choice: "A",
+})
+// res.Status == session.StatusCompleted
+```
+
+`Session` сам проверяет ответ по объявлению вопроса, хранит запуск, следит за
+владельцем и TTL и не даёт применить ответ дважды. Подробно — в
+[session.md](./session.md).
+
 ## Ветки
 
 `Branch` получает состояние и возвращает имя маршрута. Соответствующий под-flow
@@ -110,20 +138,29 @@ func (f *Flow[S]) Branch(name string, decide func(*S) string, routes map[string]
 func (f *Flow[S]) WithObserver(o Observer[S]) *Flow[S]
 func (f *Flow[S]) Validate() error
 func (f *Flow[S]) Run(ctx context.Context, st *S) error
+func (f *Flow[S]) Start(ctx context.Context, st *S) (*Execution[S], error)
+func Suspend(ctx context.Context, payload any) error
+
+func (e *Execution[S]) Resume(ctx context.Context, apply func(*S) error) error
+func (e *Execution[S]) Suspension() *Suspension
+func (e *Execution[S]) Done() bool
+func (e *Execution[S]) State() *S
+```
 
 type Event[S any] struct {
-	Flow     string
-	Step     string
-	State    *S
-	Err      error
-	Duration time.Duration
+Flow string
+Step string
+State *S
+Err error
+Duration time.Duration
 }
 
 type Observer[S any] interface {
-	Step(ctx context.Context, ev Event[S])
+Step(ctx context.Context, ev Event[S])
 }
 type ObserverFunc[S any] func(ctx context.Context, ev Event[S])
-```
+
+````
 
 ## Step: один шаг
 
@@ -142,7 +179,7 @@ res := step.Run(ctx, nil, Order{ID: "ord-1"})
 if res.Status == flow.StatusSuspended {
 	// res.Snapshot можно передать в Resume после внешнего решения.
 }
-```
+````
 
 `Suspend(payload)` возвращает `*flow.Suspension`; `Run` отдаёт
 `StatusSuspended` и snapshot, а `NewResumable` добавляет `Resume`.
@@ -153,6 +190,8 @@ if res.Status == flow.StatusSuspended {
   вызывающего кода.
 - Нет автоматических ретраев.
 - Схема — проверка границы, а не «ремонт» невалидных данных.
+- `Run` останавливается на первом `Suspend`; продолжать нужно через `Start` и
+  `Execution.Resume`.
 
 ## Устройство
 
@@ -161,5 +200,6 @@ if res.Status == flow.StatusSuspended {
 ## Смотрите также
 
 - [Быстрый старт](../overview.md)
+- [Сессия с вопросами](./session.md) — пауза и продолжение сценария
 - [Инструменты](../tools/README.md) — инструмент как шаг сценария
 - [Справочник API](../reference/gobellim.md)
