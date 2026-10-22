@@ -223,6 +223,108 @@ func TestProviderErrorIsClassified(t *testing.T) {
 	}
 }
 
+func TestNamedToolChoiceForcesTheFunction(t *testing.T) {
+	var got map[string]any
+	srv := newGigaServer(t, func(w http.ResponseWriter, r *http.Request) {
+		got = decodeBody(t, r)
+		writeJSON(w, `{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`)
+	})
+	defer srv.Close()
+
+	c, err := New(Config{BaseURL: srv.URL, AuthURL: srv.URL + "/oauth", Credentials: "creds"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Chat(context.Background(), model.Request{
+		Messages:   []model.Message{{Role: model.RoleUser, Content: "hi"}},
+		Tools:      []model.ToolSpec{{Name: "get_ticket", Schema: json.RawMessage(`{"type":"object"}`)}},
+		ToolChoice: "get_ticket",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	fc, _ := got["function_call"].(map[string]any)
+	if fc["name"] != "get_ticket" {
+		t.Fatalf("function_call = %v, want a forced get_ticket", got["function_call"])
+	}
+}
+
+func TestDefaultToolChoiceIsAuto(t *testing.T) {
+	var got map[string]any
+	srv := newGigaServer(t, func(w http.ResponseWriter, r *http.Request) {
+		got = decodeBody(t, r)
+		writeJSON(w, `{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`)
+	})
+	defer srv.Close()
+
+	c, err := New(Config{BaseURL: srv.URL, AuthURL: srv.URL + "/oauth", Credentials: "creds"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Chat(context.Background(), model.Request{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+		Tools:    []model.ToolSpec{{Name: "get_ticket", Schema: json.RawMessage(`{"type":"object"}`)}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got["function_call"] != "auto" {
+		t.Fatalf("function_call = %v, want auto", got["function_call"])
+	}
+}
+
+func TestUnsupportedToolChoiceIsAnError(t *testing.T) {
+	cases := []struct {
+		name   string
+		choice string
+		want   error
+	}{
+		{"required", "required", core.ErrProvider},
+		{"unoffered name", "absent", core.ErrInvalidArgs},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newGigaServer(t, func(w http.ResponseWriter, r *http.Request) {
+				t.Error("the request must not reach the provider")
+			})
+			defer srv.Close()
+
+			c, err := New(Config{BaseURL: srv.URL, AuthURL: srv.URL + "/oauth", Credentials: "creds"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = c.Chat(context.Background(), model.Request{
+				Messages:   []model.Message{{Role: model.RoleUser, Content: "hi"}},
+				Tools:      []model.ToolSpec{{Name: "get_ticket", Schema: json.RawMessage(`{"type":"object"}`)}},
+				ToolChoice: tc.choice,
+			})
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestParallelToolCallsAreRejected(t *testing.T) {
+	srv := newGigaServer(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Error("the request must not reach the provider")
+	})
+	defer srv.Close()
+
+	c, err := New(Config{BaseURL: srv.URL, AuthURL: srv.URL + "/oauth", Credentials: "creds"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Chat(context.Background(), model.Request{Messages: []model.Message{
+		{Role: model.RoleUser, Content: "hi"},
+		{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{ID: "1", Name: "a", Args: `{}`}, {ID: "2", Name: "b", Args: `{}`}}},
+		{Role: model.RoleTool, ToolCallID: "1", Name: "a", Content: `{}`},
+		{Role: model.RoleTool, ToolCallID: "2", Name: "b", Content: `{}`},
+	}})
+	if !errors.Is(err, core.ErrProvider) {
+		t.Fatalf("err = %v, want ErrProvider for parallel tool calls", err)
+	}
+}
+
 func TestCapabilities(t *testing.T) {
 	c, err := New(Config{Credentials: "id:secret", ContextTokens: 131072})
 	if err != nil {

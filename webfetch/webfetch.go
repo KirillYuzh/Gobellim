@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/KirillYuzh/Gobellim"
+	gobellim "github.com/KirillYuzh/Gobellim"
 	"github.com/KirillYuzh/Gobellim/internal/core"
 )
 
@@ -54,8 +54,8 @@ func (c Config) normalized() (Config, error) {
 	if c.Timeout < 0 {
 		return c, fmt.Errorf("webfetch: Timeout must not be negative: %w", core.ErrInvalidConfig)
 	}
-	if c.MaxRedirects < -1 {
-		return c, fmt.Errorf("webfetch: MaxRedirects must not be less than -1: %w", core.ErrInvalidConfig)
+	if c.MaxRedirects < 0 {
+		return c, fmt.Errorf("webfetch: MaxRedirects must not be negative: %w", core.ErrInvalidConfig)
 	}
 	if c.MaxBytes == 0 {
 		c.MaxBytes = defaultMaxBytes
@@ -63,10 +63,7 @@ func (c Config) normalized() (Config, error) {
 	if c.Timeout == 0 {
 		c.Timeout = defaultTimeout
 	}
-	switch c.MaxRedirects {
-	case -1:
-		c.MaxRedirects = 0
-	case 0:
+	if c.MaxRedirects == 0 {
 		c.MaxRedirects = defaultMaxRedirects
 	}
 	return c, nil
@@ -120,7 +117,7 @@ func newClient(cfg Config) *http.Client {
 	return &http.Client{
 		Transport: tr,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if cfg.MaxRedirects >= 0 && len(via) > cfg.MaxRedirects {
+			if len(via) > cfg.MaxRedirects {
 				return fmt.Errorf("webfetch: stopped after %d redirects", cfg.MaxRedirects)
 			}
 			switch req.URL.Scheme {

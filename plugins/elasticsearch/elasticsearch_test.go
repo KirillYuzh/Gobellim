@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/KirillYuzh/Gobellim/store"
@@ -77,6 +78,63 @@ func TestDoKeepsNonSuccessStatus(t *testing.T) {
 	}
 	if status != http.StatusNotFound || string(body) != `{"error":"missing"}` {
 		t.Fatalf("status = %d, body = %q", status, body)
+	}
+}
+
+func TestDoRejectsDotSegments(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("server reached with %q", r.URL.RequestURI())
+	}))
+	defer srv.Close()
+
+	c, err := New(Config{URL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		"/../_cluster/health",
+		"/idx/../../_cluster/health",
+		"/idx/./_doc/1",
+		"/idx/%2e%2e/_search",
+	} {
+		if _, _, err := c.Do(context.Background(), store.Request{Method: http.MethodGet, Path: path}); err == nil {
+			t.Fatalf("path %q was accepted", path)
+		}
+	}
+}
+
+func TestDoPreservesEscapedPath(t *testing.T) {
+	var gotURI string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURI = r.RequestURI
+	}))
+	defer srv.Close()
+
+	c, err := New(Config{URL: srv.URL + "/es"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.Do(context.Background(), store.Request{Method: http.MethodGet, Path: "/idx/_doc/a%2Fb"}); err != nil {
+		t.Fatal(err)
+	}
+	if want := "/es/idx/_doc/a%2Fb"; gotURI != want {
+		t.Fatalf("request URI = %q, want %q", gotURI, want)
+	}
+}
+
+func TestDoRejectsOversizedResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(make([]byte, maxResponseBytes+1))
+	}))
+	defer srv.Close()
+
+	c, err := New(Config{URL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = c.Do(context.Background(), store.Request{Method: http.MethodGet, Path: "/big"})
+	if err == nil || !strings.Contains(err.Error(), "response exceeds") {
+		t.Fatalf("err = %v, want an explicit size error", err)
 	}
 }
 

@@ -4,12 +4,12 @@ gobellim не привязан к вендору. Клиент чата — ин
 
 ## Конструкторы LLM
 
-| Конструктор                        | Wire-формат                                          | Особенности                                                                                                                                                                        |
-| ---------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `model.OpenAI(apiKey, modelName)`  | `POST https://api.openai.com/v1/chat/completions`    | Ключ в `Authorization: Bearer`. Structured output — `response_format: json_schema` с именем схемы `output`.                                                                        |
-| `model.VLLM(baseURL, modelName)`   | OpenAI-совместимый `POST <baseURL>/chat/completions` | Обёртка над `model.NewOpenAI` без API-ключа. Хост вида `http://vllm:8000/v1`.                                                                                                      |
-| `model.Ollama(baseURL, modelName)` | native `POST <baseURL>/api/chat`                     | `tools` и `format` (JSON Schema), аргументы инструмента — объект. `Temperature`/`MaxTokens`/`Seed`/`Stop` уходят в `options.*`.                                                    |
-| `gigachat.New(gigachat.Config)`    | OAuth + `POST <BaseURL>/v1/chat/completions`         | Модуль `plugins/gigachat`. `functions` и `function_call`; structured output эмулируется функцией `structured_output`. Роль `tool` → `function`, берётся только первый `tool_call`. |
+| Конструктор                        | Wire-формат                                          | Особенности                                                                                                                                                                                                                           |
+| ---------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model.OpenAI(apiKey, modelName)`  | `POST https://api.openai.com/v1/chat/completions`    | Ключ в `Authorization: Bearer`. Structured output — `response_format: json_schema` с именем схемы `output`.                                                                                                                           |
+| `model.VLLM(baseURL, modelName)`   | OpenAI-совместимый `POST <baseURL>/chat/completions` | Обёртка над `model.NewOpenAI` без API-ключа. Хост вида `http://vllm:8000/v1`.                                                                                                                                                         |
+| `model.Ollama(baseURL, modelName)` | native `POST <baseURL>/api/chat`                     | `tools` и `format` (JSON Schema), аргументы инструмента — объект. `Temperature`/`MaxTokens`/`Seed`/`Stop` уходят в `options.*`.                                                                                                       |
+| `gigachat.New(gigachat.Config)`    | OAuth + `POST <BaseURL>/v1/chat/completions`         | Модуль `plugins/gigachat`. `functions` и `function_call`; structured output эмулируется функцией `structured_output`. Роль `tool` → `function`. Несколько параллельных `tool_call` клиент не поддерживает и возвращает `ErrProvider`. |
 
 `model.NewOpenAI(cfg OpenAIConfig)` — общий конструктор: `BaseURL` и `Model` обязательны, дополнительно `APIKey`, `Headers map[string]string`, `HTTPClient`. `model.NewOllama(cfg OllamaConfig)`: `BaseURL` по умолчанию `http://localhost:11434`, `Model` обязателен, `HTTPClient`.
 
@@ -54,11 +54,11 @@ gobellim не привязан к вендору. Клиент чата — ин
 Поле `Request.ToolChoice` — `""`, `"auto"`, `"none"`, `"required"` или имя
 инструмента. Как оно доходит до провайдера:
 
-| Провайдер   | `ToolChoice`                                                                                            |
-| ----------- | ------------------------------------------------------------------------------------------------------- |
-| OpenAI/vLLM | `tool_choice`: строка `auto`/`none`/`required`, а имя инструмента — объектом `{"type":"function",...}`. |
-| Ollama      | Нет `tool_choice`: `none` эмулируется пропуском `tools`, прочие значения игнорируются.                  |
-| GigaChat    | Нет `tool_choice`: `none` эмулируется пропуском `functions`, прочие значения → `function_call: auto`.   |
+| Провайдер   | `ToolChoice`                                                                                                                            |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| OpenAI/vLLM | `tool_choice`: строка `auto`/`none`/`required`, а имя инструмента — объектом `{"type":"function",...}`.                                 |
+| Ollama      | Нет `tool_choice`: `none` эмулируется пропуском `tools`, прочие значения игнорируются.                                                  |
+| GigaChat    | `none` пропускает `functions`; `auto` или пусто → `function_call: auto`; имя инструмента → `{"name": ...}`; `required` → `ErrProvider`. |
 
 | Параметр | OpenAI/vLLM | Ollama         | GigaChat     |
 | -------- | ----------- | -------------- | ------------ |
@@ -140,11 +140,11 @@ type Embedder interface {
 префикс пассажа. `Closer` (`Close() error`) опционален: локальный энкодер владеет
 пулом ORT-сессий, но `Embedder` его не требует.
 
-| Конструктор                                  | Запрос                                 | Особенности                                                                                                                  |
-| -------------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Конструктор                                  | Запрос                                 | Особенности                                                                                                                                                                                               |
+| -------------------------------------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `embed.NewOpenAI(embed.OpenAIConfig)`        | `POST <BaseURL>/embeddings`            | `BaseURL` и `Model` обязательны. `Dim` можно задать заранее; иначе берётся из первого ответа. `APIKey` необязателен. `BatchSize` ограничивает размер батча (по умолчанию `embed.DefaultRemoteBatchSize`). |
-| `gigachat.NewEmbedder(gigachat.EmbedConfig)` | OAuth + `POST <BaseURL>/v1/embeddings` | Модуль `plugins/gigachat`. Тот же OAuth, что у чата (`Credentials` обязателен). `Model` по умолчанию `Embeddings`. `BatchSize` ограничивает размер батча. |
-| `embed.NewLocal(embed.LocalConfig)`          | локальный ONNX-энкодер                 | Доступен только в сборке с тегом `ort`; в обычной сборке возвращает `ErrInvalidConfig`. `LocalConfig{Dir, Model, Sessions}`. |
+| `gigachat.NewEmbedder(gigachat.EmbedConfig)` | OAuth + `POST <BaseURL>/v1/embeddings` | Модуль `plugins/gigachat`. Тот же OAuth, что у чата (`Credentials` обязателен). `Model` по умолчанию `Embeddings`. `BatchSize` ограничивает размер батча.                                                 |
+| `embed.NewLocal(embed.LocalConfig)`          | локальный ONNX-энкодер                 | Доступен только в сборке с тегом `ort`; в обычной сборке возвращает `ErrInvalidConfig`. `LocalConfig{Dir, Model, Sessions}`.                                                                              |
 
 Удалённые эмбеддеры режут тексты на батчи (по умолчанию 64) и склеивают ответы
 в исходном порядке: один документ на тысячи чанков не уходит в провайдера одним

@@ -58,6 +58,7 @@ func New(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("elasticsearch: URL %q must be absolute (scheme and host): %w", cfg.URL, core.ErrInvalidConfig)
 	}
 	base.Path = strings.TrimRight(base.Path, "/")
+	base.RawPath = strings.TrimRight(base.RawPath, "/")
 	if cfg.APIKey != "" && (cfg.Username != "" || cfg.Password != "") {
 		return nil, fmt.Errorf("elasticsearch: APIKey and Username/Password are mutually exclusive: %w", core.ErrInvalidConfig)
 	}
@@ -76,7 +77,8 @@ func New(cfg Config) (*Client, error) {
 
 // Do sends one request and returns the response status and body. A non-2xx
 // status is not an error: store callers classify it themselves. Transport and
-// read failures are returned as errors.
+// read failures are returned as errors, and so is a response body larger than
+// 32 MiB. A path with a "." or ".." segment is rejected rather than resolved.
 func (c *Client) Do(ctx context.Context, req store.Request) (int, []byte, error) {
 	if req.Method == "" {
 		return 0, nil, fmt.Errorf("elasticsearch: request method is required: %w", core.ErrInvalidConfig)
@@ -85,9 +87,16 @@ func (c *Client) Do(ctx context.Context, req store.Request) (int, []byte, error)
 	if err != nil {
 		return 0, nil, fmt.Errorf("elasticsearch: parse path %q: %w", req.EffectivePath(), err)
 	}
+	if err := checkSegments(rel.Path); err != nil {
+		return 0, nil, fmt.Errorf("elasticsearch: path %q: %w", req.EffectivePath(), err)
+	}
 
 	u := *c.base
 	u.Path = c.base.Path + "/" + strings.TrimLeft(rel.Path, "/")
+	u.RawPath = ""
+	if rel.RawPath != "" {
+		u.RawPath = c.base.EscapedPath() + "/" + strings.TrimLeft(rel.RawPath, "/")
+	}
 	u.RawQuery = rel.RawQuery
 
 	httpReq, err := http.NewRequestWithContext(ctx, req.Method, u.String(), bytes.NewReader(req.Body))
@@ -112,9 +121,23 @@ func (c *Client) Do(ctx context.Context, req store.Request) (int, []byte, error)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		return resp.StatusCode, nil, fmt.Errorf("elasticsearch: read %s %s: %w", req.Method, req.EffectivePath(), err)
 	}
+	if len(body) > maxResponseBytes {
+		return resp.StatusCode, nil, fmt.Errorf("elasticsearch: response exceeds %d bytes", maxResponseBytes)
+	}
 	return resp.StatusCode, body, nil
+}
+
+// checkSegments rejects dot segments. url.Parse unescapes them, so "%2e%2e"
+// is caught here too.
+func checkSegments(p string) error {
+	for seg := range strings.SplitSeq(p, "/") {
+		if seg == "." || seg == ".." {
+			return fmt.Errorf("segment %q is not allowed", seg)
+		}
+	}
+	return nil
 }

@@ -36,7 +36,9 @@ type stdioTransport struct {
 	cmd   *exec.Cmd
 	stdin io.WriteCloser
 
-	writeMu sync.Mutex
+	// writeCh hands messages to one writer goroutine, so a child that stops
+	// reading its stdin cannot block callers and two messages never interleave.
+	writeCh chan []byte
 
 	pendMu  sync.Mutex
 	pending map[int64]chan rpcResponse
@@ -45,6 +47,9 @@ type stdioTransport struct {
 
 	done     chan struct{}
 	doneOnce sync.Once
+
+	// waitDone is closed once cmd.Wait has reaped the child.
+	waitDone chan struct{}
 
 	errMu   sync.Mutex
 	exitErr error
@@ -78,21 +83,25 @@ func newStdioTransport(cfg Config) (Transport, error) {
 	}
 
 	t := &stdioTransport{
-		cfg:     cfg,
-		cmd:     cmd,
-		stdin:   stdin,
-		pending: make(map[int64]chan rpcResponse),
-		done:    make(chan struct{}),
+		cfg:      cfg,
+		cmd:      cmd,
+		stdin:    stdin,
+		writeCh:  make(chan []byte),
+		pending:  make(map[int64]chan rpcResponse),
+		done:     make(chan struct{}),
+		waitDone: make(chan struct{}),
 	}
 	go t.readLoop(stdout)
 	go t.logStderr(stderr)
+	go t.writeLoop()
 	go func() {
 		werr := cmd.Wait()
 		if werr != nil {
 			t.markDone(fmt.Errorf("mcp: %s: server exited: %w: %w", cfg.Name, werr, core.ErrProvider))
-			return
+		} else {
+			t.markDone(nil)
 		}
-		t.markDone(nil)
+		close(t.waitDone)
 	}()
 	return t, nil
 }
@@ -110,7 +119,7 @@ func (t *stdioTransport) Call(ctx context.Context, method string, params any) (j
 		t.pendMu.Unlock()
 	}()
 
-	if err := t.write(rpcRequest{JSONRPC: "2.0", ID: id, Method: method, Params: params}); err != nil {
+	if err := t.write(ctx, rpcRequest{JSONRPC: "2.0", ID: id, Method: method, Params: params}); err != nil {
 		return nil, err
 	}
 	select {
@@ -127,42 +136,57 @@ func (t *stdioTransport) Call(ctx context.Context, method string, params any) (j
 }
 
 // Notify writes a notification to the child process without waiting for a response.
-func (t *stdioTransport) Notify(_ context.Context, method string, params any) error {
-	return t.write(rpcRequest{JSONRPC: "2.0", Method: method, Params: params})
+func (t *stdioTransport) Notify(ctx context.Context, method string, params any) error {
+	return t.write(ctx, rpcRequest{JSONRPC: "2.0", Method: method, Params: params})
 }
 
-// Close closes stdin and waits for the process to exit, killing it after two seconds.
+// Close closes stdin and always reaps the child: the read loop ending does not
+// mean the process ended, so it waits for cmd.Wait and kills the child after two
+// seconds.
 func (t *stdioTransport) Close() error {
 	t.closeOnce.Do(func() {
 		_ = t.stdin.Close()
 		select {
-		case <-t.done:
+		case <-t.waitDone:
 		case <-time.After(2 * time.Second):
 			_ = t.cmd.Process.Kill()
-			<-t.done
+			<-t.waitDone
 		}
 	})
 	return nil
 }
 
-func (t *stdioTransport) write(v any) error {
+// write queues one message for writeLoop. The caller waits on its own context,
+// not on the pipe, so a stalled child cannot pin a canceled call.
+func (t *stdioTransport) write(ctx context.Context, v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return fmt.Errorf("mcp: %s: encode request: %w", t.cfg.Name, err)
 	}
 	b = append(b, '\n')
 
-	t.writeMu.Lock()
-	defer t.writeMu.Unlock()
 	select {
+	case t.writeCh <- b:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	case <-t.done:
 		return t.closedErr()
-	default:
 	}
-	if _, err := t.stdin.Write(b); err != nil {
-		return fmt.Errorf("mcp: %s: write to server: %w: %w", t.cfg.Name, err, core.ErrProvider)
+}
+
+func (t *stdioTransport) writeLoop() {
+	for {
+		select {
+		case b := <-t.writeCh:
+			if _, err := t.stdin.Write(b); err != nil {
+				t.markDone(fmt.Errorf("mcp: %s: write to server: %w: %w", t.cfg.Name, err, core.ErrProvider))
+				return
+			}
+		case <-t.done:
+			return
+		}
 	}
-	return nil
 }
 
 func (t *stdioTransport) readLoop(r io.Reader) {

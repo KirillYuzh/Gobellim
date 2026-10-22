@@ -247,6 +247,8 @@ func (p *Pipeline) Version() string { return p.version }
 // Check runs every configured layer over text for the rail and returns a
 // Verdict. Text is truncated to MaxChars, L1 reads the canonical form, decoded
 // variants are rescanned through L1, and a required detector error is returned.
+// A truncated scan never returns Mask: only fully inspected text is masked, so
+// a truncated scan that would mask is Rejected instead.
 func (p *Pipeline) Check(ctx context.Context, rail Rail, text string) (Verdict, error) {
 	if !ValidRail(rail) {
 		return Verdict{}, fmt.Errorf("guard: unknown rail %q: %w", string(rail), core.ErrInvalidConfig)
@@ -293,12 +295,15 @@ func (p *Pipeline) finish(rail Rail, text string, findings []Finding, degraded [
 	v.Truncated = inspected < total
 	v.InspectedRunes = inspected
 
-	// Fail closed on truncation for input rail: if the text was truncated,
-	// we cannot guarantee the uninspected portion is safe.
-	if rail == RailInput && v.Truncated {
+	// Fail closed on truncation. Everything past MaxChars is uninspected, so a
+	// Mask verdict on truncated text would return the raw tail next to the
+	// masked prefix. Mask is therefore only produced for fully inspected text:
+	// a truncated scan that would mask is escalated to Reject, as is every
+	// truncated input scan.
+	if v.Truncated && (rail == RailInput || v.Action == Mask) {
 		v.Action = Reject
 		v.Tripwire = &Tripwire{
-			Reason: "input truncated, uninspected content may contain PII or injection",
+			Reason: "truncated text, uninspected content may contain PII or injection",
 			RuleID: "truncation",
 			Metadata: map[string]any{
 				"rail":            string(rail),
@@ -326,12 +331,19 @@ func (p *Pipeline) cacheKey(inspected string) string {
 	return string(h.Sum(nil))
 }
 
+// truncateRunes returns the first max runes of text without materializing the
+// whole input as a rune slice: it walks rune boundaries and slices on one, so
+// the result stays valid UTF-8.
 func truncateRunes(text string, max int) string {
 	if max <= 0 {
 		return text
 	}
-	if r := []rune(text); len(r) > max {
-		return string(r[:max])
+	n := 0
+	for i := range text {
+		if n == max {
+			return text[:i]
+		}
+		n++
 	}
 	return text
 }

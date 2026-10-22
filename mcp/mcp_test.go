@@ -185,6 +185,100 @@ func TestStdioTransportGoroutinesEndWithTheClient(t *testing.T) {
 	t.Fatalf("goroutines leaked: %d before, %d after", before, runtime.NumGoroutine())
 }
 
+// TestMCPStdioSilentHelperProcess is a child that never reads stdin, so the
+// pipe fills and the next write blocks.
+func TestMCPStdioSilentHelperProcess(t *testing.T) {
+	if os.Getenv("KIT_MCP_SILENT") != "1" {
+		return
+	}
+	time.Sleep(30 * time.Second)
+	os.Exit(0)
+}
+
+// A stalled child must not turn a canceled call into a hang, and Close must
+// still unblock the writer and reap the process.
+func TestStdioBlockedWriteHonoursContext(t *testing.T) {
+	c, err := New(Config{
+		Name:    "silent",
+		Command: os.Args[0],
+		Args:    []string{"-test.run=TestMCPStdioSilentHelperProcess"},
+		Env:     []string{"KIT_MCP_SILENT=1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err = c.transport.Call(ctx, "initialize", map[string]any{"pad": strings.Repeat("x", 1<<20)})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want the context deadline", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("the call waited %s behind a blocked write", elapsed)
+	}
+
+	canceled, cancel2 := context.WithCancel(context.Background())
+	cancel2()
+	start = time.Now()
+	if _, err := c.transport.Call(canceled, "tools/list", nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context canceled", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("a canceled call waited %s behind a blocked write", elapsed)
+	}
+
+	start = time.Now()
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("Close waited %s for a child that never exits", elapsed)
+	}
+}
+
+// TestMCPStdioClosedStdoutHelperProcess closes stdout but keeps running.
+func TestMCPStdioClosedStdoutHelperProcess(t *testing.T) {
+	if os.Getenv("KIT_MCP_CLOSED_STDOUT") != "1" {
+		return
+	}
+	_ = os.Stdout.Close()
+	time.Sleep(30 * time.Second)
+	os.Exit(0)
+}
+
+// Close must reap the child even when the read loop already ended: otherwise a
+// server that closes stdout and stays alive is left running.
+func TestStdioCloseReapsChildWhenStdoutCloses(t *testing.T) {
+	c, err := New(Config{
+		Name:    "orphan",
+		Command: os.Args[0],
+		Args:    []string{"-test.run=TestMCPStdioClosedStdoutHelperProcess"},
+		Env:     []string{"KIT_MCP_CLOSED_STDOUT=1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := c.transport.(*stdioTransport)
+	select {
+	case <-tr.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the read loop did not notice the closed stdout")
+	}
+
+	start := time.Now()
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("Close waited %s", elapsed)
+	}
+	if tr.cmd.ProcessState == nil {
+		t.Fatal("Close returned without reaping the child")
+	}
+}
+
 func TestNewRequiresExactlyOneTransport(t *testing.T) {
 	if _, err := New(Config{}); err == nil {
 		t.Fatal("want an error when neither Command nor URL is set")

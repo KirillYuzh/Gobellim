@@ -125,6 +125,12 @@ func (c *Client) Chat(ctx context.Context, req model.Request) (model.Response, e
 		}
 		gm := gcMessage{Role: role, Content: content, Name: m.Name}
 		if m.Role == model.RoleAssistant && len(m.ToolCalls) > 0 {
+			// GigaChat's wire format carries one function_call per message, so a
+			// parallel call cannot be replayed faithfully: fail instead of dropping
+			// the extra calls while their results stay in the conversation.
+			if len(m.ToolCalls) > 1 {
+				return model.Response{}, fmt.Errorf("gigachat: assistant message carries %d tool calls, the provider supports one: %w", len(m.ToolCalls), core.ErrProvider)
+			}
 			tc := m.ToolCalls[0]
 			gm.FunctionCall = &gcFunctionCall{Name: tc.Name, Arguments: model.RawObject(tc.Args)}
 		}
@@ -138,8 +144,18 @@ func (c *Client) Chat(ctx context.Context, req model.Request) (model.Response, e
 		case native:
 			body.Functions = append(body.Functions, gcFunction{Name: structuredFunctionName, Description: "Return the structured result.", Parameters: req.JSONSchema})
 			body.FunctionCall = map[string]string{"name": structuredFunctionName}
-		case len(body.Functions) > 0:
-			body.FunctionCall = "auto"
+		case req.ToolChoice == "" || req.ToolChoice == "auto":
+			if len(body.Functions) > 0 {
+				body.FunctionCall = "auto"
+			}
+		case req.ToolChoice == "required":
+			return model.Response{}, fmt.Errorf("gigachat: ToolChoice %q is not supported by the provider: %w", req.ToolChoice, core.ErrProvider)
+		default:
+			// A named tool is a forced call, which GigaChat expresses as an object.
+			if !offersTool(req.Tools, req.ToolChoice) {
+				return model.Response{}, fmt.Errorf("gigachat: ToolChoice %q names a tool that is not offered: %w", req.ToolChoice, core.ErrInvalidArgs)
+			}
+			body.FunctionCall = map[string]string{"name": req.ToolChoice}
 		}
 	}
 
@@ -185,6 +201,15 @@ func (c *Client) Chat(ctx context.Context, req model.Request) (model.Response, e
 }
 
 const structuredFunctionName = "structured_output"
+
+func offersTool(tools []model.ToolSpec, name string) bool {
+	for _, t := range tools {
+		if t.Name == name {
+			return true
+		}
+	}
+	return false
+}
 
 type gcFunction struct {
 	Name        string          `json:"name"`
