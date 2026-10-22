@@ -14,9 +14,13 @@ type queryIn struct {
 	Query string `json:"query"`
 }
 
-// link — обычная заглушка: возвращает готовую ссылку, в сеть не ходит.
+// link — заглушка: модель получает только подтверждение, а ссылку сервис
+// дописывает в конец ответа сам.
 func link(context.Context, struct{}) (entity.Result, error) {
-	return entity.Result{Body: "https://example.invalid/go-doc (mock)"}, nil
+	return entity.Result{
+		Body:   "Готово: ссылка добавлена в конец ответа.",
+		Append: "https://example.invalid/go-doc (mock)",
+	}, nil
 }
 
 // researchState — состояние сценария. Mock в состоянии, чтобы шаги вызывали

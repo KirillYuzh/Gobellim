@@ -72,7 +72,7 @@ func msg(text string) []entity.Message {
 func TestChatRunsToolsAndAnswers(t *testing.T) {
 	llm := &fakeLLM{responses: []entity.Completion{
 		{ToolCalls: []entity.ToolCall{{Name: "link"}}},
-		{Content: "готово https://example.invalid/go-doc (mock)"},
+		{Content: "готово"},
 	}}
 	uc := newUseCase(t, llm, &fakeMock{}, entity.Budget{})
 
@@ -92,6 +92,10 @@ func TestChatRunsToolsAndAnswers(t *testing.T) {
 	last := llm.requests[1]
 	if len(last.Messages) == 0 || last.Messages[len(last.Messages)-1].Role != "tool" {
 		t.Fatalf("no tool message was sent back to the model: %+v", last.Messages)
+	}
+	// Ссылку модель видеть не должна: иначе она вставит её второй раз.
+	if got := last.Messages[len(last.Messages)-1].Content; strings.Contains(got, "example.invalid") {
+		t.Fatalf("tool message leaks the link: %s", got)
 	}
 }
 

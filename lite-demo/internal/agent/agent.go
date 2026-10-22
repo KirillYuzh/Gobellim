@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 
 	"some-project/internal/entity"
@@ -97,6 +98,7 @@ func (s *session) chat(ctx context.Context, in []entity.Message) (entity.ChatRes
 	msgs = append([]entity.Message{{Role: "system", Content: systemPrompt(specs)}}, msgs...)
 
 	var calls []entity.ToolCall
+	var extra []string
 	last := ""
 	for step := 0; step < s.a.budget.MaxSteps; step++ {
 		if err := ctx.Err(); err != nil {
@@ -108,10 +110,10 @@ func (s *session) chat(ctx context.Context, in []entity.Message) (entity.ChatRes
 		}
 		last = resp.Content
 		if len(resp.ToolCalls) == 0 {
-			return entity.ChatResponse{Status: "ok", Answer: resp.Content, ToolCalls: calls}, nil
+			return entity.ChatResponse{Status: "ok", Answer: appendSuffix(resp.Content, extra), ToolCalls: calls}, nil
 		}
 		if len(resp.ToolCalls) > s.a.budget.MaxToolCallsPerStep {
-			return entity.ChatResponse{Status: "budget", Answer: resp.Content, ToolCalls: calls}, nil
+			return entity.ChatResponse{Status: "budget", Answer: appendSuffix(resp.Content, extra), ToolCalls: calls}, nil
 		}
 
 		// Повтор внутри шага считаем циклом модели: побочный эффект не
@@ -140,12 +142,13 @@ func (s *session) chat(ctx context.Context, in []entity.Message) (entity.ChatRes
 				}, nil
 			}
 			calls = append(calls, tc)
+			extra = append(extra, res.Append)
 			toolMsgs = append(toolMsgs, toolMessage(tc.Name, res))
 		}
 		msgs = append(msgs, entity.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls})
 		msgs = append(msgs, toolMsgs...)
 	}
-	return entity.ChatResponse{Status: "max_steps", Answer: last, ToolCalls: calls}, nil
+	return entity.ChatResponse{Status: "max_steps", Answer: appendSuffix(last, extra), ToolCalls: calls}, nil
 }
 
 func (s *session) call(ctx context.Context, tc entity.ToolCall) (entity.Result, error) {
@@ -239,18 +242,52 @@ func systemPrompt(specs []entity.ToolSpec) string {
 	return fmt.Sprintf(
 		"Ты помощник по Go. Отвечай кратко.\n"+
 			"Доступные инструменты: %s. Вызывай их, когда пользователь просит ссылку, данные из базы знаний или research.\n"+
-			"Не отвечай, что инструмента нет: он есть в списке tools. Если инструмент вернул ошибку, скажи о ней.\n"+
-			"Факты и ссылки из инструментов помечены как mock.",
+			"Не отвечай, что инструмента нет: он есть в списке tools. Если инструмент вернул ошибку, скажи о ней.",
 		strings.Join(names, ", "),
 	)
 }
 
+// toolMessage — результат для модели. Служебное поле Append вырезаем: иначе
+// модель увидит ссылку и вставит её в ответ второй раз.
 func toolMessage(name string, res entity.Result) entity.Message {
+	res.Append = ""
 	raw, err := json.Marshal(res)
 	if err != nil {
 		raw = []byte(`{"error":"tool result is not JSON"}`)
 	}
 	return entity.Message{Role: "tool", Name: name, Content: string(raw)}
+}
+
+// appendSuffix дописывает в конец ответа то, что инструменты попросили
+// добавить автоматически. Ссылки, которые модель написала сама, убираем: иначе
+// в ответе окажутся две разные ссылки.
+func appendSuffix(answer string, extra []string) string {
+	for _, s := range extra {
+		if s == "" {
+			continue
+		}
+		answer = dropLinks(answer)
+		if answer != "" {
+			answer += "\n\n"
+		}
+		answer += s
+	}
+	return answer
+}
+
+// linkRe ловит markdown-ссылку целиком и голый URL.
+var linkRe = regexp.MustCompile(`\[[^\]]*\]\([^)]*\)|https?://\S+`)
+
+func dropLinks(s string) string {
+	s = linkRe.ReplaceAllString(s, "")
+	lines := make([]string, 0, 4)
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return strings.TrimRight(strings.Join(lines, "\n"), " :;,-—")
 }
 
 func lastUser(msgs []entity.Message) string {

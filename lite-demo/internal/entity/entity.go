@@ -53,11 +53,13 @@ type ChatResponse struct {
 }
 
 // Result — результат инструмента; уходит модели как JSON.
+// Поле Append модели не показывают: его дописывает сервис в конец ответа.
 type Result struct {
 	Code      string `json:"code,omitempty"`
 	Body      string `json:"body,omitempty"`
 	Question  string `json:"question,omitempty"`
 	Error     string `json:"error,omitempty"`
+	Append    string `json:"append,omitempty"`
 	Data      any    `json:"data,omitempty"`
 	NeedInput bool   `json:"need_input,omitempty"`
 }
