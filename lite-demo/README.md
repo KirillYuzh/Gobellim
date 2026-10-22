@@ -61,7 +61,8 @@ sequenceDiagram
 
 ## Быстрый старт
 
-Нужен Docker с BuildKit:
+Нужен Docker с BuildKit. Compose поднимает два сервиса: приложение и
+одноузловой Elasticsearch для запусков сценария.
 
 ```sh
 docker compose up -d --build
@@ -116,6 +117,7 @@ go run ./cmd/lite-demo
 | 400 | битый JSON, лишние поля, ответ не по вариантам |
 | 403 | policy запретила действие                      |
 | 404 | запуск неизвестен, истёк или чужой             |
+| 409 | запуск уже изменил другой запрос               |
 | 502 | не ответил GigaChat                            |
 | 504 | истёк дедлайн запроса                          |
 | 500 | внутренняя ошибка                              |
@@ -168,13 +170,16 @@ tools.New("start_research", u.startResearch,
 
 ## Сессия
 
-`internal/session` — копия пакета `flow/session` из библиотеки: объявление
-вопросов, пауза, продолжение, хранилище запусков. `internal/workflow` — копия
-`flow/workflow`: шаги, ветки и `Suspend`.
+`internal/session` вырос из `flow/session` библиотеки: объявление вопросов,
+пауза, продолжение, хранилище запусков. Отличие — `Store` как граница и
+`ESStore`, поэтому запуск восстанавливается по состоянию, а не по указателю на
+исполнение. `internal/workflow` — копия `flow/workflow`: шаги, ветки, `Suspend`
+и `Position` для восстановления паузы.
 
 ```go
-func newResearch() *session.Session[researchState] {
+func newResearch(store session.Store[researchState]) *session.Session[researchState] {
 	return session.New[researchState]("research").
+		WithStore(store).
 		AskChoice("path", "Путь A или B?", []string{"A", "B"},
 			func(st *researchState, answer string) error {
 				st.Path = answer
@@ -196,6 +201,26 @@ func newResearch() *session.Session[researchState] {
 паузы. Чужой запуск, истёкший TTL и ответ не по вариантам отсекаются до
 продолжения.
 
+## Хранилище запусков
+
+`session.Store` — граница хранилища. В демо два варианта:
+
+| `ES_URL` | Store         | Поведение                                                          |
+| -------- | ------------- | ------------------------------------------------------------------ |
+| пусто    | `MemoryStore` | TTL 15 минут, 1000 запусков, 10 на principal; рестарт теряет паузы |
+| задан    | `ESStore`     | запуск переживает рестарт и виден другому инстансу                 |
+
+`ESStore` хранит только состояние, владельца, TTL и последний результат.
+Исполнение сценария при `Resume` восстанавливается по состоянию: `Branch`
+выбирает маршрут заново, но ни один шаг не выполняется повторно. Запись идёт с
+оптимистичной блокировкой (`if_seq_no`/`if_primary_term`): параллельный ответ
+получает `409`, а не перезаписывает чужой. Истёкшие документы отсекаются при
+чтении; для чистки в проде нужен ILM или внешний job.
+
+В compose `ES_URL` уже указывает на сервис `elasticsearch` (security выключен —
+это локальный демо-кластер). При локальном `go run` без `ES_URL` используется
+память, внешний Elasticsearch не нужен.
+
 ## Структура
 
 | Путь                  | Что                                                        |
@@ -212,25 +237,27 @@ func newResearch() *session.Session[researchState] {
 | `internal/routes`     | таблица маршрутов и recover                                |
 | `internal/tools`      | движок инструментов: схема, каталог, вызов                 |
 | `internal/usecase`    | сценарии: чат, инструменты и health                        |
-| `internal/session`    | копия `flow/session`: вопросы, пауза, хранилище запусков   |
+| `internal/session`    | сценарий, `MemoryStore` и `ESStore` для запусков           |
 | `internal/workflow`   | копия `flow/workflow`: шаги, ветки, `Suspend`              |
 | `web`                 | страница чата, встроенная в бинарник                       |
 | `pkg/rest`            | JSON-ответ и разбор тела запроса                           |
 
 ## Настройки
 
-| Переменная          | По умолчанию                                        | Зачем                                  |
-| ------------------- | --------------------------------------------------- | -------------------------------------- |
-| `APP_ENV`           | dev                                                 | `prod` отклоняется                     |
-| `HTTP_ADDR`         | `:8080`                                             | адрес сервера                          |
-| `POLICY_PATH`       | `policy.json`                                       | файл прав                              |
-| `GIGACHAT_API_KEY`  | из `.env`                                           | OAuth-ключ, обязателен                 |
-| `GIGACHAT_MODEL`    | `GigaChat-2`                                        | модель                                 |
-| `GIGACHAT_BASE_URL` | `https://api.giga.chat`                             | API                                    |
-| `GIGACHAT_AUTH_URL` | `https://ngw.devices.sberbank.ru:9443/api/v2/oauth` | OAuth                                  |
-| `GIGACHAT_SCOPE`    | `GIGACHAT_API_PERS`                                 | скоуп OAuth                            |
-| `REQUEST_TIMEOUT`   | `3m`                                                | дедлайн одного запроса                 |
-| `LOG_LEVEL`         | `info`                                              | `debug` печатает запрос и ответ модели |
+| Переменная          | По умолчанию                                        | Зачем                                      |
+| ------------------- | --------------------------------------------------- | ------------------------------------------ |
+| `APP_ENV`           | dev                                                 | `prod` отклоняется                         |
+| `HTTP_ADDR`         | `:8080`                                             | адрес сервера                              |
+| `POLICY_PATH`       | `policy.json`                                       | файл прав                                  |
+| `GIGACHAT_API_KEY`  | из `.env`                                           | OAuth-ключ, обязателен                     |
+| `GIGACHAT_MODEL`    | `GigaChat-2`                                        | модель                                     |
+| `GIGACHAT_BASE_URL` | `https://api.giga.chat`                             | API                                        |
+| `GIGACHAT_AUTH_URL` | `https://ngw.devices.sberbank.ru:9443/api/v2/oauth` | OAuth                                      |
+| `GIGACHAT_SCOPE`    | `GIGACHAT_API_PERS`                                 | скоуп OAuth                                |
+| `REQUEST_TIMEOUT`   | `3m`                                                | дедлайн одного запроса                     |
+| `ES_URL`            | пусто                                               | Elasticsearch для запусков; пусто = память |
+| `ES_INDEX`          | `lite-demo-runs`                                    | индекс запусков                            |
+| `LOG_LEVEL`         | `info`                                              | `debug` печатает запрос и ответ модели     |
 
 ### Что получила модель
 

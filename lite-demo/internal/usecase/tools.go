@@ -27,8 +27,9 @@ type researchState struct {
 
 // newResearch объявляет сценарий: сразу путь A или B, а в пути B ещё один
 // вопрос. Вопросы, ответы, хранение запусков и пауза живут в пакете session.
-func newResearch() *session.Session[researchState] {
+func newResearch(store session.Store[researchState]) *session.Session[researchState] {
 	return session.New[researchState]("research").
+		WithStore(store).
 		AskChoice("path", "Что сделать: путь A (готовый текст) или путь B (вопрос и уточнение)?",
 			[]string{"A", "B"},
 			func(st *researchState, answer string) error {
@@ -77,6 +78,9 @@ func (u *UseCase) startResearch(ctx context.Context, in startIn) (entity.Result,
 	if !ok {
 		return entity.Result{}, fmt.Errorf("research: no principal: %w", entity.ErrInternal)
 	}
+	if !u.policy.Allows(user, "research") {
+		return entity.Result{}, fmt.Errorf("research: %w", entity.ErrUnauthorized)
+	}
 	res, err := u.research.Start(ctx, principal(user), &researchState{Query: query})
 	if err != nil {
 		return entity.Result{}, mapSessionError(err)
@@ -104,13 +108,16 @@ func principal(u entity.User) session.Principal {
 }
 
 // mapSessionError переводит ошибки сценария в доменные: чужой запуск отдаётся
-// как «не найдено», кривой ответ — как некорректный запрос.
+// как «не найдено», кривой ответ — как некорректный запрос, гонка записи — как
+// конфликт, который клиент может повторить.
 func mapSessionError(err error) error {
 	switch {
 	case errors.Is(err, session.ErrNotFound):
-		return fmt.Errorf("%w: %w", err, entity.ErrNotFound)
+		return fmt.Errorf("%w: %w", entity.ErrNotFound, err)
+	case errors.Is(err, session.ErrConflict):
+		return fmt.Errorf("%w: %w", entity.ErrConflict, err)
 	case errors.Is(err, session.ErrInvalid):
-		return fmt.Errorf("%w: %w", err, entity.ErrInvalid)
+		return fmt.Errorf("%w: %w", entity.ErrInvalid, err)
 	default:
 		return err
 	}

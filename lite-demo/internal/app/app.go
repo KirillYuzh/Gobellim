@@ -30,14 +30,20 @@ func Run(cfg config.Config, log *slog.Logger) error {
 		LLM: llm.NewGigaChat(
 			cfg.GigaChatKey, cfg.GigaChatModel, cfg.GigaChatBaseURL, cfg.GigaChatAuthURL, cfg.GigaChatScope,
 		),
-		Policy: pol,
-		Logger: log,
+		Policy:  pol,
+		Logger:  log,
+		ESURL:   cfg.ESURL,
+		ESIndex: cfg.ESIndex,
 	})
 	if err != nil {
 		return err
 	}
 
-	log.Info("service ready", "tools", uc.Health().Tools, "gigachat", cfg.GigaChatModel)
+	store := "memory"
+	if cfg.ESURL != "" {
+		store = "elasticsearch"
+	}
+	log.Info("service ready", "tools", uc.Health().Tools, "gigachat", cfg.GigaChatModel, "store", store)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

@@ -38,7 +38,6 @@ type ToolCall struct {
 	Args map[string]any `json:"args,omitempty"`
 }
 
-// ChatRequest — один ход диалога. RunID продолжает приостановленный сценарий.
 // ChatRequest — один ход диалога.
 type ChatRequest struct {
 	User     User      `json:"user"`
@@ -55,7 +54,7 @@ type ResumeRequest struct {
 	Choice   string `json:"choice,omitempty"`
 }
 
-// ChatResponse — ответ сервиса. Status: ok, awaiting_input, max_steps или budget.
+// ChatResponse — ответ сервиса. Status: ok, awaiting_user, max_steps или budget.
 type ChatResponse struct {
 	Status    string     `json:"status"`
 	Answer    string     `json:"answer,omitempty"`

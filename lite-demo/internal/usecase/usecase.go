@@ -19,6 +19,9 @@ type Deps struct {
 	Policy *policy.Policy
 	Logger *slog.Logger
 	Budget entity.Budget
+	// ESURL turns on the Elasticsearch run store; empty keeps runs in memory.
+	ESURL   string
+	ESIndex string
 }
 
 // UseCase знает модель, права, инструменты и сценарий. HTTP он не знает.
@@ -33,7 +36,15 @@ func New(d Deps) (*UseCase, error) {
 	if d.LLM == nil || d.Policy == nil {
 		return nil, fmt.Errorf("usecase: LLM и policy обязательны: %w", entity.ErrConfig)
 	}
-	u := &UseCase{policy: d.Policy, research: newResearch()}
+	store := session.Store[researchState](session.NewMemoryStore[researchState]())
+	if d.ESURL != "" {
+		es, err := session.NewESStore[researchState](session.ESConfig{URL: d.ESURL, Index: d.ESIndex})
+		if err != nil {
+			return nil, fmt.Errorf("usecase: elasticsearch: %w", err)
+		}
+		store = es
+	}
+	u := &UseCase{policy: d.Policy, research: newResearch(store)}
 
 	set, err := tools.NewRegistry().Register(
 		tools.New("link", link,

@@ -27,6 +27,8 @@ func Status(err error) int {
 		return http.StatusNotFound
 	case errors.Is(err, entity.ErrBudget):
 		return http.StatusTooManyRequests
+	case errors.Is(err, entity.ErrConflict):
+		return http.StatusConflict
 	case errors.Is(err, entity.ErrUpstream):
 		return http.StatusBadGateway
 	default:
@@ -45,6 +47,8 @@ func Message(err error) string {
 		return "not found"
 	case errors.Is(err, entity.ErrBudget):
 		return "budget exceeded"
+	case errors.Is(err, entity.ErrConflict):
+		return "run changed, retry"
 	case errors.Is(err, entity.ErrUpstream):
 		return "upstream unavailable"
 	case errors.Is(err, context.DeadlineExceeded):

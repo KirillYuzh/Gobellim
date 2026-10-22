@@ -9,6 +9,7 @@ var (
 	ErrNotFound     = errors.New("not found")
 	ErrUpstream     = errors.New("upstream unavailable")
 	ErrBudget       = errors.New("budget exceeded")
+	ErrConflict     = errors.New("conflict")
 	ErrInternal     = errors.New("internal error")
 	ErrConfig       = errors.New("invalid configuration")
 )

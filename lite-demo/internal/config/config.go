@@ -18,6 +18,8 @@ type Config struct {
 	GigaChatAuthURL string
 	GigaChatScope   string
 	RequestTimeout  time.Duration
+	ESURL           string
+	ESIndex         string
 	Env             string
 }
 
@@ -32,6 +34,8 @@ func Load() (Config, error) {
 		GigaChatBaseURL: env("GIGACHAT_BASE_URL", "https://api.giga.chat"),
 		GigaChatAuthURL: env("GIGACHAT_AUTH_URL", "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"),
 		GigaChatScope:   env("GIGACHAT_SCOPE", "GIGACHAT_API_PERS"),
+		ESURL:           env("ES_URL", ""),
+		ESIndex:         env("ES_INDEX", "lite-demo-runs"),
 		Env:             env("APP_ENV", "dev"),
 	}
 	var err error

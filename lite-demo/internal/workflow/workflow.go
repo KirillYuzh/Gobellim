@@ -189,11 +189,12 @@ func Suspend(ctx context.Context, payload any) error {
 
 // Execution — запущенный сценарий: состояние, позиция стека и текущая пауза.
 type Execution[S any] struct {
-	st    *S
-	stack []frame[S]
-	steps int
-	susp  *Suspension
-	done  bool
+	st     *S
+	stack  []frame[S]
+	steps  int
+	susp   *Suspension
+	done   bool
+	failed bool
 }
 
 type frame[S any] struct {
@@ -245,7 +246,9 @@ func (e *Execution[S]) Suspension() *Suspension { return e.susp }
 
 // Resume продолжает сценарий с того шага, который вызвал Suspend. Ответ
 // применяет apply: workflow гарантирует, что он вызовется один раз и только
-// пока сценарий действительно ждёт ответа. Ошибка apply отменяет продолжение.
+// пока сценарий действительно ждёт ответа. Ошибка apply отменяет продолжение и
+// оставляет паузу, поэтому ответ можно повторить; ошибка шага после apply
+// завершает запуск, и повтор получает ту же ошибку, а не «не ждёт ответа».
 func (e *Execution[S]) Resume(ctx context.Context, apply func(*S) error) error {
 	if e.done || e.susp == nil {
 		return fmt.Errorf("%w: nothing to resume", ErrInvalid)
@@ -253,17 +256,97 @@ func (e *Execution[S]) Resume(ctx context.Context, apply func(*S) error) error {
 	if apply == nil {
 		return fmt.Errorf("%w: apply is required", ErrInvalid)
 	}
-	if err := apply(e.st); err != nil {
+	if err := applySafely(apply, e.st); err != nil {
 		return err
 	}
 	e.susp = nil
 	if err := e.run(ctx); err != nil {
 		var susp *Suspension
 		if !errors.As(err, &susp) {
+			e.failed = true
 			return err
 		}
 	}
 	return nil
+}
+
+// Failed reports that a step after the answer failed. The execution cannot be
+// resumed again: the caller has to store that outcome and report it to the
+// client, not leave a run that is no longer waiting for anything.
+func (e *Execution[S]) Failed() bool { return e.failed }
+
+// applySafely runs the answer callback and converts a panic into an error, the
+// same way runStep treats a step panic.
+func applySafely[S any](apply func(*S) error, st *S) (err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			err = fmt.Errorf("workflow: apply: panic: %v", rec)
+		}
+	}()
+	return apply(st)
+}
+
+// Position returns a suspended execution positioned at the step named stage,
+// following branches by decide. It executes no step: it rebuilds the position
+// of a run after the process that suspended it is gone. payload becomes the
+// suspension payload, so Resume answers the same question the run stopped on.
+// The state must carry everything decide reads; otherwise Position fails with
+// ErrInvalid instead of guessing a route.
+func (f *Flow[S]) Position(st *S, stage string, payload any) (*Execution[S], error) {
+	if st == nil {
+		return nil, fmt.Errorf("%w: nil state", ErrInvalid)
+	}
+	if stage == "" {
+		return nil, fmt.Errorf("%w: stage is required", ErrInvalid)
+	}
+	if err := f.Validate(); err != nil {
+		return nil, err
+	}
+	stack, found, err := f.position(st, stage, map[*Flow[S]]bool{})
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, fmt.Errorf("%w: %s: step %q is not on the path", ErrInvalid, f.name, stage)
+	}
+	top := &stack[len(stack)-1]
+	e := &Execution[S]{st: st, stack: stack}
+	e.susp = &Suspension{Flow: top.flow.name, Step: stage, Payload: payload}
+	return e, nil
+}
+
+func (f *Flow[S]) position(st *S, stage string, path map[*Flow[S]]bool) ([]frame[S], bool, error) {
+	if path[f] {
+		return nil, false, fmt.Errorf("%w: %s: cycle", ErrInvalid, f.name)
+	}
+	path[f] = true
+	defer delete(path, f)
+
+	for i, n := range f.nodes {
+		switch {
+		case n.step != nil:
+			if n.step.Name == stage {
+				return []frame[S]{{flow: f, next: i + 1}}, true, nil
+			}
+		case n.branch != nil:
+			route, err := decide(f.name, n.branch, st)
+			if err != nil {
+				return nil, false, err
+			}
+			sub, ok := n.branch.Routes[route]
+			if !ok || sub == nil {
+				return nil, false, fmt.Errorf("%w: %s/%s: no branch %q", ErrInvalid, f.name, n.branch.Name, route)
+			}
+			subStack, found, err := sub.position(st, stage, path)
+			if err != nil {
+				return nil, false, err
+			}
+			if found {
+				return append([]frame[S]{{flow: f, next: i + 1}}, subStack...), true, nil
+			}
+		}
+	}
+	return nil, false, nil
 }
 
 // run исполняет узлы сверху вниз, пока стек не опустеет. Пауза возвращается

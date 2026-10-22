@@ -3,9 +3,9 @@
 //
 // A Session declares questions, steps and branches over a typed state. When a
 // question has no answer yet, the scenario suspends with a typed question. The
-// caller stores the run, shows the question to the user and calls Resume with
-// the answer. The library owns the run lifecycle: the model never chooses a
-// branch and never sees the run id.
+// session stores the run in a Store; the caller shows the question to the user
+// and calls Resume with the answer. The library owns the run lifecycle: the
+// model never chooses a branch and never sees the run id.
 package session
 
 import (
@@ -46,39 +46,40 @@ var (
 	// ErrInvalid marks a malformed scenario or an answer that does not fit the
 	// pending question.
 	ErrInvalid = errors.New("session: invalid")
+	// ErrConflict means another writer changed the run between Load and Save.
+	// The retry loads the new state; nothing was overwritten.
+	ErrConflict = errors.New("session: run changed")
 )
 
-// Principal owns a run. Ownership is checked on every resume.
+// Principal owns a run. Ownership is checked on every resume, field by field:
+// an empty ChatID matches only another empty ChatID.
 type Principal struct {
-	UserID string
-	Tenant string
-	ChatID string
+	UserID string `json:"user_id"`
+	Tenant string `json:"tenant"`
+	ChatID string `json:"chat_id,omitempty"`
 }
 
-// matches reports whether other may act on a run owned by p. An empty ChatID on
-// either side means "any chat".
+// matches reports whether other may act on a run owned by p.
 func (p Principal) matches(other Principal) bool {
-	if p.UserID != other.UserID || p.Tenant != other.Tenant {
-		return false
-	}
-	return p.ChatID == "" || other.ChatID == "" || p.ChatID == other.ChatID
+	return p.UserID == other.UserID && p.Tenant == other.Tenant && p.ChatID == other.ChatID
 }
 
 // Question is the typed payload of a suspension: what to ask and how to answer.
 type Question struct {
-	Stage   string
-	Prompt  string
-	Input   Input
-	Options []string
+	Stage   string   `json:"stage"`
+	Prompt  string   `json:"prompt"`
+	Input   Input    `json:"input"`
+	Options []string `json:"options,omitempty"`
 }
 
-// Result is what Start and Resume return. State is a snapshot of the scenario
-// state at that point.
+// Result is what Start and Resume return. State is a shallow copy of the
+// scenario state at that point: pointers and slices inside S are shared with
+// the run, so a caller must not mutate them.
 type Result[S any] struct {
-	Status   Status
-	RunID    string
-	Question *Question
-	State    S
+	Status   Status    `json:"status"`
+	RunID    string    `json:"run_id"`
+	Question *Question `json:"question,omitempty"`
+	State    S         `json:"state"`
 }
 
 // ResumeRequest continues a run with the answer of its owner.
@@ -94,8 +95,8 @@ type ResumeRequest struct {
 type Session[S any] struct {
 	name  string
 	steps []step[S]
-	asks  map[string]struct{}
-	store *MemoryStore[S]
+	asks  map[string]*ask[S]
+	store Store[S]
 	last  *branchStep[S]
 
 	once sync.Once
@@ -141,11 +142,12 @@ type branchStep[S any] struct {
 // New returns an empty scenario with the given name. The name appears in error
 // paths.
 func New[S any](name string) *Session[S] {
-	return &Session[S]{name: name, asks: make(map[string]struct{}), store: NewMemoryStore[S]()}
+	return &Session[S]{name: name, asks: make(map[string]*ask[S]), store: NewMemoryStore[S]()}
 }
 
-// WithStore replaces the run store. The default is a fresh MemoryStore.
-func (s *Session[S]) WithStore(store *MemoryStore[S]) *Session[S] {
+// WithStore replaces the run store. The default is a fresh MemoryStore; a nil
+// store keeps it.
+func (s *Session[S]) WithStore(store Store[S]) *Session[S] {
 	if store != nil {
 		s.store = store
 	}
@@ -188,8 +190,14 @@ func (s *Session[S]) AskChoice(stage, prompt string, options []string, apply fun
 }
 
 func (s *Session[S]) ask(a *ask[S]) *Session[S] {
+	if a.stage != "" {
+		if _, dup := s.asks[a.stage]; dup {
+			s.fail(fmt.Errorf("%w: %s: question %q is declared twice", ErrInvalid, s.name, a.stage))
+			return s
+		}
+		s.asks[a.stage] = a
+	}
 	s.steps = append(s.steps, step[S]{ask: a})
-	s.asks[a.stage] = struct{}{}
 	s.last = nil
 	return s
 }
@@ -212,6 +220,12 @@ func (s *Session[S]) Branch(decide func(*S) string) *Session[S] {
 func (s *Session[S]) Case(route string, build func(*Session[S])) *Session[S] {
 	if s.last == nil {
 		return s.fail(fmt.Errorf("%w: %s: Case without Branch", ErrInvalid, s.name))
+	}
+	if route == "" {
+		return s.fail(fmt.Errorf("%w: %s: Case route is required", ErrInvalid, s.name))
+	}
+	if _, dup := s.last.cases[route]; dup {
+		return s.fail(fmt.Errorf("%w: %s: Case %q is declared twice", ErrInvalid, s.name, route))
 	}
 	if build == nil {
 		return s.fail(fmt.Errorf("%w: %s: Case %q has no body", ErrInvalid, s.name, route))
@@ -240,6 +254,10 @@ func (s *Session[S]) Start(ctx context.Context, principal Principal, st *S) (Res
 	if principal.UserID == "" || principal.Tenant == "" {
 		return Result[S]{}, fmt.Errorf("%w: principal user and tenant are required", ErrInvalid)
 	}
+	id, err := newRunID()
+	if err != nil {
+		return Result[S]{}, err
+	}
 	flow, err := s.compile()
 	if err != nil {
 		return Result[S]{}, err
@@ -248,14 +266,14 @@ func (s *Session[S]) Start(ctx context.Context, principal Principal, st *S) (Res
 	if err != nil {
 		return Result[S]{}, err
 	}
-	run := &Run[S]{ID: newRunID(), Principal: principal, Exec: exec, Expires: s.store.expiry()}
-	return s.finish(run, "")
+	run := &Run[S]{ID: id, Principal: principal, Expires: s.store.Expiry()}
+	return s.finish(ctx, run, exec, "")
 }
 
 // Resume continues a suspended run with the answer of its owner. A repeated
-// ResumeID returns the stored result instead of applying the answer twice.
+// ResumeID returns the result stored by the previous successful Resume.
 func (s *Session[S]) Resume(ctx context.Context, req ResumeRequest) (Result[S], error) {
-	run, err := s.store.Load(RunRef{RunID: req.RunID, Principal: req.Principal})
+	run, err := s.store.Load(ctx, req.RunID, req.Principal)
 	if err != nil {
 		return Result[S]{}, err
 	}
@@ -263,28 +281,71 @@ func (s *Session[S]) Resume(ctx context.Context, req ResumeRequest) (Result[S], 
 	run.mu.Lock()
 	defer run.mu.Unlock()
 
-	if req.ResumeID != "" && req.ResumeID == run.resumeID {
-		return run.last, nil
+	if req.ResumeID != "" && req.ResumeID == run.ResumeID {
+		return run.Last, nil
 	}
-	if run.done {
+	if run.Last.Status == StatusCompleted {
 		return Result[S]{}, fmt.Errorf("%w: run %s is finished", ErrInvalid, req.RunID)
 	}
-	susp := run.Exec.Suspension()
-	if susp == nil {
-		return Result[S]{}, fmt.Errorf("%w: run %s is not waiting for an answer", ErrInvalid, req.RunID)
-	}
-	pending, ok := susp.Payload.(*ask[S])
-	if !ok {
-		return Result[S]{}, fmt.Errorf("%w: run %s has an unexpected question %T", ErrInvalid, req.RunID, susp.Payload)
+	pending, err := s.pending(run)
+	if err != nil {
+		return Result[S]{}, err
 	}
 	answer, err := pending.answer(req)
 	if err != nil {
 		return Result[S]{}, err
 	}
-	if err := run.Exec.Resume(ctx, func(st *S) error { return pending.apply(st, answer) }); err != nil {
+	exec, err := s.restore(run, pending)
+	if err != nil {
 		return Result[S]{}, err
 	}
-	return s.finish(run, req.ResumeID)
+	err = exec.Resume(ctx, func(st *S) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return pending.apply(st, answer)
+	})
+	if err != nil {
+		if !exec.Failed() {
+			// Nothing was applied: a canceled request or a rejected answer
+			// leaves the run waiting for the same question.
+			return Result[S]{}, err
+		}
+		// The answer is applied and the rest of the scenario cannot run. Finish
+		// the run so a retry gets a definite error instead of a run that is
+		// neither waiting nor complete. The save ignores request cancellation:
+		// a dropped connection must not resurrect an already applied answer.
+		run.Last = Result[S]{Status: StatusCompleted, RunID: run.ID, State: *exec.State()}
+		if saveErr := s.store.Save(context.WithoutCancel(ctx), run); saveErr != nil {
+			return Result[S]{}, errors.Join(err, saveErr)
+		}
+		return Result[S]{}, err
+	}
+	return s.finish(ctx, run, exec, req.ResumeID)
+}
+
+// pending returns the declaration of the question the run waits on.
+func (s *Session[S]) pending(run *Run[S]) (*ask[S], error) {
+	q := run.Last.Question
+	if q == nil {
+		return nil, fmt.Errorf("%w: run %s is not waiting for an answer", ErrInvalid, run.ID)
+	}
+	a, ok := s.asks[q.Stage]
+	if !ok {
+		return nil, fmt.Errorf("%w: run %s: question %q is not declared", ErrInvalid, run.ID, q.Stage)
+	}
+	return a, nil
+}
+
+// restore rebuilds the execution at the pending question from the stored state.
+// It works on a copy: a failed resume must not mutate the stored run.
+func (s *Session[S]) restore(run *Run[S], pending *ask[S]) (*workflow.Execution[S], error) {
+	flow, err := s.compile()
+	if err != nil {
+		return nil, err
+	}
+	st := run.Last.State
+	return flow.Position(&st, pending.stage, pending)
 }
 
 // answer validates the reply against the question contract.
@@ -305,9 +366,9 @@ func (a *ask[S]) answer(req ResumeRequest) (string, error) {
 }
 
 // finish stores the run and reports its status to the caller.
-func (s *Session[S]) finish(run *Run[S], resumeID string) (Result[S], error) {
+func (s *Session[S]) finish(ctx context.Context, run *Run[S], exec *workflow.Execution[S], resumeID string) (Result[S], error) {
 	var out Result[S]
-	if susp := run.Exec.Suspension(); susp != nil {
+	if susp := exec.Suspension(); susp != nil {
 		pending, ok := susp.Payload.(*ask[S])
 		if !ok {
 			return Result[S]{}, fmt.Errorf("%w: %s: unexpected question %T", ErrInvalid, s.name, susp.Payload)
@@ -321,15 +382,16 @@ func (s *Session[S]) finish(run *Run[S], resumeID string) (Result[S], error) {
 				Input:   pending.input,
 				Options: append([]string(nil), pending.options...),
 			},
-			State: *run.Exec.State(),
+			State: *exec.State(),
 		}
 	} else {
-		run.done = true
-		out = Result[S]{Status: StatusCompleted, RunID: run.ID, State: *run.Exec.State()}
+		out = Result[S]{Status: StatusCompleted, RunID: run.ID, State: *exec.State()}
 	}
-	run.last = out
-	run.resumeID = resumeID
-	if err := s.store.Save(run); err != nil {
+	run.Last = out
+	run.ResumeID = resumeID
+	// A completed transition is persisted even if the client is gone: the next
+	// request must see it, not repeat it.
+	if err := s.store.Save(context.WithoutCancel(ctx), run); err != nil {
 		return Result[S]{}, err
 	}
 	return out, nil
@@ -406,7 +468,7 @@ func (s *Session[S]) build() (*workflow.Flow[S], error) {
 		}
 	}
 	if err := flow.Validate(); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	return flow, nil
 }

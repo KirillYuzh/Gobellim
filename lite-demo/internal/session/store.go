@@ -1,13 +1,12 @@
 package session
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
-
-	"some-project/internal/workflow"
 )
 
 const (
@@ -19,23 +18,29 @@ const (
 	defaultMaxPerPrincipal = 10
 )
 
-// Run is one stored scenario: its position, its owner and the last result.
+// Run is the durable part of a scenario: its owner, its expiry and the last
+// result. A Store persists it; the workflow execution is rebuilt from
+// Last.State and the pending stage, so a restart does not lose suspended runs.
 type Run[S any] struct {
-	mu        sync.Mutex
-	ID        string
-	Principal Principal
-	Exec      *workflow.Execution[S]
-	Expires   time.Time
+	ID        string    `json:"id"`
+	Principal Principal `json:"principal"`
+	Expires   time.Time `json:"expires"`
+	ResumeID  string    `json:"resume_id,omitempty"`
+	Last      Result[S] `json:"last"`
 
-	done     bool
-	resumeID string
-	last     Result[S]
+	mu   sync.Mutex
+	seq  int64 // store version, set by Load; a store rejects a stale Save
+	term int64 // primary term for Elasticsearch optimistic concurrency
 }
 
-// RunRef addresses a run and the principal that wants it.
-type RunRef struct {
-	RunID     string
-	Principal Principal
+// Store keeps runs. Session is the only consumer: it loads a run, checks the
+// owner and the answer, resumes the execution and saves the new state. Load and
+// Save take the request context so an external store can honour its deadline.
+type Store[S any] interface {
+	Load(ctx context.Context, runID string, p Principal) (*Run[S], error)
+	Save(ctx context.Context, run *Run[S]) error
+	// Expiry returns the expiration of a run created now.
+	Expiry() time.Time
 }
 
 // MemoryStore keeps runs in memory with a TTL and size limits. It is the
@@ -96,12 +101,12 @@ func NewMemoryStore[S any](opts ...StoreOption) *MemoryStore[S] {
 	return &MemoryStore[S]{runs: make(map[string]*Run[S]), ttl: c.ttl, max: c.max, maxPer: c.maxPer}
 }
 
-// expiry returns the expiration time of a run created now.
-func (m *MemoryStore[S]) expiry() time.Time { return time.Now().Add(m.ttl) }
+// Expiry returns the expiration time of a run created now.
+func (m *MemoryStore[S]) Expiry() time.Time { return time.Now().Add(m.ttl) }
 
 // Save stores a run, pruning expired ones and evicting the oldest when a limit
 // is reached.
-func (m *MemoryStore[S]) Save(run *Run[S]) error {
+func (m *MemoryStore[S]) Save(_ context.Context, run *Run[S]) error {
 	if run == nil || run.ID == "" {
 		return fmt.Errorf("%w: run id is required", ErrInvalid)
 	}
@@ -125,32 +130,25 @@ func (m *MemoryStore[S]) Save(run *Run[S]) error {
 }
 
 // Load returns a run to its owner. An expired or foreign run is ErrNotFound.
-func (m *MemoryStore[S]) Load(ref RunRef) (*Run[S], error) {
-	if ref.RunID == "" {
+func (m *MemoryStore[S]) Load(_ context.Context, runID string, p Principal) (*Run[S], error) {
+	if runID == "" {
 		return nil, fmt.Errorf("%w: run id is required", ErrInvalid)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	run := m.runs[ref.RunID]
+	run := m.runs[runID]
 	if run == nil {
 		return nil, ErrNotFound
 	}
 	if time.Now().After(run.Expires) {
-		delete(m.runs, ref.RunID)
+		delete(m.runs, runID)
 		return nil, ErrNotFound
 	}
-	if !run.Principal.matches(ref.Principal) {
+	if !run.Principal.matches(p) {
 		return nil, ErrNotFound
 	}
 	return run, nil
-}
-
-// Len reports how many runs are stored.
-func (m *MemoryStore[S]) Len() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return len(m.runs)
 }
 
 func (m *MemoryStore[S]) pruneLocked() {
@@ -203,10 +201,10 @@ func (m *MemoryStore[S]) evictAnyLocked() {
 	}
 }
 
-func newRunID() string {
+func newRunID() (string, error) {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return "run-0"
+		return "", fmt.Errorf("session: run id: %w", err)
 	}
-	return "run-" + hex.EncodeToString(b[:])
+	return "run-" + hex.EncodeToString(b[:]), nil
 }
