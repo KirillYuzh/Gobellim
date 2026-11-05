@@ -256,7 +256,7 @@ refundTool := gobellim.Tool[RefundArgs, RefundResult]{
 }
 ```
 
-Инструмент декларативно описывает эффект, permission, ресурс, дополнительные бизнес-ограничения и обработчик. Регистрация не даёт модели права вызвать функцию напрямую: модель возвращает только имя и JSON-аргументы, а runtime находит инструмент в закрытом реестре и вызывает Gate.
+Инструмент декларативно описывает эффект, permission, ресурс, дополнительные бизнес-ограничения и обработчик. Для `Write`, `Egress` и `Destructive` `Resource` обязателен: `NewTask` отклоняет инструмент без цели, иначе ACL молча выродился бы в RBAC. Регистрация не даёт модели права вызвать функцию напрямую: модель возвращает только имя и JSON-аргументы, а runtime находит инструмент в закрытом реестре и вызывает Gate.
 
 ### 5.3. Ограничения schema-by-tags
 
@@ -265,6 +265,8 @@ refundTool := gobellim.Tool[RefundArgs, RefundResult]{
 Поддерживаемое подмножество: `string`, `bool`, целые и дробные числа, срезы скаляров и вложенные структуры глубиной до двух уровней. Теги: `required`, `untrusted`, `source=principal|application`, `sensitivity=public|internal|pii|secret`, `oneof=a|b`, `min`, `max`, `ground`. `sensitivity=pii` маскирует совпадения, `sensitivity=secret` заменяет всё значение одним handle. `source` и `ground` применимы только к `string`, `sensitivity` — к `string` и `[]string`. Неизвестный тег, `map`, указатель, интерфейс, срез структур, `time.Time`, `[]byte`, встроенная struct без явного `json`-имени и вложенность глубже двух уровней отклоняются на этапе `NewTask`. `required` на `bool` запрещён: ноль неотличим от отсутствия. `required` на строке и числе означает ненулевое значение. `ground`-поле принимает только существующий handle, созданный для этого запуска; сырая строка от модели не grounds аргумент.
 
 `encoding/json`-путь должен ограничивать размер, отклонять неизвестные поля там, где это возможно, проверять обязательные значения и не принимать неограниченную вложенность/массивы без лимитов.
+
+Те же `sensitivity`-теги читаются на **результате** инструмента перед отправкой в модель (`redact.go`): `secret` становится handle, `pii` маскируется. Результат — обычная Go-структура, поэтому `map`, указатель и `json.Marshaler` допустимы (внутрь map редактор не заглядывает). Неизвестный `gobellim`-тег на результате — ошибка `NewTask`, а не молчаливое отключение маскирования.
 
 ## 6. Метки, provenance и handles
 
@@ -392,7 +394,7 @@ Decide(principal, tool, canonicalArgs, labels, currentPolicy)
 
 `Validated` достижим только через «handle этого запуска + успешный `Tool.Validate`»: модель не может получить его, добавив свободный текст. `worst` считается по всем аргументам, поэтому один model-derived аргумент в write-вызове всё равно приводит к `Escalate`.
 
-`Escalate` не значит «апрувер может разрешить всё». Это переход к проверке конкретного действия человеком; базовые ACL, лимиты, schema и законность действия остаются обязательными. `Task.ExecuteApproved` после одобрения перепроверяет tenant, RBAC/ACL, `Validate` и digest аргументов, а потолок эффекта заменяет решением человека. Повторный вызов не защищён от двойного исполнения: одноразовость — задача приложения или `flow` с `Store`.
+`Escalate` не значит «апрувер может разрешить всё». Это переход к проверке конкретного действия человеком; базовые ACL, лимиты, schema и законность действия остаются обязательными. `Task.ExecuteApproved(ctx, requester, approver, pending)` после одобрения перепроверяет tenant, RBAC/ACL, `Validate`, tool/effect и digest аргументов, а потолок эффекта заменяет решением человека; `approver` попадает в audit как `approval.granted`. Одобрение одноразовое: `nonce` из `PendingAction` уходит в `ClaimStore` (процессный по умолчанию, общий через `WithClaimStore` или `store/sql`), второй вызов даёт `ErrApprovalReplay`.
 
 ### 7.4. Egress и data ACL
 
@@ -463,7 +465,7 @@ Go не умеет безопасно сериализовать стек про
 
 Вместо этого `Task` возвращает явный typed outcome: `Completed`, `ApprovalRequired` или `Failed`. При `ApprovalRequired` runtime возвращает `PendingAction` — сериализуемое описание ровно того действия, которое было остановлено: задача, tool, уже разрезолвленные аргументы, digest, tenant, expiry и карточку. Tool handler не вызывается.
 
-После реального одобрения приложение вызывает `task.ExecuteApproved(ctx, requester, pending)`. Метод заново прогоняет tenant binding, RBAC/ACL и `Tool.Validate`, сверяет digest аргументов с карточкой и только потом вызывает handler. Потолок эффекта — единственная проверка, которую заменяет решение человека. `PendingAction` — обычный JSON, поэтому `flow` запечатывает его в continuation token и передаёт в шаг после `Approve`.
+После реального одобрения приложение вызывает `task.ExecuteApproved(ctx, requester, approver, pending)`. Метод заново прогоняет tenant binding, RBAC/ACL и `Tool.Validate`, сверяет tool/effect и digest аргументов с карточкой, фиксирует `approval.granted` с id апрувера и только потом вызывает handler. Потолок эффекта — единственная проверка, которую заменяет решение человека. `PendingAction` — обычный JSON (включая `nonce`), поэтому `flow` запечатывает его в continuation token и передаёт в шаг после `Approve`; `flow.ApproverFrom(ctx)` отдаёт апрувера этому шагу. Повторный `ExecuteApproved` с тем же `PendingAction` возвращает `ErrApprovalReplay`.
 
 Уже завершённые шаги не перевычисляются: `flow` продолжает с шага после `Approve`. `Task` не восстанавливает стек и не продолжает модельный цикл после одобрения — новый ход начинается новым `Run`.
 
@@ -575,7 +577,7 @@ type Classifier interface {
 
 ### 9.3. Бюджеты
 
-Обязательны настройки `MaxInputBytes`, `MaxOutputBytes`, `MaxToolCalls`, `MaxWallTime`, `MaxModelCalls`, `MaxContextItems` и предельной длины continuation. Числа по умолчанию фиксируются после бенчмарков и eval; настраиваемые бюджеты передаются в `context.Context`/runtime, а не только указываются модели в prompt.
+Обязательны настройки `MaxInputBytes`, `MaxOutputBytes`, `MaxArgBytes`, `MaxContextBytes`, `MaxToolCalls`, `MaxWallTime`, `MaxModelCalls`, `MaxContextItems` и предельной длины continuation. `MaxContextItems` считает сообщения и при дефолтах почти недостижим; реальный объём ограничивает `MaxContextBytes` — сумма текста сообщений и аргументов tool calls. Бюджеты можно уточнить на задачу через `TaskConfig.Limits`; нулевое поле наследует значение `Engine`. Числа по умолчанию фиксируются после бенчмарков и eval; настраиваемые бюджеты передаются в runtime, а не только указываются модели в prompt.
 
 ### 9.4. Выходная безопасность
 

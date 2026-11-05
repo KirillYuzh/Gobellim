@@ -34,7 +34,14 @@ layer and must match the current code; if code and `DESIGN.md` disagree, fix bot
   `Derived`; `oneof` and numeric ranges constrain shape, not truth.
 - A tool result re-enters the model context, so `sensitivity` on the result
   struct is honoured before the result is marshalled (`redact.go`). Do not add a
-  path that puts a raw `secret` field into a tool message.
+  path that puts a raw `secret` field into a tool message. An unknown tag on a
+  result is a configuration error.
+- `Resource` is required for `Write`, `Egress` and `Destructive`: without a
+  target the ACL check silently degrades to RBAC only.
+- `PendingAction` is single-use. `Task.ExecuteApproved` claims its nonce in the
+  `Engine` ClaimStore before the handler runs; a second call is
+  `ErrApprovalReplay`. Claim before the effect is deliberate: a crash loses the
+  approval instead of double-executing it.
 - `Readers` / per-reader ACL is not implemented. Do not claim it exists. The
   application owns its data ACL.
 - `Resource.TenantID` must match `Principal.Tenant`; the Gate enforces this
