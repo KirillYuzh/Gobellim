@@ -115,7 +115,7 @@ func (t Tool[A, R]) prepare(_ context.Context, p Principal, raw json.RawMessage,
 	}
 	argsJSON, err := json.Marshal(args)
 	if err != nil {
-		return prepared{}, fmt.Errorf("%w: %v", ErrInvalidArgs, err)
+		return prepared{}, fmt.Errorf("%w: %w", ErrInvalidArgs, err)
 	}
 	worst := Trusted
 	sensitivity := Public

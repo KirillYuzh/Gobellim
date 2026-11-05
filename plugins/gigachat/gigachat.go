@@ -137,7 +137,7 @@ func (m *Model) doChat(ctx context.Context, token string, body []byte) (*http.Re
 }
 
 func (m *Model) decode(resp *http.Response) (gobellim.Response, error) {
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return gobellim.Response{}, fmt.Errorf("gigachat: read response: %w", err)
@@ -194,7 +194,7 @@ func (m *Model) accessToken(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("gigachat: oauth: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return "", fmt.Errorf("gigachat: read oauth response: %w", err)

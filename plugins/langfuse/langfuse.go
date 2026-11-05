@@ -179,7 +179,7 @@ func (s *Sink) flush(events []gobellim.Event) {
 		return
 	}
 
-	req, err := http.NewRequest(http.MethodPost, s.cfg.Host+"/api/public/ingestion", bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, s.cfg.Host+"/api/public/ingestion", bytes.NewReader(payload))
 	if err != nil {
 		s.report(err)
 		return
@@ -191,7 +191,7 @@ func (s *Sink) flush(events []gobellim.Event) {
 		s.report(err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		s.report(fmt.Errorf("langfuse: ingestion returned %s", resp.Status))
 	}

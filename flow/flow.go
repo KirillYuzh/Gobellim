@@ -422,11 +422,11 @@ func (f *Flow[S]) Resume(ctx context.Context, approver gobellim.Principal, token
 
 	plain, err := f.cfg.sealer.Open(token, f.aad(approver.Tenant))
 	if err != nil {
-		return zero, fmt.Errorf("%w: %v", ErrContinuation, err)
+		return zero, fmt.Errorf("%w: %w", ErrContinuation, err)
 	}
 	var c continuation
 	if err := json.Unmarshal(plain, &c); err != nil {
-		return zero, fmt.Errorf("%w: %v", ErrContinuation, err)
+		return zero, fmt.Errorf("%w: %w", ErrContinuation, err)
 	}
 	if c.V != 1 {
 		return zero, fmt.Errorf("%w: unknown format version %d", ErrContinuation, c.V)
@@ -452,7 +452,7 @@ func (f *Flow[S]) Resume(ctx context.Context, approver gobellim.Principal, token
 
 	var state S
 	if err := json.Unmarshal(c.State, &state); err != nil {
-		return zero, fmt.Errorf("%w: state: %v", ErrContinuation, err)
+		return zero, fmt.Errorf("%w: state: %w", ErrContinuation, err)
 	}
 	if c.Step < 0 || c.Step >= len(f.steps) || f.steps[c.Step].approve == nil {
 		return zero, fmt.Errorf("%w: step %d is not an approval boundary", ErrFlowDrift, c.Step)

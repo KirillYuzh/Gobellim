@@ -271,7 +271,7 @@ func buildStruct(t reflect.Type, depth int) (*structSchema, error) {
 	}
 	raw, err := json.Marshal(s.node)
 	if err != nil {
-		return nil, fmt.Errorf("%w: encode schema for %s: %v", ErrInvalidConfig, t, err)
+		return nil, fmt.Errorf("%w: encode schema for %s: %w", ErrInvalidConfig, t, err)
 	}
 	s.raw = raw
 	return s, nil
@@ -491,7 +491,7 @@ func decodeStrict[T any](raw []byte, maxBytes int) (T, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&out); err != nil {
-		return out, fmt.Errorf("%w: %v", ErrInvalidArgs, err)
+		return out, fmt.Errorf("%w: %w", ErrInvalidArgs, err)
 	}
 	if _, err := dec.Token(); err != io.EOF {
 		return out, fmt.Errorf("%w: trailing data", ErrInvalidArgs)
@@ -517,7 +517,7 @@ func scanValue(dec *json.Decoder, depth, maxDepth int) error {
 	}
 	tok, err := dec.Token()
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidArgs, err)
+		return fmt.Errorf("%w: %w", ErrInvalidArgs, err)
 	}
 	d, ok := tok.(json.Delim)
 	if !ok {
@@ -529,7 +529,7 @@ func scanValue(dec *json.Decoder, depth, maxDepth int) error {
 		for dec.More() {
 			keyTok, err := dec.Token()
 			if err != nil {
-				return fmt.Errorf("%w: %v", ErrInvalidArgs, err)
+				return fmt.Errorf("%w: %w", ErrInvalidArgs, err)
 			}
 			key, ok := keyTok.(string)
 			if !ok {
@@ -544,7 +544,7 @@ func scanValue(dec *json.Decoder, depth, maxDepth int) error {
 			}
 		}
 		if _, err := dec.Token(); err != nil {
-			return fmt.Errorf("%w: %v", ErrInvalidArgs, err)
+			return fmt.Errorf("%w: %w", ErrInvalidArgs, err)
 		}
 	case '[':
 		for dec.More() {
@@ -553,7 +553,7 @@ func scanValue(dec *json.Decoder, depth, maxDepth int) error {
 			}
 		}
 		if _, err := dec.Token(); err != nil {
-			return fmt.Errorf("%w: %v", ErrInvalidArgs, err)
+			return fmt.Errorf("%w: %w", ErrInvalidArgs, err)
 		}
 	}
 	return nil
@@ -572,7 +572,7 @@ func resolveHandles(raw []byte, hs *handleSet) ([]byte, map[string]Label, error)
 	dec.UseNumber()
 	var v any
 	if err := dec.Decode(&v); err != nil {
-		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidArgs, err)
+		return nil, nil, fmt.Errorf("%w: %w", ErrInvalidArgs, err)
 	}
 	labels := make(map[string]Label)
 	resolved, err := resolveValue(v, "", hs, labels)
@@ -581,7 +581,7 @@ func resolveHandles(raw []byte, hs *handleSet) ([]byte, map[string]Label, error)
 	}
 	out, err := json.Marshal(resolved)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidArgs, err)
+		return nil, nil, fmt.Errorf("%w: %w", ErrInvalidArgs, err)
 	}
 	return out, labels, nil
 }
@@ -652,7 +652,7 @@ func marshalNoEscape(v any) ([]byte, error) {
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(v); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidArgs, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalidArgs, err)
 	}
 	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
