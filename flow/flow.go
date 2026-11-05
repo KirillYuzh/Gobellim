@@ -625,3 +625,8 @@ type continuation struct {
 	State       json.RawMessage       `json:"state"`
 	Card        gobellim.ApprovalCard `json:"card"`
 }
+
+// Err reports the first configuration error recorded by Step or Approve. Run and
+// Resume return it as well; the accessor lets a caller fail at startup instead
+// of on the first request.
+func (f *Flow[S]) Err() error { return f.err }

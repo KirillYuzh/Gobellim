@@ -8,6 +8,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	gobellim "github.com/KirillYuzh/Gobellim"
+	"github.com/KirillYuzh/Gobellim/flow"
+)
+
+var (
+	_ flow.Store          = (*Store)(nil)
+	_ gobellim.ClaimStore = (*Store)(nil)
 )
 
 type fakeExecer struct {

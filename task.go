@@ -165,7 +165,7 @@ func (t *Task[In, Out]) Run(ctx context.Context, p Principal, in In) (result Tas
 	if err := p.Validate(); err != nil {
 		return result, err
 	}
-	start := time.Now()
+	start := t.engine.now()
 	// The caller's context is kept for the final audit event: the per-run
 	// timeout would otherwise drop the very event that explains the timeout.
 	auditCtx := ctx
@@ -233,7 +233,7 @@ func (t *Task[In, Out]) Run(ctx context.Context, p Principal, in In) (result Tas
 		if n := contextBytes(req.Messages); n > t.limits.MaxContextBytes {
 			return result, fmt.Errorf("%w: context is %d bytes, cap is %d", ErrBudget, n, t.limits.MaxContextBytes)
 		}
-		start := time.Now()
+		start := t.engine.now()
 		resp, err := t.engine.model.Chat(runCtx, req)
 		if err != nil {
 			return result, fmt.Errorf("gobellim: model: %w", err)
@@ -443,7 +443,7 @@ func (t *Task[In, Out]) runToolCall(
 
 	switch decision.Kind {
 	case Allow:
-		start := time.Now()
+		start := t.engine.now()
 		out, err := t.engine.execute(ctx, p, prep)
 		if err != nil {
 			rec.Error = err.Error()

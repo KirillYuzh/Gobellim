@@ -2,7 +2,7 @@
 
 > **Рабочее название:** `gobellim` — небольшая Go-библиотека для безопасного добавления одного LLM use-case в существующий микросервис.
 >
-> **Статус:** design draft v0.2. Реализованы P0 и P1 (см. §14); P2 — нет. Все показатели производительности — цели для проверки, а не измеренные результаты. API ниже описывает реализованную поверхность, кроме явно помеченных P2-частей. Демо из §14 не реализовано: `lite-demo/` остаётся самостоятельным примером без библиотеки.
+> **Статус:** design draft v0.2. Реализованы P0 и P1 (см. §14); P2 — нет. Все показатели производительности — цели для проверки, а не измеренные результаты. API ниже описывает реализованную поверхность, кроме явно помеченных P2-частей.
 
 ## Кратко
 
@@ -223,7 +223,7 @@ res, err := task.Run(ctx, principalFromRequest(r), in)
 // res.Status == gobellim.TaskCompleted or gobellim.TaskApprovalRequired
 // res.Output is the typed Out value; res.Pending is the escalated action.
 // After a human approves it:
-//   out, rec, err := task.ExecuteApproved(ctx, requester, res.Pending)
+//   out, rec, err := task.ExecuteApproved(ctx, requester, approver, res.Pending)
 ```
 
 Разработчик не должен передавать Principal внутрь prompt как обычный текст и ожидать, что модель корректно его сохранит. Principal передаётся runtime отдельным параметром, а policy проверяет его вне модели.
@@ -688,7 +688,7 @@ func TestUntrustedInputCannotExecuteWriteWithoutGate(t *testing.T) {
 3. Защиту от side-channel, timing и всех каналов утечки.
 4. Exactly-once внешний side effect без поддержки со стороны вызываемой системы.
 5. Межрепличную одноразовость Resume в L0 без общего атомарного Store.
-6. Одноразовость прямого `Task.ExecuteApproved`: дедупликацию внешнего эффекта делает приложение или `flow` с `Store`.
+6. Одноразовость `Task.ExecuteApproved` между репликами без общего `ClaimStore`: процессный claim по умолчанию защищает только внутри процесса.
 7. Durable recovery любого непрерывного участка исполнения Go-функции.
 8. Корректность бизнес-политик, если приложение ошибочно описало permissions, directories или tool effects.
 9. Эффективность конкретного классификатора вне измеренного eval corpus.
