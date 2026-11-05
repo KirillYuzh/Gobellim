@@ -35,6 +35,11 @@ models/
 # Local Go build cache
 .gotmp/
 .gocache/
+.gomodcache/
+
+# Local binaries and notebook secrets
+backend
+.env
 
 # macOS metadata
 .DS_Store

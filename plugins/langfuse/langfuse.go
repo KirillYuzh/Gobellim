@@ -1,0 +1,363 @@
+// Package langfuse exports gobellim audit events to Langfuse.
+//
+// The sink never sends prompt text, raw arguments or secrets: it only maps the
+// labels, digests and counters that gobellim already puts in an audit event.
+package langfuse
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	gobellim "github.com/KirillYuzh/Gobellim"
+)
+
+// Config configures a Sink.
+type Config struct {
+	Host          string
+	PublicKey     string
+	SecretKey     string
+	HTTPClient    *http.Client
+	BatchSize     int
+	FlushInterval time.Duration
+	// DryRun writes the ingestion payload to Writer instead of posting it.
+	DryRun bool
+	Writer io.Writer
+	// OnError receives background delivery errors. It must not log secrets.
+	OnError func(error)
+}
+
+const defaultHost = "https://cloud.langfuse.com"
+
+// Sink is a non-blocking gobellim.Sink.
+type Sink struct {
+	cfg Config
+
+	events chan gobellim.Event
+	mu     sync.RWMutex
+	closed bool
+
+	wmu     sync.Mutex
+	wg      sync.WaitGroup
+	seq     atomic.Uint64
+	dropped atomic.Uint64
+	once    sync.Once
+}
+
+var _ gobellim.Sink = (*Sink)(nil)
+
+// New starts a Sink. Background delivery starts immediately; call Close to
+// flush the remaining batch.
+func New(cfg Config) (*Sink, error) {
+	if cfg.Host == "" {
+		cfg.Host = defaultHost
+	}
+	cfg.Host = strings.TrimRight(cfg.Host, "/")
+	if !cfg.DryRun && (cfg.PublicKey == "" || cfg.SecretKey == "") {
+		return nil, fmt.Errorf("langfuse: public and secret keys are required")
+	}
+	if cfg.BatchSize <= 0 {
+		cfg.BatchSize = 32
+	}
+	if cfg.FlushInterval <= 0 {
+		cfg.FlushInterval = 2 * time.Second
+	}
+	if cfg.HTTPClient == nil {
+		cfg.HTTPClient = &http.Client{Timeout: 10 * time.Second}
+	}
+	if cfg.Writer == nil {
+		cfg.Writer = io.Discard
+	}
+	queue := cfg.BatchSize * 16
+	if queue < 256 {
+		queue = 256
+	}
+	s := &Sink{cfg: cfg, events: make(chan gobellim.Event, queue)}
+	s.wg.Add(1)
+	go s.loop()
+	return s, nil
+}
+
+// Emit queues one event. It never blocks the caller; when the queue is full
+// the event is dropped and counted.
+func (s *Sink) Emit(_ context.Context, e gobellim.Event) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		return
+	}
+	select {
+	case s.events <- e:
+	default:
+		s.dropped.Add(1)
+	}
+}
+
+// Close flushes queued events and stops the sink. It is safe to call twice.
+func (s *Sink) Close(ctx context.Context) error {
+	s.once.Do(func() {
+		s.mu.Lock()
+		s.closed = true
+		close(s.events)
+		s.mu.Unlock()
+	})
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// Dropped reports how many events were lost because the queue was full.
+func (s *Sink) Dropped() uint64 { return s.dropped.Load() }
+
+func (s *Sink) loop() {
+	defer s.wg.Done()
+	ticker := time.NewTicker(s.cfg.FlushInterval)
+	defer ticker.Stop()
+
+	batch := make([]gobellim.Event, 0, s.cfg.BatchSize)
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		s.flush(batch)
+		batch = batch[:0]
+	}
+	for {
+		select {
+		case e, ok := <-s.events:
+			if !ok {
+				flush()
+				return
+			}
+			batch = append(batch, e)
+			if len(batch) >= s.cfg.BatchSize {
+				flush()
+			}
+		case <-ticker.C:
+			flush()
+		}
+	}
+}
+
+func (s *Sink) flush(events []gobellim.Event) {
+	batch := make([]ingestionEvent, 0, len(events))
+	for _, e := range events {
+		batch = append(batch, s.convert(e)...)
+	}
+	if len(batch) == 0 {
+		return
+	}
+	payload, err := json.Marshal(map[string]any{"batch": batch})
+	if err != nil {
+		s.report(err)
+		return
+	}
+	if s.cfg.DryRun {
+		s.wmu.Lock()
+		_, err := s.cfg.Writer.Write(append(payload, '\n'))
+		s.wmu.Unlock()
+		if err != nil {
+			s.report(err)
+		}
+		return
+	}
+
+	req, err := http.NewRequest(http.MethodPost, s.cfg.Host+"/api/public/ingestion", bytes.NewReader(payload))
+	if err != nil {
+		s.report(err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth(s.cfg.PublicKey, s.cfg.SecretKey)
+	resp, err := s.cfg.HTTPClient.Do(req)
+	if err != nil {
+		s.report(err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		s.report(fmt.Errorf("langfuse: ingestion returned %s", resp.Status))
+	}
+}
+
+func (s *Sink) report(err error) {
+	if s.cfg.OnError != nil {
+		s.cfg.OnError(err)
+	}
+}
+
+type ingestionEvent struct {
+	ID        string `json:"id"`
+	Timestamp string `json:"timestamp"`
+	Type      string `json:"type"`
+	Body      any    `json:"body"`
+}
+
+type traceBody struct {
+	ID        string         `json:"id"`
+	Timestamp string         `json:"timestamp"`
+	Name      string         `json:"name"`
+	UserID    string         `json:"userId,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+}
+
+type spanBody struct {
+	ID        string         `json:"id"`
+	TraceID   string         `json:"traceId"`
+	Name      string         `json:"name"`
+	StartTime string         `json:"startTime"`
+	EndTime   string         `json:"endTime"`
+	Level     string         `json:"level,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+	StatusMsg string         `json:"statusMessage,omitempty"`
+}
+
+type generationBody struct {
+	ID        string         `json:"id"`
+	TraceID   string         `json:"traceId"`
+	Name      string         `json:"name"`
+	Model     string         `json:"model,omitempty"`
+	StartTime string         `json:"startTime"`
+	EndTime   string         `json:"endTime"`
+	Usage     map[string]int `json:"usage,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+}
+
+func (s *Sink) convert(e gobellim.Event) []ingestionEvent {
+	traceID := e.RunID
+	if traceID == "" {
+		traceID = fallbackTraceID(e)
+	}
+	ts := e.Time.UTC()
+	stamp := formatTime(ts)
+	start := ts
+	if e.Latency > 0 {
+		start = ts.Add(-e.Latency)
+	}
+
+	switch e.Kind {
+	case gobellim.EventTaskStarted:
+		name := e.Task
+		if name == "" {
+			name = e.Flow
+		}
+		if name == "" {
+			name = "gobellim"
+		}
+		return []ingestionEvent{{
+			ID: s.newID(), Timestamp: stamp, Type: "trace-create",
+			Body: traceBody{
+				ID: traceID, Timestamp: stamp, Name: name,
+				UserID: e.PrincipalID, Metadata: metadata(e),
+			},
+		}}
+	case gobellim.EventModelCompleted:
+		return []ingestionEvent{{
+			ID: s.newID(), Timestamp: stamp, Type: "generation-create",
+			Body: generationBody{
+				ID: s.newID(), TraceID: traceID, Name: "model", Model: e.Model,
+				StartTime: formatTime(start), EndTime: stamp,
+				Usage: map[string]int{
+					"input":  e.PromptTokens,
+					"output": e.CompletionTokens,
+					"total":  e.TotalTokens,
+				},
+				Metadata: metadata(e),
+			},
+		}}
+	default:
+		name := string(e.Kind)
+		if e.Tool != "" {
+			name = e.Tool
+		}
+		level := "DEFAULT"
+		if e.Error != "" {
+			level = "ERROR"
+		}
+		return []ingestionEvent{{
+			ID: s.newID(), Timestamp: stamp, Type: "span-create",
+			Body: spanBody{
+				ID: s.newID(), TraceID: traceID, Name: name,
+				StartTime: formatTime(start), EndTime: stamp,
+				Level: level, Metadata: metadata(e), StatusMsg: e.Error,
+			},
+		}}
+	}
+}
+
+func metadata(e gobellim.Event) map[string]any {
+	m := map[string]any{"kind": string(e.Kind)}
+	add := func(k, v string) {
+		if v != "" {
+			m[k] = v
+		}
+	}
+	add("task", e.Task)
+	add("flow", e.Flow)
+	add("step", e.Step)
+	add("tenant", e.Tenant)
+	add("tool", e.Tool)
+	add("policy_version", e.PolicyVersion)
+	add("args_digest", e.ArgsDigest)
+	add("error", e.Error)
+	if e.Effect != gobellim.EffectUnknown {
+		m["effect"] = e.Effect.String()
+	}
+	if len(e.RuleIDs) > 0 || e.Decision != gobellim.Deny {
+		m["decision"] = e.Decision.String()
+	}
+	if len(e.RuleIDs) > 0 {
+		m["rules"] = e.RuleIDs
+	}
+	if e.Tool != "" {
+		m["integrity"] = e.Integrity.String()
+		m["sensitivity"] = e.Sensitivity.String()
+	}
+	if e.ModelCalls > 0 {
+		m["model_calls"] = e.ModelCalls
+	}
+	if e.ToolCalls > 0 {
+		m["tool_calls"] = e.ToolCalls
+	}
+	return m
+}
+
+func fallbackTraceID(e gobellim.Event) string {
+	switch {
+	case e.Flow != "":
+		return "flow:" + e.Flow
+	case e.Task != "":
+		return "task:" + e.Task
+	default:
+		return "gobellim"
+	}
+}
+
+func formatTime(t time.Time) string {
+	return t.Format(time.RFC3339Nano)
+}
+
+func (s *Sink) newID() string {
+	var b [12]byte
+	if _, err := rand.Read(b[:]); err == nil {
+		return hex.EncodeToString(b[:])
+	}
+	return fmt.Sprintf("ev-%d", s.seq.Add(1))
+}
