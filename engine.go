@@ -13,6 +13,11 @@ type Config struct {
 	Audit         Sink
 	Limits        Limits
 	PolicyVersion string
+	// Claims makes an approved action single-use. A nil value uses an
+	// in-process store; a shared store is needed between replicas.
+	Claims      ClaimStore
+	ApprovalTTL time.Duration
+	Now         func() time.Time
 }
 
 // Option configures an Engine.
@@ -33,6 +38,16 @@ func WithLimits(l Limits) Option { return func(c *Config) { c.Limits = l } }
 // WithPolicyVersion stamps audit events with the active policy version.
 func WithPolicyVersion(v string) Option { return func(c *Config) { c.PolicyVersion = v } }
 
+// WithClaimStore makes approved actions single-use across replicas.
+func WithClaimStore(s ClaimStore) Option { return func(c *Config) { c.Claims = s } }
+
+// WithApprovalTTL sets how long a PendingAction stays executable. The default
+// is 24 hours.
+func WithApprovalTTL(d time.Duration) Option { return func(c *Config) { c.ApprovalTTL = d } }
+
+// WithClock overrides the clock. It exists for tests.
+func WithClock(fn func() time.Time) Option { return func(c *Config) { c.Now = fn } }
+
 // Engine is the configured runtime: one model, one authorizer, one audit sink
 // and the default budgets.
 type Engine struct {
@@ -41,7 +56,12 @@ type Engine struct {
 	audit         Sink
 	limits        Limits
 	policyVersion string
+	claims        ClaimStore
+	approvalTTL   time.Duration
+	now           func() time.Time
 }
+
+const defaultApprovalTTL = 24 * time.Hour
 
 // New validates the configuration and builds an Engine.
 func New(opts ...Option) (*Engine, error) {
@@ -63,12 +83,27 @@ func New(opts ...Option) (*Engine, error) {
 	if audit == nil {
 		audit = nopSink{}
 	}
+	claims := cfg.Claims
+	if claims == nil {
+		claims = NewMemClaims()
+	}
+	ttl := cfg.ApprovalTTL
+	if ttl <= 0 {
+		ttl = defaultApprovalTTL
+	}
+	now := cfg.Now
+	if now == nil {
+		now = time.Now
+	}
 	return &Engine{
 		model:         cfg.Model,
 		authz:         cfg.Authorizer,
 		audit:         audit,
 		limits:        limits,
 		policyVersion: cfg.PolicyVersion,
+		claims:        claims,
+		approvalTTL:   ttl,
+		now:           now,
 	}, nil
 }
 
@@ -76,7 +111,7 @@ func New(opts ...Option) (*Engine, error) {
 func (e *Engine) Limits() Limits { return e.limits }
 
 func (e *Engine) emit(ctx context.Context, ev Event) {
-	ev.Time = time.Now()
+	ev.Time = e.now()
 	ev.PolicyVersion = e.policyVersion
 	e.audit.Emit(ctx, ev)
 }

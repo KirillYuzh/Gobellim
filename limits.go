@@ -11,6 +11,7 @@ type Limits struct {
 	MaxInputBytes   int
 	MaxOutputBytes  int
 	MaxArgBytes     int
+	MaxContextBytes int
 	MaxToolCalls    int
 	MaxModelCalls   int
 	MaxContextItems int
@@ -21,6 +22,7 @@ const (
 	defaultMaxInputBytes   = 32 << 10
 	defaultMaxOutputBytes  = 16 << 10
 	defaultMaxArgBytes     = 8 << 10
+	defaultMaxContextBytes = 128 << 10
 	defaultMaxToolCalls    = 3
 	defaultMaxModelCalls   = 4
 	defaultMaxContextItems = 16
@@ -34,6 +36,7 @@ func DefaultLimits() Limits {
 		MaxInputBytes:   defaultMaxInputBytes,
 		MaxOutputBytes:  defaultMaxOutputBytes,
 		MaxArgBytes:     defaultMaxArgBytes,
+		MaxContextBytes: defaultMaxContextBytes,
 		MaxToolCalls:    defaultMaxToolCalls,
 		MaxModelCalls:   defaultMaxModelCalls,
 		MaxContextItems: defaultMaxContextItems,
@@ -52,6 +55,9 @@ func (l Limits) withDefaults() Limits {
 	if l.MaxArgBytes == 0 {
 		l.MaxArgBytes = d.MaxArgBytes
 	}
+	if l.MaxContextBytes == 0 {
+		l.MaxContextBytes = d.MaxContextBytes
+	}
 	if l.MaxToolCalls == 0 {
 		l.MaxToolCalls = d.MaxToolCalls
 	}
@@ -67,9 +73,39 @@ func (l Limits) withDefaults() Limits {
 	return l
 }
 
+// withFallback fills every zero field from base, so a task can tighten one
+// budget without restating the engine defaults.
+func (l Limits) withFallback(base Limits) Limits {
+	if l.MaxInputBytes == 0 {
+		l.MaxInputBytes = base.MaxInputBytes
+	}
+	if l.MaxOutputBytes == 0 {
+		l.MaxOutputBytes = base.MaxOutputBytes
+	}
+	if l.MaxArgBytes == 0 {
+		l.MaxArgBytes = base.MaxArgBytes
+	}
+	if l.MaxContextBytes == 0 {
+		l.MaxContextBytes = base.MaxContextBytes
+	}
+	if l.MaxToolCalls == 0 {
+		l.MaxToolCalls = base.MaxToolCalls
+	}
+	if l.MaxModelCalls == 0 {
+		l.MaxModelCalls = base.MaxModelCalls
+	}
+	if l.MaxContextItems == 0 {
+		l.MaxContextItems = base.MaxContextItems
+	}
+	if l.MaxWallTime == 0 {
+		l.MaxWallTime = base.MaxWallTime
+	}
+	return l
+}
+
 func (l Limits) validate() error {
 	switch {
-	case l.MaxInputBytes < 0, l.MaxOutputBytes < 0, l.MaxArgBytes < 0,
+	case l.MaxInputBytes < 0, l.MaxOutputBytes < 0, l.MaxArgBytes < 0, l.MaxContextBytes < 0,
 		l.MaxToolCalls < 0, l.MaxModelCalls < 0, l.MaxContextItems < 0:
 		return fmt.Errorf("%w: limits must not be negative", ErrInvalidConfig)
 	case l.MaxWallTime < 0:

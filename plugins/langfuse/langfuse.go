@@ -34,6 +34,9 @@ type Config struct {
 	Writer io.Writer
 	// OnError receives background delivery errors. It must not log secrets.
 	OnError func(error)
+	// OnDrop receives an event the queue could not accept. Audit loss must be
+	// visible to the application, not only to Dropped().
+	OnDrop func(gobellim.Event)
 }
 
 const defaultHost = "https://cloud.langfuse.com"
@@ -51,6 +54,9 @@ type Sink struct {
 	seq     atomic.Uint64
 	dropped atomic.Uint64
 	once    sync.Once
+
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 var _ gobellim.Sink = (*Sink)(nil)
@@ -82,23 +88,29 @@ func New(cfg Config) (*Sink, error) {
 		queue = 256
 	}
 	s := &Sink{cfg: cfg, events: make(chan gobellim.Event, queue)}
+	s.ctx, s.cancel = context.WithCancel(context.Background())
 	s.wg.Add(1)
 	go s.loop()
 	return s, nil
 }
 
 // Emit queues one event. It never blocks the caller; when the queue is full
-// the event is dropped and counted.
+// the event is dropped, counted and reported to OnDrop.
 func (s *Sink) Emit(_ context.Context, e gobellim.Event) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	if s.closed {
+		s.mu.RUnlock()
 		return
 	}
 	select {
 	case s.events <- e:
+		s.mu.RUnlock()
 	default:
 		s.dropped.Add(1)
+		s.mu.RUnlock()
+		if s.cfg.OnDrop != nil {
+			s.cfg.OnDrop(e)
+		}
 	}
 }
 
@@ -117,8 +129,11 @@ func (s *Sink) Close(ctx context.Context) error {
 	}()
 	select {
 	case <-done:
+		s.cancel()
 		return nil
 	case <-ctx.Done():
+		// Abort in-flight delivery instead of outliving the caller's deadline.
+		s.cancel()
 		return ctx.Err()
 	}
 }
@@ -179,22 +194,39 @@ func (s *Sink) flush(events []gobellim.Event) {
 		return
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, s.cfg.Host+"/api/public/ingestion", bytes.NewReader(payload))
-	if err != nil {
-		s.report(err)
-		return
+	var status int
+	for attempt := 0; attempt < 2; attempt++ {
+		req, err := http.NewRequestWithContext(s.ctx, http.MethodPost, s.cfg.Host+"/api/public/ingestion", bytes.NewReader(payload))
+		if err != nil {
+			s.report(err)
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.SetBasicAuth(s.cfg.PublicKey, s.cfg.SecretKey)
+		resp, err := s.cfg.HTTPClient.Do(req)
+		if err != nil {
+			s.report(err)
+			return
+		}
+		// Drain before closing so the connection can be reused.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+		_ = resp.Body.Close()
+		status = resp.StatusCode
+		if status >= 200 && status < 300 {
+			return
+		}
+		if status != http.StatusTooManyRequests && status < 500 {
+			break
+		}
+		if attempt == 0 {
+			select {
+			case <-s.ctx.Done():
+				return
+			case <-time.After(250 * time.Millisecond):
+			}
+		}
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth(s.cfg.PublicKey, s.cfg.SecretKey)
-	resp, err := s.cfg.HTTPClient.Do(req)
-	if err != nil {
-		s.report(err)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		s.report(fmt.Errorf("langfuse: ingestion returned %s", resp.Status))
-	}
+	s.report(fmt.Errorf("langfuse: ingestion returned status %d", status))
 }
 
 func (s *Sink) report(err error) {

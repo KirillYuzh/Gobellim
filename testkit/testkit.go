@@ -26,13 +26,26 @@ func NewFakeModel(responses ...gobellim.Response) *FakeModel {
 func (m *FakeModel) Chat(_ context.Context, req gobellim.Request) (gobellim.Response, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.calls = append(m.calls, req)
+	m.calls = append(m.calls, cloneRequest(req))
 	if len(m.responses) == 0 {
 		return gobellim.Response{}, fmt.Errorf("testkit: no scripted response left")
 	}
 	resp := m.responses[0]
 	m.responses = m.responses[1:]
 	return resp, nil
+}
+
+// cloneRequest copies the slices so a later append in the task loop cannot
+// mutate a recorded call.
+func cloneRequest(req gobellim.Request) gobellim.Request {
+	out := req
+	out.Tools = append([]gobellim.ToolSpec(nil), req.Tools...)
+	out.Messages = make([]gobellim.Message, len(req.Messages))
+	for i, m := range req.Messages {
+		m.ToolCalls = append([]gobellim.ToolCall(nil), m.ToolCalls...)
+		out.Messages[i] = m
+	}
+	return out
 }
 
 // Calls returns the recorded requests.

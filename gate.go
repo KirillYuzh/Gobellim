@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"sort"
-	"time"
 )
 
 // check runs the checks that every action needs, whether or not a human
@@ -121,7 +120,7 @@ func (e *Engine) card(runID, task string, c prepared, d Decision) *ApprovalCard 
 		Reason:             d.Reason,
 		Provenance:         prov,
 		RequiredPermission: c.spec.permission,
-		ExpiresAt:          time.Now().Add(24 * time.Hour),
+		ExpiresAt:          e.now().Add(e.approvalTTL),
 	}.normalize()
 	return &card
 }

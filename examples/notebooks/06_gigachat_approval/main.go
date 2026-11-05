@@ -146,7 +146,7 @@ Write с аргументом из untrusted-поля не выполняетс�
 Приложение вызывает ExecuteApproved только после реального одобрения и
 передаёт Principal запросившего, а не апрувера. Gate заново проверяет tenant,
 RBAC/ACL и бизнес-валидацию; аргументы должны совпасть с digest карточки.`)
-		_, rec, err := task.ExecuteApproved(ctx, gobellim.Principal{UserID: "u-1", Tenant: "acme"}, res.Pending)
+		_, rec, err := task.ExecuteApproved(ctx, gobellim.Principal{UserID: "u-1", Tenant: "acme"}, gobellim.Principal{UserID: "m-1", Tenant: "acme"}, res.Pending)
 		if err != nil {
 			notebook.Result("execute: error %v", err)
 		} else {

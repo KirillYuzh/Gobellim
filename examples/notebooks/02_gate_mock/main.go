@@ -73,6 +73,9 @@ OrderID помечен sensitivity=secret, поэтому модель види�
 	wipe := gobellim.Tool[struct{}, readResult]{
 		Name:   "danger.wipe",
 		Effect: gobellim.Write,
+		Resource: func(gobellim.Principal, struct{}) gobellim.Resource {
+			return gobellim.Resource{Type: "test", ID: "t-1"}
+		},
 		Run: func(context.Context, gobellim.Principal, struct{}) (readResult, error) {
 			fmt.Println("   ↳ tool Run executed")
 			return readResult{}, nil
