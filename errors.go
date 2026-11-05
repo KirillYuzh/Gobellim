@@ -17,7 +17,14 @@ var (
 	ErrUngrounded = errors.New("gobellim: ungrounded argument")
 	// ErrUnsupportedType signals a schema type outside the supported subset.
 	ErrUnsupportedType = errors.New("gobellim: unsupported schema type")
-	// ErrApprovalInvalid signals a pending action that cannot be executed:
-	// wrong task or tenant, expired, changed since approval, or no longer allowed.
+	// ErrApprovalInvalid is the umbrella error for a pending action that cannot
+	// be executed. Every specific cause also matches this one.
 	ErrApprovalInvalid = errors.New("gobellim: invalid approval")
+	// ErrApprovalExpired signals an approval past its expiry.
+	ErrApprovalExpired = errors.New("gobellim: approval expired")
+	// ErrApprovalReplay signals an approval that was already used.
+	ErrApprovalReplay = errors.New("gobellim: approval already used")
+	// ErrApprovalDrift signals a pending action that changed since approval, or
+	// a tool whose effect or identity changed under the same arguments.
+	ErrApprovalDrift = errors.New("gobellim: approved action changed")
 )

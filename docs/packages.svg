@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="430" viewBox="0 0 900 430" role="img" aria-label="Пакеты kit и правила зависимостей">
+<defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#444444"/></marker></defs>
+<rect width="900" height="430" fill="#FFFFFF"/>
+<rect x="20" y="126" width="860" height="204" fill="none" stroke="#9E9E9E" stroke-width="1"/>
+<text x="32" y="148" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#555555">Подсистемы</text>
+<line x1="450" y1="110" x2="450" y2="126" stroke="#444444" stroke-width="1" marker-end="url(#ar)"/>
+<rect x="20" y="50" width="860" height="60" fill="#FFFFFF" stroke="#444444" stroke-width="1"/>
+<text x="32" y="75" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" fill="#111111">kit (фасад)</text>
+<text x="32" y="92" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#555555">New, Setup, Chat, Ingest, Search, Delete, Score, Generate, Tool</text>
+<rect x="30" y="160" width="200" height="72" fill="#FFFFFF" stroke="#444444" stroke-width="1"/>
+<text x="130.0" y="191" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" fill="#111111">authz</text>
+<text x="130.0" y="208" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#555555">проверка прав</text>
+<rect x="243" y="160" width="200" height="72" fill="#FFFFFF" stroke="#444444" stroke-width="1"/>
+<text x="343.0" y="191" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" fill="#111111">guard</text>
+<text x="343.0" y="208" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#555555">L0, L1, L2</text>
+<rect x="456" y="160" width="200" height="72" fill="#FFFFFF" stroke="#444444" stroke-width="1"/>
+<text x="556.0" y="191" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" fill="#111111">model</text>
+<text x="556.0" y="208" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#555555">провайдеры LLM</text>
+<rect x="669" y="160" width="200" height="72" fill="#FFFFFF" stroke="#444444" stroke-width="1"/>
+<text x="769.0" y="191" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" fill="#111111">embed</text>
+<text x="769.0" y="208" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#555555">Query, Passages</text>
+<rect x="137" y="248" width="200" height="72" fill="#FFFFFF" stroke="#444444" stroke-width="1"/>
+<text x="237.0" y="279" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" fill="#111111">chunk</text>
+<text x="237.0" y="296" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#555555">чанкинг по токенам</text>
+<rect x="350" y="248" width="200" height="72" fill="#FFFFFF" stroke="#444444" stroke-width="1"/>
+<text x="450.0" y="279" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" fill="#111111">store</text>
+<text x="450.0" y="296" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#555555">запросы к ES</text>
+<rect x="563" y="248" width="200" height="72" fill="#FFFFFF" stroke="#444444" stroke-width="1"/>
+<text x="663.0" y="279" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" fill="#111111">trace</text>
+<text x="663.0" y="296" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#555555">запись трейсов</text>
+<text x="30" y="30" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#111111">Пакеты и правила зависимостей.</text>
+<text x="30" y="356" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#555555">Каждая операция проходит через internal/call.</text>
+<text x="30" y="380" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#555555">Подсистемы не импортируют друг друга. Исключения: trace импортирует store, guard и embed импортируют internal/ort.</text>
+<text x="30" y="404" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#555555">internal/core с Principal и ошибками импортируют все. Глобального состояния нет.</text>
+</svg>

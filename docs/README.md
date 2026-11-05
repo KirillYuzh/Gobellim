@@ -60,12 +60,15 @@ res, err := task.Run(ctx, principalFromRequest(r), in)
 ```
 
 `res.Status == gobellim.TaskApprovalRequired` означает, что модель предложила
-write-действие, но оно **не выполнено**. В `res.Pending` лежит карточка с
-аргументами, digest и provenance, а также всё нужное для продолжения. После
-реального одобрения приложение вызывает `task.ExecuteApproved(ctx, requester,
-res.Pending)`: Gate заново проверяет tenant, RBAC/ACL, бизнес-валидацию и
-digest, и только потом исполняет действие. Для возобновляемого approval с
-sealed-токеном, TTL и four-eyes используйте `flow` (шаг после `Approve`).
+write-действие, но оно **не выполнено**. В `res.Pending` лежит сериализуемое
+описание действия: карточка с аргументами, digest, provenance, expiry и nonce.
+После реального одобрения приложение вызывает `task.ExecuteApproved(ctx,
+requester, approver, res.Pending)`: Gate заново проверяет tenant, RBAC/ACL,
+`Validate`, tool/effect и digest, а `approver` попадает в audit как
+`approval.granted`. Одобрение одноразовое: nonce уходит в `ClaimStore` (по
+умолчанию — процессный, `gobellim.WithClaimStore` — общий). Для
+возобновляемого approval с sealed-токеном, TTL и four-eyes используйте `flow`
+(шаг после `Approve`, approver берётся из `flow.ApproverFrom(ctx)`).
 
 ## Теги schema
 
@@ -91,7 +94,8 @@ sealed-токеном, TTL и four-eyes используйте `flow` (шаг п
 
 Те же `sensitivity`-теги применяются к **результату** инструмента перед тем,
 как он попадёт обратно в контекст модели: `secret` становится handle, `pii`
-маскируется.
+маскируется. Неизвестный `gobellim`-тег на результирующей структуре — ошибка
+`NewTask`, чтобы опечатка не отключала маскирование молча.
 
 ## Gate
 
@@ -111,13 +115,18 @@ sealed-токеном, TTL и four-eyes используйте `flow` (шаг п
 | `Untrusted` / нет меток       | allow | escalate | deny   | deny        |
 
 Нулевой `Effect` — `EffectUnknown`, а не `Read`: забыть эффект нельзя.
-Неизвестный инструмент, невалидные аргументы, ошибка authorizer и чужой tenant —
-`Deny`, никогда `Allow`.
+Для `Write`/`Egress`/`Destructive` `Resource` обязателен: без цели ACL
+проверялся бы только по RBAC. Неизвестный инструмент, невалидные аргументы,
+ошибка authorizer и чужой tenant — `Deny`, никогда `Allow`.
 
 **Как аргумент получает `Validated`.** Handle-аргумент, бизнес-смысл которого
 подтвердил `Tool.Validate`, становится `Validated`: handle выпущен рантаймом для
 этого запуска, правило проверено приложением. Свободный текст модели остаётся
 `Derived`. Без `Validate` повышения нет — write по-прежнему требует человека.
+
+Бюджеты можно уточнить на задачу: `TaskConfig.Limits` перекрывает значения
+`Engine`, включая `MaxContextBytes` — потолок на реальный размер контекста
+(текст сообщений и аргументы tool calls), а не на число сообщений.
 
 ## Grounding — это handles
 
@@ -161,7 +170,11 @@ wf.Step("prepare", prepareRefund).
 	}).
 	Step("execute", func(ctx context.Context, p gobellim.Principal, s *RefundCase) error {
 		// p — requester: после Resume шаги идут от его имени.
-		_, _, err := task.ExecuteApproved(ctx, p, &s.Pending)
+		approver, ok := flow.ApproverFrom(ctx)
+		if !ok {
+			return errors.New("no approver")
+		}
+		_, _, err := task.ExecuteApproved(ctx, p, approver, &s.Pending)
 		return err
 	})
 
@@ -170,11 +183,14 @@ out, err := wf.Resume(ctx, approver, token, flow.Approve)
 ```
 
 `Resume` проверяет AEAD, tenant, expiry, версию flow, id шага, право апрувера,
-Four-Eyes, право requester'а, digest действия и атомарный claim nonce.
+Four-Eyes, право requester'а, digest действия и атомарный claim nonce. Размер
+входного токена ограничен `WithMaxTokenBytes` до декодирования.
 `DecisionUnknown` (нулевое значение) никогда не считается одобрением.
 Без `WithStore` flow использует process-local `MemStore`: повторный resume в том
 же процессе невозможен, между репликами нужен общий `Store`. SQL-адаптер также
 умеет `Prune` просроченных nonce и принимает `ConflictClause` для MySQL.
+Claim ставится до внешнего эффекта: падение в этом окне теряет одобрение, а не
+рискует двойным исполнением; восстановление — сверка с провайдером.
 
 ## Observability
 

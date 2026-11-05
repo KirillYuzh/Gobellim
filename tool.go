@@ -70,8 +70,15 @@ func (t Tool[A, R]) check() error {
 	if t.Effect == EffectUnknown || t.Effect > EffectDestructive {
 		return fmt.Errorf("%w: tool %s: declare read, write, egress or destructive", ErrInvalidConfig, t.Name)
 	}
-	_, err := schemaFor[A]()
-	return err
+	if t.Effect != EffectRead && t.Resource == nil {
+		// A mutating action without a target cannot be checked against the
+		// application's ACL, so it would silently fall back to RBAC only.
+		return fmt.Errorf("%w: tool %s: Resource is required for a %s effect", ErrInvalidConfig, t.Name, t.Effect)
+	}
+	if _, err := schemaFor[A](); err != nil {
+		return err
+	}
+	return checkResultTags(reflect.TypeOf((*R)(nil)).Elem())
 }
 
 func (t Tool[A, R]) toolSpec() toolSpec {
@@ -211,4 +218,47 @@ func groundedStruct(s *structSchema, v reflect.Value, prefix string, handleLabel
 		}
 	}
 	return true
+}
+
+// checkResultTags rejects a malformed gobellim tag on a tool result. Result
+// tags drive redaction only, so the shape stays free-form (maps, pointers,
+// json.Marshaler are allowed), but a typo must not silently disable masking.
+func checkResultTags(t reflect.Type) error {
+	return checkResultType(t, 0, make(map[reflect.Type]bool))
+}
+
+func checkResultType(t reflect.Type, depth int, seen map[reflect.Type]bool) error {
+	if depth > 8 {
+		return nil
+	}
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if seen[t] {
+		return nil
+	}
+	seen[t] = true
+	defer delete(seen, t)
+
+	switch t.Kind() {
+	case reflect.Struct:
+		if t == timeType {
+			return nil
+		}
+		for i := 0; i < t.NumField(); i++ {
+			sf := t.Field(i)
+			if sf.PkgPath != "" {
+				continue
+			}
+			if _, err := parseTag(sf.Tag.Get("gobellim")); err != nil {
+				return fmt.Errorf("%w: result %s.%s", err, t.Name(), sf.Name)
+			}
+			if err := checkResultType(sf.Type, depth+1, seen); err != nil {
+				return err
+			}
+		}
+	case reflect.Slice, reflect.Array, reflect.Map:
+		return checkResultType(t.Elem(), depth+1, seen)
+	}
+	return nil
 }

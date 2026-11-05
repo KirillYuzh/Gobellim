@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -126,4 +127,53 @@ func TestCloseIsIdempotentAndEmitAfterCloseIsSafe(t *testing.T) {
 		t.Fatal(err)
 	}
 	sink.Emit(context.Background(), gobellim.Event{Kind: gobellim.EventTaskStarted})
+}
+
+func TestOnDrop(t *testing.T) {
+	var dropped []gobellim.Event
+	s := &Sink{
+		cfg:    Config{OnDrop: func(e gobellim.Event) { dropped = append(dropped, e) }},
+		events: make(chan gobellim.Event, 1),
+	}
+	ctx := context.Background()
+	s.Emit(ctx, gobellim.Event{RunID: "run-1"})
+	s.Emit(ctx, gobellim.Event{RunID: "run-2"})
+	if s.Dropped() != 1 {
+		t.Fatalf("dropped = %d, want 1", s.Dropped())
+	}
+	if len(dropped) != 1 || dropped[0].RunID != "run-2" {
+		t.Fatalf("OnDrop got %+v", dropped)
+	}
+}
+
+func TestRetriesTransientError(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if hits.Add(1) == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	sink, err := New(Config{
+		Host: srv.URL, PublicKey: "p", SecretKey: "s",
+		BatchSize: 1, FlushInterval: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink.Emit(context.Background(), sampleEvents(t)[0])
+	closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := sink.Close(closeCtx); err != nil {
+		t.Fatal(err)
+	}
+	if hits.Load() != 2 {
+		t.Fatalf("requests = %d, want 2", hits.Load())
+	}
+	if sink.Dropped() != 0 {
+		t.Fatalf("dropped = %d", sink.Dropped())
+	}
 }

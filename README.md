@@ -1,334 +1,335 @@
 # Gobellim
 
-**Execution and policy layer for one LLM use case inside an existing Go service.**
+**[English](README.md) · [Русский](README.ru.md)**
 
 ![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Gobellim is a library, not a platform. It starts no server, database or broker,
-and the core module has no required dependencies.
+![Gobellim](./site/public/gobellim-compact-white.svg)
 
-The main invariant:
+Native Go primitives for using LLMs safely: retrieval, tool calling and
+guardrails behind one permission-checked call path.
 
-> The model may propose text, arguments or an action. It cannot grant itself
-> permissions, change policy, register a tool or execute a side effect outside
-> the Gate.
+![Gobellim architecture](docs/architecture.en.svg)
 
-## Status
+## See it in 60 seconds
 
-P0 and P1 from [`DESIGN.md`](./DESIGN.md) are implemented: typed tasks, typed
-tools, schema by tags, labels and handles, the Gate, tenant binding, audit
-events, limits, a sequential workflow with approval cards, sealed continuations,
-resume checks and a `database/sql` claims store.
+The [lite-demo](./lite-demo) is a small service with its own tool engine,
+workflow and GigaChat client. It shows a principal, a policy file, two tools
+(`link` and `start_research`) and a research scenario that pauses for the user.
+The first run pulls the images; the service calls GigaChat over HTTPS with the key
+from `lite-demo/.env`.
 
-P2 is not implemented: replay/diff, detectors, HTTP approval handlers,
-OpenTelemetry, quorum, compensation, and editing an approved action.
+```sh
+cd lite-demo
+docker compose up -d --build
+```
 
-The runnable, notebook-style examples live in
-[`examples/notebooks`](./examples/notebooks/README.md).
+Open <http://localhost:8080> for the chat page, or use the requests below. The
+service listens on `:8080`. Every tool in the demo is a stub: no mock service,
+no outbound calls except GigaChat.
 
-## Quickstart
+### Requests for every scenario
 
-The application keeps its handler, its `context.Context` and its business
-functions. Gobellim fixes the model loop around them.
+```sh
+# health
+curl -s http://localhost:8080/healthz
+
+# chat with the link tool (role user)
+curl -s http://localhost:8080/v1/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user": {"id": "u-1", "tenant": "acme", "roles": ["user"]},
+    "messages": [{"role": "user", "content": "Добавь ссылку на документацию по Go."}]
+  }'
+
+# research start (role support): the scenario suspends on a question
+curl -s http://localhost:8080/v1/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user": {"id": "u-1", "tenant": "acme", "roles": ["support"]},
+    "messages": [{"role": "user", "content": "Проведи исследование по go modules."}]
+  }'
+# → {"status":"awaiting_user","run_id":"run-...","question":{...}}
+
+# answer the path question
+curl -s http://localhost:8080/v1/research/run-.../resume \
+  -H 'Content-Type: application/json' \
+  -d '{"user": {"id": "u-1", "tenant": "acme", "roles": ["support"]}, "choice": "A"}'
+
+# path B asks one more question (X or Y) before it answers
+
+# forbidden: the guest role has no chat permission
+curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/v1/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user": {"id": "u-2", "tenant": "acme", "roles": ["guest"]},
+    "messages": [{"role": "user", "content": "hi"}]
+  }'
+
+# bad request: unknown field
+curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/v1/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"user": {"id": "u-1", "tenant": "acme", "roles": ["user"]}, "messages": [], "extra": 1}'
+```
+
+The full endpoint list, statuses and error codes are in
+[lite-demo/README.md](./lite-demo/README.md).
+
+Retrieval, typed output, guardrails and traces are the same call path the
+library gives you.
+
+## The delta: one handler, made safe
+
+An ordinary HTTP handler calls your LLM client directly:
 
 ```go
-type TicketInput struct {
-	TenantID string `gobellim:"source=principal,required"`
-	TicketID string `gobellim:"source=application,required"`
-	Body     string `gobellim:"required,sensitivity=pii"`
-	OrderID  string `gobellim:"sensitivity=secret"`
-}
-
-type TriageOutput struct {
-	Category string `gobellim:"required,oneof=billing|technical|other"`
-	Reply    string
-}
-
-type RefundArgs struct {
-	OrderID string `gobellim:"required,ground"`
-	Cents   int    `gobellim:"min=1,max=5000"`
-}
-
-type RefundResult struct {
-	RefundID string
-	Status   string
-}
-
-refund := gobellim.Tool[RefundArgs, RefundResult]{
-	Name:       "orders.refund",
-	Effect:     gobellim.Write, // required: the zero value is rejected
-	Permission: "orders:refund",
-	Resource: func(p gobellim.Principal, a RefundArgs) gobellim.Resource {
-		return gobellim.Resource{Type: "order", ID: a.OrderID, TenantID: p.Tenant}
-	},
-	Validate: validateRefundAgainstBusinessRules,
-	Run: func(ctx context.Context, p gobellim.Principal, a RefundArgs) (RefundResult, error) {
-		return orders.Refund(ctx, p.Tenant, a.OrderID, a.Cents)
-	},
-}
-
-engine, err := gobellim.New(
-	gobellim.WithModel(model),         // your adapter; see plugins/gigachat
-	gobellim.WithAuthorizer(existing), // your RBAC/ACL
-	gobellim.WithAudit(gobellim.SlogSink{}), // or plugins/langfuse
-	gobellim.WithLimits(gobellim.Limits{
-		MaxInputBytes:  32 << 10,
-		MaxOutputBytes: 16 << 10,
-		MaxToolCalls:   3,
-	}),
-)
-if err != nil {
-	return err
-}
-
-task, err := gobellim.NewTask[TicketInput, TriageOutput](engine, gobellim.TaskConfig{
-	Name:        "ticket.triage",
-	Instruction: "Classify the ticket and propose a reply.",
-	Tools:       []gobellim.ToolDef{refund},
-})
-if err != nil {
-	return err
-}
-
-res, err := task.Run(ctx, principalFromRequest(r), in)
-if err != nil {
-	return err
-}
-if res.Status == gobellim.TaskApprovalRequired {
-	// res.Pending is the escalated action: card, resolved args, digest, expiry.
-	// Nothing was executed. After a human approves it:
-	//
-	//   out, rec, err := task.ExecuteApproved(ctx, requester, res.Pending)
+func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
+	var req chatRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	answer, err := h.llm.Complete(r.Context(), req.Prompt)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, map[string]string{"answer": answer})
 }
 ```
 
-`gobellim.New` uses functional options. A nil model or authorizer is
-`ErrInvalidConfig`; there is no permissive default.
+The same handler with Gobellim:
 
-## The Gate
-
-Every model-initiated call goes through the Gate: tenant binding, RBAC/ACL,
-grounding, business validation, then the effect ceiling.
-
-| Worst argument integrity | Read  | Write    | Egress | Destructive |
-| ------------------------ | ----- | -------- | ------ | ----------- |
-| `Trusted` / `Validated`  | allow | allow    | allow  | escalate    |
-| `Derived`                | allow | escalate | deny   | deny        |
-| `Untrusted` / no labels  | allow | escalate | deny   | deny        |
-
-On top of the table:
-
-- `Effect` is explicit. Its zero value is `EffectUnknown` and `NewTask` rejects
-  it, so a mutating tool cannot silently become `Read`.
-- an empty label set is `Untrusted`, not `Trusted`;
-- `Resource.TenantID` must match `Principal.Tenant` (an empty value is filled
-  from the principal);
-- an `Authorizer` error is `Deny`;
-- an unknown tool or invalid arguments is `Deny`;
-- an argument marked `ground` must be an existing handle; a raw value is `Deny`;
-- a business `Validate` error is `Deny`;
-- the model's own claims about permissions never matter.
-
-**How an argument becomes `Validated`.** A handle-backed argument whose
-business meaning the application confirmed is `Validated`: the runtime minted
-the handle for this run, and `Tool.Validate` passed. Free model text stays
-`Derived`. A tool without `Validate` never gets the promotion, so a write still
-needs a human. This is the only path from model input to an unattended
-`Write`/`Egress`, and it still requires RBAC/ACL.
-
-A `Task` returns `TaskApprovalRequired` and a `PendingAction` for an escalated
-action. The action is not executed. `Task.ExecuteApproved` runs it after a human
-approves: the Gate re-checks tenant, RBAC/ACL, business validation and the
-digest of the exact arguments the human saw. For a resumable approval with a
-sealed token, TTL, four-eyes and replay protection, use `flow` and call
-`ExecuteApproved` in the step after `Approve`.
-
-## Schema by tags
-
-The supported subset is deliberately small and fails closed.
-
-| Tag                    | Meaning                                                      |
-| ---------------------- | ------------------------------------------------------------ |
-| `required`             | reject the zero value (not allowed on `bool`)                |
-| `source=principal`     | the value must equal the matching field of `Principal`       |
-| `source=application`   | the value is application state and becomes trusted           |
-| `untrusted`            | explicit untrusted input (the default for an untagged field) |
-| `sensitivity=pii`      | replace email/phone/card-like matches with handles           |
-| `sensitivity=secret`   | replace the whole value with one handle                      |
-| `sensitivity=internal` | label only; no masking                                       |
-| `oneof=a\|b`           | string enum                                                  |
-| `min`, `max`           | numeric range, or item count for a slice                     |
-| `ground`               | the argument must be an existing handle                      |
-
-`source` and `ground` apply only to strings. `sensitivity` applies to strings
-and `[]string`. Supported field types: `string`, `bool`, integers, floats,
-slices of scalars, and nested structs up to two levels. `time.Time`, `[]byte`,
-maps, pointers, interfaces, embedded structs without an explicit `json` name
-and deeper nesting are rejected by `NewTask`. This is intentional: a schema that
-does not match `encoding/json` would lie to the model.
-
-The model-facing JSON Schema is generated from these tags, but the runtime
-decodes and validates the arguments again. The schema is not a security
-boundary.
-
-The same `sensitivity` tags apply to a tool **result** before it re-enters the
-model context: a `secret` field becomes a handle and a `pii` field is masked.
-A result struct is ordinary Go, so `time.Time` and `json.Marshaler` values are
-passed through unchanged.
-
-## Grounding is a handle
-
-A `ground` field accepts only a handle minted for this run. The model cannot
-invent an ID and cannot copy an unrelated trusted string. To let the model
-reference a value, mark the input field `sensitivity=secret` (or
-`sensitivity=pii`). `source=application` labels the value `Trusted`, but does not
-create a handle by itself.
-
-```go
-type TicketInput struct {
-	OrderID string `gobellim:"sensitivity=secret,required"`
-}
-type RefundArgs struct {
-	OrderID string `gobellim:"required,ground"`
-}
-// The model sees {"OrderID":"<h1>"} and may pass "<h1>" to orders.refund.
+```diff
+ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
+     var req chatRequest
+     if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+         http.Error(w, err.Error(), http.StatusBadRequest)
+         return
+     }
+-    answer, err := h.llm.Complete(r.Context(), req.Prompt)
++    ctx := gobellim.WithPrincipal(r.Context(), gobellim.Principal{
++        UserID: req.UserID, Roles: req.Roles, Tenant: req.Tenant,
++    })
++    res, err := h.app.Chat(ctx, gobellim.ChatRequest{
++        Messages: []model.Message{{Role: model.RoleUser, Content: req.Prompt}},
++    })
+     if err != nil {
+         http.Error(w, err.Error(), http.StatusBadGateway)
+         return
+     }
+-    writeJSON(w, map[string]string{"answer": answer})
++    writeJSON(w, map[string]string{"answer": res.Message.Content})
+ }
 ```
 
-## Human approval
+That is the whole change in the handler. The app is built once at startup
+(`gobellim.New`, below). `Chat` authorizes before any model or store call, runs the
+guard on input, tool results and output, traces the turn, and exposes only the
+tools the caller may use.
 
-`flow` is the sequential, code-driven workflow. It never resumes a Go stack: it
-suspends at a step boundary, seals the minimal state into a token and continues
-from the next step after the checks in `DESIGN.md` §8.6.
+## What Gobellim adds
 
-```go
-sealer, err := flow.NewSealer("v1", key) // AES-GCM; the key is an app secret
-if err != nil {
-	return err
-}
-store, err := sqlstore.New(db) // optional: cross-replica replay protection
-if err != nil {
-	return err
-}
-wf, err := flow.New[RefundCase]("refund",
-	flow.WithAuthorizer(authz),
-	flow.WithSealer(sealer), // required
-	flow.WithStore(store),
-	flow.WithTTL(24*time.Hour),
-)
-if err != nil {
-	return err
-}
+You keep the handler, the `ctx` and the Elasticsearch client you already have.
+Gobellim adds four gates:
 
-wf.Step("prepare", prepareRefund).
-	Approve("manager", flow.ApproveConfig[RefundCase]{
-		Permission:       "refund:approve",
-		ActionPermission: "orders:refund",
-		FourEyes:         true,
-		Card:             refundApprovalCard,
-		Resource:         refundResource,
-	}).
-	Step("execute", func(ctx context.Context, p gobellim.Principal, s *RefundCase) error {
-		// p is the requester: Resume re-runs the remaining steps as them.
-		_, _, err := task.ExecuteApproved(ctx, p, &s.Pending)
-		return err
-	})
-
-res, err := wf.Run(ctx, requester, state)
-// res.Status == flow.Suspended
-// send res.Suspension.Card and res.Suspension.Token to the approver UI
-
-out, err := wf.Resume(ctx, approver, res.Suspension.Token, flow.Approve)
+```mermaid
+flowchart LR
+    H["your handler"] --> P["principal"]
+    P --> A["policy"]
+    A --> G["guard"]
+    G --> T["trace"]
+    T --> X["LLM / tool / ES"]
 ```
 
-Resume checks the AEAD, tenant binding, expiry, workflow version, the step id,
-approver permission, four-eyes, the requester's action permission, the action
-digest and an atomic claim. A rejected approval, an expired token, a revoked
-permission or a changed action never executes the step. Without `WithStore` the
-flow uses a process-local `MemStore`, so a token cannot be resumed twice inside
-one replica; a shared store is needed between replicas.
+- **principal** — who calls: user, roles, tenant.
+- **policy** — what the caller may do; deny by default.
+- **guard** — deterministic L1 rules plus the required L2 detector.
+- **trace** — every call is recorded, masked by default, and scoreable.
 
-`flow.Store` has one method: `Claim`. The SQL adapter also exposes `Prune` for
-expired nonces. The step after `Approve` is the action itself. Make it
-idempotent: a crash after the external call cannot be rolled back, and the
-library does not promise exactly-once delivery.
+Each is a gate on the call path, not a hook you can forget.
 
-## Observability
+## Why Gobellim
 
-```go
-sink, err := langfuse.New(langfuse.Config{
-	Host:      "https://cloud.langfuse.com",
-	PublicKey: os.Getenv("LANGFUSE_PUBLIC_KEY"),
-	SecretKey: os.Getenv("LANGFUSE_SECRET_KEY"),
-})
-if err != nil {
-	return err
-}
-defer sink.Close(ctx)
+Gobellim is a library, not a service: you keep your handlers, your concurrency
+and your infrastructure. Each claim below is structural, and each one has code
+and tests behind it.
 
-engine, err := gobellim.New(
-	gobellim.WithModel(model),
-	gobellim.WithAuthorizer(authz),
-	gobellim.WithAudit(sink),
-)
-```
+- **One call path, no bypass.** Every operation runs through
+  [`internal/call`](./internal/call) — authorize, guard, span, execute — and
+  [`internal/importrules`](./internal/importrules) is the build-time guard on the
+  package graph.
+- **The model gets no say in access.** Tools the caller may not use are removed
+  from the schema before the model runs and re-checked when they execute
+  ([`authz.AllowedTools`](./authz/authz.go), `TestAllowedTools`).
+- **Search cannot widen across tenants.** Tenant and ACL are part of the kNN
+  filter, and search is deny-by-default ([`store/filter.go`](./store/filter.go),
+  `filter_test.go`, `filter_fuzz_test.go`).
+- **Traces carry masked text by default.** Raw message text is not persisted
+  unless you opt in ([`trace/config.go`](./trace/config.go), `pii_test.go`).
+- **L2 is required on purpose.** An internal security review or certification
+  usually expects an ML layer. `guard.L1Only()` exists for explicit L1-only runs
+  and is visible in `Health()`, never silent (`D80`).
 
-The sink batches `trace-create`, `generation-create` and `span-create` events. It
-sends only what an audit event already contains: labels, digests, decisions,
-latency and token counts. Prompt text, raw arguments and secrets are never sent.
-For a local walkthrough, use `langfuse.Config{DryRun: true, Writer: os.Stdout}`.
-
-Model adapters live in optional packages. `plugins/gigachat` implements the
-freemium OAuth flow and maps GigaChat's `functions`/`function_call` shape. See
-the runnable notebooks.
-
-## Guarantees and non-goals
-
-Guaranteed when the application integrates correctly:
-
-- a model tool call never reaches a handler without the Gate;
-- unknown tool, invalid arguments, authorizer error and a tenant mismatch do not
-  become `Allow`;
-- an empty argument set is not treated as trusted;
-- a `ground` argument cannot be satisfied by a raw model string;
-- free model text does not become trusted through a JSON schema or a
-  paraphrase;
-- an approval is bound to the tool and arguments it was shown, and
-  `ExecuteApproved` re-runs the Gate before the handler;
-- `sensitivity` on a tool result keeps a secret out of the model context;
-- audit events carry labels and digests, not prompt text or secrets;
-- an unfinished run is audited as `task.failed`, never as `task.completed`.
-
-Not guaranteed:
-
-- exactly-once for `Task.ExecuteApproved`: it is a single call, the application
-  owns deduplication; `flow` provides a single-use claim;
-- redaction inside a map or a self-marshalling type in a tool result;
-
-- that the model produces no harmful or false text;
-- exact data-flow tracking inside the model;
-- exactly-once for an external side effect;
-- cross-replica single-use resume without a `Store`;
-- durable recovery of an arbitrary Go function;
-- retrieval/RAG. The library does not fetch or filter documents; the
-  application applies its data ACL before it calls `Task`;
-- `ReaderSet` / per-reader data ACL. It is not implemented; the application owns
-  its data ACL.
+General-purpose Go LLM frameworks give you adapters. You can wrap one with a
+policy and a guard yourself — and then you own that wrapper and its tests.
+Gobellim is that wrapper, already tested: the hardening, egress and concurrency
+suites ship with it.
 
 ## Install
 
 ```sh
-go get github.com/KirillYuzh/Gobellim
+go get github.com/KirillYuzh/Gobellim@v0.1.0
 ```
 
 ## Documentation
 
-- [`DESIGN.md`](./DESIGN.md) — the specification.
-- [`docs/`](./docs) — the how-to guide.
-- [`examples/notebooks`](./examples/notebooks/README.md) — runnable scenarios,
-  mocks and real GigaChat free-tier calls.
-- [`plugins/langfuse`](./plugins/langfuse) — audit sink.
-- [`plugins/gigachat`](./plugins/gigachat) — model adapter.
+`docs/` is plain Markdown and reads directly on GitHub. `site/` renders the same
+files with Next.js and Fumadocs:
+
+```sh
+cd site && npm install && npm run dev
+```
+
+Start at [docs/README.md](./docs/README.md).
+
+## Quickstart
+
+```go
+tools, err := gobellim.NewRegistry().Register(
+	gobellim.Tool("get_weather", getWeather, gobellim.Desc("Current weather for a city.")),
+).Build()
+if err != nil {
+	return err
+}
+
+app, err := gobellim.New(ctx, gobellim.Config{
+	ES:      es,     // optional: your store.ES client (retrieval, memory, traces)
+	LLM:     llm,    // vLLM, Ollama, OpenAI-compatible or GigaChat
+	Policy:  policy, // authz.Load("policy.yaml")
+	GuardL2: guard.L1Only(), // evaluation path; production: guard/gliner (-tags ort)
+	Tools:   tools,
+})
+
+// Every call carries the caller's identity.
+ctx = gobellim.WithPrincipal(ctx, gobellim.Principal{UserID: "u-1", Roles: []string{"user"}, Tenant: "acme"})
+
+res, err := app.Chat(ctx, gobellim.ChatRequest{
+	System:   "You are a support assistant. Answer briefly.",
+	Messages: []model.Message{{Role: model.RoleUser, Content: "Weather in Moscow?"}},
+})
+```
+
+`GuardL2: guard.L1Only()` is the explicit evaluation path: `New` logs a warning
+and `Health()` reports `GuardL1Only: true`. In production set `GuardL2` to the
+shipped ML detector built with `-tags ort`; a nil `GuardL2` is
+`ErrInvalidConfig` (D80).
+
+`ES` is optional: without it, chat, tools and `Generate` work, while retrieval,
+ingest, memory and trace persistence need Elasticsearch (or, for traces, a
+`trace.Sink`).
+
+## Policy in one screen
+
+Deny by default, then allow exactly what a role needs:
+
+```yaml
+version: 1
+default: deny
+
+roles:
+  user:
+    permissions: [chat, search, "tool:kb_search"]
+```
+
+Two ready-made starting points:
+
+```yaml
+# Read-only support: retrieval and memory, no generation.
+version: 1
+default: deny
+roles:
+  support:
+    permissions: [search, memory]
+```
+
+```yaml
+# Admin: the wildcard grants every permission and every tool.
+version: 1
+default: deny
+roles:
+  admin:
+    permissions: ["*"]
+```
+
+`tool:<name>` is the per-tool permission; a tool the caller cannot use never
+reaches the model's schema.
+
+## Operations
+
+| Operation     | Permission    | Notes                                              |
+| ------------- | ------------- | -------------------------------------------------- |
+| `Chat`        | `chat`        | bounded tool loop; permissions re-checked per call |
+| `ChatStream`  | `chat`        | guarded sliding-window stream                      |
+| `CallTool`    | `tool:<name>` | one tool through the same call path                |
+| `Memory*`     | `memory`      | thread history, recall and working memory          |
+| `Generate[T]` | `generate`    | typed output, validated against its schema         |
+| `Ingest`      | `ingest`      | chunk, embed and index                             |
+| `Search`      | `search`      | BM25 + kNN under the caller's ACL                  |
+| `Delete`      | `delete`      | remove a document                                  |
+| `Prune`       | `prune`       | retention by age                                   |
+| `Score`       | `trace`       | attach a score to a trace                          |
+
+`Ingest`, `Search` and `Delete` require a non-empty `Tenant`, so an operation can
+never widen across tenants.
+
+## Guardrails
+
+<!-- derived: BR-26 -->
+
+Input, tool results and output all pass the guard. L1 — deterministic rules
+(Russian personal IDs and prompt injection) — is in the core and always runs.
+
+L2 is the ML layer and is required: `Config.GuardL2` must be set, or `New`
+returns `ErrInvalidConfig` (D80).
+
+- **Evaluation / first run.** Pass `guard.L1Only()`: the composition is exactly
+  L1, `New` logs a warning, and `Health()` reports `GuardLayers: ["L1"]` and
+  `GuardL1Only: true`. It is a visible, explicit choice, not a silent default.
+- **Production.** Pass the shipped `guard/gliner` detector, built with
+  `-tags ort`. It is the baseline this project targets; an internal security
+  review or certification usually expects an ML layer.
+
+A remote guard service is not implemented (D76).
+
+## Eval
+
+`eval` runs deterministic checks over recorded traces and scores quality on
+labelled data. The shipped L1 guard corpus (457 cases: 223 scored, 205 benign
+controls, 29 deferred to L2) passes with recall 1.000, precision 1.000 and a
+false-positive rate of 0.024 against thresholds 0.90 / 0.90 / 0.05. These are L1
+numbers on a public corpus, not a generalization claim; the L2 parity gate runs
+nightly.
+
+```go
+m := eval.ScoreRetrieval(hitIDs, relevantIDs, 10) // precision@K, recall@K, MRR
+g, err := eval.ScoreBinary(expected, actual)      // TP/FP/FN/TN, precision, recall, F1, FPR
+```
+
+Run the shipped guard eval with `go -C scripts run ./guardqual`.
+
+## Learn more
+
+- [Documentation →](./docs)
+- [Guides →](./docs/README.md)
+- [Runnable demo →](./lite-demo)
+
+## Contributing
+
+Gobellim accepts issues, forks and pull requests. Start with
+[CONTRIBUTING.md](.github/CONTRIBUTING.md). Security reports go through
+[SECURITY.md](SECURITY.md), not the public tracker.
 
 ## License
 

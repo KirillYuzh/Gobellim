@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -555,8 +556,11 @@ type bridgeState struct {
 func TestTaskApprovalInsideFlow(t *testing.T) {
 	var executed int
 	refund := gobellim.Tool[bridgeArgs, bridgeResult]{
-		Name:       "orders.refund",
-		Effect:     gobellim.Write,
+		Name:   "orders.refund",
+		Effect: gobellim.Write,
+		Resource: func(p gobellim.Principal, _ bridgeArgs) gobellim.Resource {
+			return gobellim.Resource{Type: "order", ID: "A-1042", TenantID: p.Tenant}
+		},
 		Permission: "orders:refund",
 		Run: func(context.Context, gobellim.Principal, bridgeArgs) (bridgeResult, error) {
 			executed++
@@ -602,20 +606,23 @@ func TestTaskApprovalInsideFlow(t *testing.T) {
 		s.Pending = *res.Pending
 		return nil
 	})
-	f.Approve("manager", ApproveConfig[bridgeState]{
+	f.ApprovePending("manager", func(s bridgeState) *gobellim.PendingAction { return &s.Pending }, ApproveConfig[bridgeState]{
 		Permission:       "refund:approve",
 		ActionPermission: "orders:refund",
-		Card: func(_ context.Context, _ gobellim.Principal, s bridgeState) (gobellim.ApprovalCard, error) {
-			return s.Pending.Card, nil
-		},
-		Resource: func(_ context.Context, p gobellim.Principal, s bridgeState) (gobellim.Resource, error) {
+		Resource: func(_ context.Context, p gobellim.Principal, _ bridgeState) (gobellim.Resource, error) {
 			return gobellim.Resource{Type: "order", ID: "A-1042", TenantID: p.Tenant}, nil
 		},
 	})
 	f.Step("execute", func(ctx context.Context, p gobellim.Principal, s *bridgeState) error {
-		if _, rec, err := task.ExecuteApproved(ctx, p, &s.Pending); err != nil {
+		approver, ok := ApproverFrom(ctx)
+		if !ok {
+			return errors.New("no approver in the context")
+		}
+		_, rec, err := task.ExecuteApproved(ctx, p, approver, &s.Pending)
+		if err != nil {
 			return err
-		} else if !rec.Executed {
+		}
+		if !rec.Executed {
 			return errors.New("the approved action did not run")
 		}
 		s.Executed = true
@@ -645,5 +652,27 @@ func TestTaskApprovalInsideFlow(t *testing.T) {
 	}
 	if executed != 1 {
 		t.Fatalf("executed = %d, want 1", executed)
+	}
+}
+
+func TestResumeRejectsOversizedToken(t *testing.T) {
+	f, err := New[refundState]("refund",
+		WithAuthorizer(perms(defaultPerms())),
+		WithSealer(mustSealer()),
+		WithMaxTokenBytes(64),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Step("prepare", func(context.Context, gobellim.Principal, *refundState) error { return nil })
+	f.Approve("manager", ApproveConfig[refundState]{
+		Card: func(context.Context, gobellim.Principal, refundState) (gobellim.ApprovalCard, error) {
+			return gobellim.ApprovalCard{Tool: "orders.refund"}, nil
+		},
+	})
+
+	token := strings.Repeat("A", 1<<20)
+	if _, err := f.Resume(context.Background(), approver("m-1"), token, Approve); !errors.Is(err, ErrContinuation) {
+		t.Fatalf("err = %v, want ErrContinuation", err)
 	}
 }

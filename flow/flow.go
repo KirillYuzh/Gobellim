@@ -295,6 +295,22 @@ func (f *Flow[S]) Approve(id string, cfg ApproveConfig[S]) *Flow[S] {
 	return f
 }
 
+// ApprovePending adds an approval boundary whose card is the PendingAction a
+// previous step produced. It removes only the card closure: permission,
+// resource and action permission stay explicit application policy.
+func (f *Flow[S]) ApprovePending(id string, pending func(S) *gobellim.PendingAction, cfg ApproveConfig[S]) *Flow[S] {
+	if cfg.Card == nil {
+		cfg.Card = func(_ context.Context, _ gobellim.Principal, s S) (gobellim.ApprovalCard, error) {
+			p := pending(s)
+			if p == nil {
+				return gobellim.ApprovalCard{}, fmt.Errorf("%w: approve %s: no pending action in the state", gobellim.ErrInvalidConfig, id)
+			}
+			return p.Card, nil
+		}
+	}
+	return f.Approve(id, cfg)
+}
+
 // Run executes from the first step. It returns Suspended at an approval
 // boundary and Done when every step completed.
 func (f *Flow[S]) Run(ctx context.Context, p gobellim.Principal, s S) (Result[S], error) {
@@ -423,6 +439,11 @@ func (f *Flow[S]) Resume(ctx context.Context, approver gobellim.Principal, token
 	if err := approver.Validate(); err != nil {
 		return zero, err
 	}
+	if len(token) > f.cfg.maxTokenBytes {
+		// The cap applies to tokens we accepted, not only to tokens we issued:
+		// an unbounded token would be decoded on a public approval endpoint.
+		return zero, fmt.Errorf("%w: token is %d bytes, cap is %d", ErrContinuation, len(token), f.cfg.maxTokenBytes)
+	}
 	ctx, cancel := context.WithTimeout(ctx, f.cfg.maxWallTime)
 	defer cancel()
 
@@ -523,6 +544,9 @@ func (f *Flow[S]) Resume(ctx context.Context, approver gobellim.Principal, token
 			fmt.Errorf("%w: pending action changed", ErrFlowDrift)
 	}
 
+	// Claim before the effect: a crash in the window between the claim and the
+	// external call loses the approval instead of risking a second execution.
+	// Recovery is reconciliation with the provider, not a retry.
 	claimed, err := f.cfg.store.Claim(ctx, c.Nonce, c.ExpiresAt)
 	if err != nil {
 		return Result[S]{Status: Failed, State: state}, fmt.Errorf("flow: store claim: %w", err)
@@ -540,7 +564,24 @@ func (f *Flow[S]) Resume(ctx context.Context, approver gobellim.Principal, token
 		PrincipalID: c.Requester.UserID, Tenant: c.Requester.Tenant,
 	})
 
-	return f.runFrom(ctx, c.Requester, state, c.Step+1)
+	// The remaining steps run as the requester and can read the approver from
+	// the context to record who approved an action.
+	return f.runFrom(withApprover(ctx, approver), c.Requester, state, c.Step+1)
+}
+
+// approverKey carries the authenticated approver from Resume to the steps that
+// run after the approval. It is a request-scoped fact, not configuration.
+type approverKey struct{}
+
+func withApprover(ctx context.Context, p gobellim.Principal) context.Context {
+	return context.WithValue(ctx, approverKey{}, p)
+}
+
+// ApproverFrom returns the principal that approved the resume in flight. It is
+// absent during Run and during the steps before an approval boundary.
+func ApproverFrom(ctx context.Context) (gobellim.Principal, bool) {
+	p, ok := ctx.Value(approverKey{}).(gobellim.Principal)
+	return p, ok
 }
 
 func (f *Flow[S]) ttlFor(a *approve[S]) time.Duration {

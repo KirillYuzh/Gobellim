@@ -17,6 +17,9 @@ type TaskConfig struct {
 	Instruction string
 	Tools       []ToolDef
 	MaxTokens   int
+	// Limits tightens the engine budgets for this task. A zero field inherits
+	// the engine value.
+	Limits *Limits
 }
 
 // TaskStatus is the explicit outcome of a task run.
@@ -59,11 +62,13 @@ type TaskResult[Out any] struct {
 //
 // The card carries the resolved arguments and their digest. ExecuteApproved
 // re-runs the Gate on them, so an approval cannot execute a different action.
+// Nonce makes the approval single-use.
 type PendingAction struct {
 	RunID     string          `json:"run_id"`
 	Task      string          `json:"task"`
 	Tenant    string          `json:"tenant"`
 	Tool      string          `json:"tool"`
+	Nonce     string          `json:"nonce"`
 	Args      json.RawMessage `json:"args"`
 	Digest    string          `json:"digest"`
 	ExpiresAt time.Time       `json:"expires_at"`
@@ -79,6 +84,7 @@ type compiledTool struct {
 type Task[In, Out any] struct {
 	engine *Engine
 	cfg    TaskConfig
+	limits Limits
 	in     *structSchema
 	out    *structSchema
 	tools  map[string]compiledTool
@@ -106,6 +112,14 @@ func NewTask[In, Out any](e *Engine, cfg TaskConfig) (*Task[In, Out], error) {
 		return nil, err
 	}
 
+	limits := e.limits
+	if cfg.Limits != nil {
+		limits = cfg.Limits.withFallback(e.limits)
+		if err := limits.validate(); err != nil {
+			return nil, err
+		}
+	}
+
 	tools := make(map[string]compiledTool, len(cfg.Tools))
 	order := make([]string, 0, len(cfg.Tools))
 	for _, def := range cfg.Tools {
@@ -126,7 +140,7 @@ func NewTask[In, Out any](e *Engine, cfg TaskConfig) (*Task[In, Out], error) {
 		order = append(order, spec.name)
 	}
 
-	return &Task[In, Out]{engine: e, cfg: cfg, in: in, out: out, tools: tools, order: order}, nil
+	return &Task[In, Out]{engine: e, cfg: cfg, limits: limits, in: in, out: out, tools: tools, order: order}, nil
 }
 
 func validatePrincipalSources(s *structSchema) error {
@@ -155,7 +169,7 @@ func (t *Task[In, Out]) Run(ctx context.Context, p Principal, in In) (result Tas
 	// The caller's context is kept for the final audit event: the per-run
 	// timeout would otherwise drop the very event that explains the timeout.
 	auditCtx := ctx
-	runCtx, cancel := context.WithTimeout(ctx, t.engine.limits.MaxWallTime)
+	runCtx, cancel := context.WithTimeout(ctx, t.limits.MaxWallTime)
 	defer cancel()
 
 	runID := newRunID()
@@ -198,8 +212,8 @@ func (t *Task[In, Out]) Run(ctx context.Context, p Principal, in In) (result Tas
 	if err != nil {
 		return result, err
 	}
-	if len(payload) > t.engine.limits.MaxInputBytes {
-		return result, fmt.Errorf("%w: input is %d bytes, cap is %d", ErrBudget, len(payload), t.engine.limits.MaxInputBytes)
+	if len(payload) > t.limits.MaxInputBytes {
+		return result, fmt.Errorf("%w: input is %d bytes, cap is %d", ErrBudget, len(payload), t.limits.MaxInputBytes)
 	}
 
 	req := Request{
@@ -212,9 +226,12 @@ func (t *Task[In, Out]) Run(ctx context.Context, p Principal, in In) (result Tas
 		MaxTokens:  t.cfg.MaxTokens,
 	}
 
-	for call := 0; call < t.engine.limits.MaxModelCalls; call++ {
-		if len(req.Messages) > t.engine.limits.MaxContextItems {
-			return result, fmt.Errorf("%w: context has %d items, cap is %d", ErrBudget, len(req.Messages), t.engine.limits.MaxContextItems)
+	for call := 0; call < t.limits.MaxModelCalls; call++ {
+		if len(req.Messages) > t.limits.MaxContextItems {
+			return result, fmt.Errorf("%w: context has %d items, cap is %d", ErrBudget, len(req.Messages), t.limits.MaxContextItems)
+		}
+		if n := contextBytes(req.Messages); n > t.limits.MaxContextBytes {
+			return result, fmt.Errorf("%w: context is %d bytes, cap is %d", ErrBudget, n, t.limits.MaxContextBytes)
 		}
 		start := time.Now()
 		resp, err := t.engine.model.Chat(runCtx, req)
@@ -247,8 +264,8 @@ func (t *Task[In, Out]) Run(ctx context.Context, p Principal, in In) (result Tas
 		req.Messages = append(req.Messages, resp.Message)
 		for _, tc := range resp.Message.ToolCalls {
 			toolCalls++
-			if toolCalls > t.engine.limits.MaxToolCalls {
-				return result, fmt.Errorf("%w: %d tool calls, cap is %d", ErrMaxSteps, toolCalls, t.engine.limits.MaxToolCalls)
+			if toolCalls > t.limits.MaxToolCalls {
+				return result, fmt.Errorf("%w: %d tool calls, cap is %d", ErrMaxSteps, toolCalls, t.limits.MaxToolCalls)
 			}
 			rec, content, escalation := t.runToolCall(runCtx, p, runID, tc, hs)
 			result.ToolCalls = append(result.ToolCalls, rec)
@@ -263,7 +280,7 @@ func (t *Task[In, Out]) Run(ctx context.Context, p Principal, in In) (result Tas
 		}
 	}
 
-	return result, fmt.Errorf("%w: %d model calls", ErrMaxSteps, t.engine.limits.MaxModelCalls)
+	return result, fmt.Errorf("%w: %d model calls", ErrMaxSteps, t.limits.MaxModelCalls)
 }
 
 // ExecuteApproved runs a pending action after a human approved it.
@@ -274,72 +291,115 @@ func (t *Task[In, Out]) Run(ctx context.Context, p Principal, in In) (result Tas
 // binding, RBAC/ACL and business validation still apply, and the arguments
 // must match the digest the human saw. The effect ceiling is the only check a
 // human approval replaces.
-func (t *Task[In, Out]) ExecuteApproved(ctx context.Context, p Principal, pending *PendingAction) (any, ToolCallRecord, error) {
+//
+// approvedBy is recorded in the audit (approval.granted) and is checked against
+// four-eyes. It does not gain any privilege of its own.
+//
+// The approval is single-use through the Engine's ClaimStore: a second call
+// with the same PendingAction returns ErrApprovalReplay. The nonce is claimed
+// before the handler runs, so a crash between the claim and the external side
+// effect loses the approval instead of risking a double execution.
+func (t *Task[In, Out]) ExecuteApproved(ctx context.Context, requester, approvedBy Principal, pending *PendingAction) (any, ToolCallRecord, error) {
 	rec := ToolCallRecord{}
 	if pending == nil {
 		return nil, rec, fmt.Errorf("%w: pending action is required", ErrInvalidConfig)
 	}
 	rec.Name = pending.Tool
-	if err := p.Validate(); err != nil {
+	if err := requester.Validate(); err != nil {
 		return nil, rec, err
+	}
+	if err := approvedBy.Validate(); err != nil {
+		return nil, rec, err
+	}
+	if pending.Nonce == "" || pending.Digest == "" || pending.ExpiresAt.IsZero() {
+		return nil, rec, fmt.Errorf("%w: %w: pending action is incomplete", ErrApprovalInvalid, ErrApprovalDrift)
 	}
 	ct, ok := t.tools[pending.Tool]
 	if !ok {
 		rec.Decision = Decision{Kind: Deny, RuleIDs: []string{"unknown-tool"}, Reason: "unknown tool"}
-		return nil, rec, fmt.Errorf("%w: unknown tool %q", ErrApprovalInvalid, pending.Tool)
+		return nil, rec, fmt.Errorf("%w: %w: unknown tool %q", ErrApprovalInvalid, ErrApprovalDrift, pending.Tool)
 	}
 	rec.Effect = ct.spec.effect
 	if pending.Task != t.cfg.Name {
-		return nil, rec, fmt.Errorf("%w: action belongs to task %q", ErrApprovalInvalid, pending.Task)
+		return nil, rec, fmt.Errorf("%w: %w: action belongs to task %q", ErrApprovalInvalid, ErrApprovalDrift, pending.Task)
 	}
-	if pending.Tenant != p.Tenant {
+	if pending.Tenant != requester.Tenant {
 		rec.Decision = Decision{Kind: Deny, RuleIDs: []string{"tenant-mismatch"}, Reason: "resource is bound to another tenant"}
-		return nil, rec, fmt.Errorf("%w: tenant mismatch", ErrApprovalInvalid)
+		return nil, rec, fmt.Errorf("%w: %w: tenant mismatch", ErrApprovalInvalid, ErrApprovalDrift)
 	}
-	if !pending.ExpiresAt.IsZero() && time.Now().After(pending.ExpiresAt) {
-		return nil, rec, fmt.Errorf("%w: approval expired at %s", ErrApprovalInvalid, pending.ExpiresAt.Format(time.RFC3339))
+	if pending.Card.Tool != ct.spec.name || pending.Card.Effect != ct.spec.effect {
+		rec.Decision = Decision{Kind: Deny, RuleIDs: []string{"approval-drift"}, Reason: "tool or effect changed since approval"}
+		return nil, rec, fmt.Errorf("%w: %w: tool or effect changed since approval", ErrApprovalInvalid, ErrApprovalDrift)
+	}
+	if pending.Card.FourEyes && approvedBy.UserID == requester.UserID {
+		return nil, rec, fmt.Errorf("%w: four-eyes requires a different approver", ErrApprovalInvalid)
+	}
+	if t.engine.now().After(pending.ExpiresAt) {
+		return nil, rec, fmt.Errorf("%w: %w: expired at %s", ErrApprovalInvalid, ErrApprovalExpired, pending.ExpiresAt.Format(time.RFC3339))
 	}
 
-	prep, err := ct.def.prepare(ctx, p, pending.Args, nil, t.engine.limits.MaxArgBytes)
+	prep, err := ct.def.prepare(ctx, requester, pending.Args, nil, t.limits.MaxArgBytes)
 	if err != nil {
 		rec.Decision = Decision{Kind: Deny, RuleIDs: []string{"invalid-args"}, Reason: err.Error()}
 		return nil, rec, fmt.Errorf("%w: %w", ErrApprovalInvalid, err)
 	}
 	prep.spec = ct.spec
-	if prep.digest != pending.Digest || pending.Card.Digest != pending.Digest {
+	if prep.digest != pending.Digest || pending.Card.Digest != pending.Digest || pending.Card.ActionDigest() != pending.Digest {
 		rec.Decision = Decision{Kind: Deny, RuleIDs: []string{"approval-drift"}, Reason: "action changed after approval"}
-		return nil, rec, fmt.Errorf("%w: action changed after approval", ErrApprovalInvalid)
+		return nil, rec, fmt.Errorf("%w: %w: action changed after approval", ErrApprovalInvalid, ErrApprovalDrift)
 	}
 
-	decision := t.engine.decideApproved(ctx, p, prep)
+	decision := t.engine.decideApproved(ctx, requester, prep)
 	rec.Decision = decision
+	if decision.Kind != Allow {
+		t.engine.emit(ctx, Event{
+			Kind: gateEventKind(decision.Kind), RunID: pending.RunID, Task: t.cfg.Name,
+			PrincipalID: requester.UserID, Tenant: requester.Tenant,
+			Tool: ct.spec.name, Effect: ct.spec.effect,
+			Decision: decision.Kind, RuleIDs: decision.RuleIDs, ArgsDigest: prep.digest,
+			Integrity: prep.worst, Sensitivity: prep.sensitivity,
+		})
+		return nil, rec, fmt.Errorf("%w: %s", ErrApprovalInvalid, decision.Reason)
+	}
+
+	claimed, err := t.engine.claims.Claim(ctx, pending.Nonce, pending.ExpiresAt)
+	if err != nil {
+		return nil, rec, fmt.Errorf("%w: claim: %w", ErrApprovalInvalid, err)
+	}
+	if !claimed {
+		return nil, rec, fmt.Errorf("%w: %w", ErrApprovalInvalid, ErrApprovalReplay)
+	}
+
 	t.engine.emit(ctx, Event{
-		Kind: gateEventKind(decision.Kind), RunID: pending.RunID, Task: t.cfg.Name,
-		PrincipalID: p.UserID, Tenant: p.Tenant,
+		Kind: EventApprovalGranted, RunID: pending.RunID, Task: t.cfg.Name, Step: ct.spec.name,
+		PrincipalID: approvedBy.UserID, Tenant: approvedBy.Tenant,
+		Tool: ct.spec.name, Effect: ct.spec.effect, Decision: Allow, RuleIDs: []string{"approved"},
+		ArgsDigest: prep.digest,
+	})
+	t.engine.emit(ctx, Event{
+		Kind: EventGateAllowed, RunID: pending.RunID, Task: t.cfg.Name,
+		PrincipalID: requester.UserID, Tenant: requester.Tenant,
 		Tool: ct.spec.name, Effect: ct.spec.effect,
 		Decision: decision.Kind, RuleIDs: decision.RuleIDs, ArgsDigest: prep.digest,
 		Integrity: prep.worst, Sensitivity: prep.sensitivity,
 	})
-	if decision.Kind != Allow {
-		return nil, rec, fmt.Errorf("%w: %s", ErrApprovalInvalid, decision.Reason)
-	}
 
-	start := time.Now()
-	out, err := t.engine.execute(ctx, p, prep)
+	start := t.engine.now()
+	out, err := t.engine.execute(ctx, requester, prep)
 	if err != nil {
 		rec.Error = err.Error()
 		t.engine.emit(ctx, Event{
 			Kind: EventToolCompleted, RunID: pending.RunID, Task: t.cfg.Name,
-			PrincipalID: p.UserID, Tenant: p.Tenant, Tool: ct.spec.name,
-			Effect: ct.spec.effect, Latency: time.Since(start), Error: "tool-failed",
+			PrincipalID: requester.UserID, Tenant: requester.Tenant, Tool: ct.spec.name,
+			Effect: ct.spec.effect, Latency: t.engine.now().Sub(start), Error: "tool-failed",
 		})
 		return nil, rec, fmt.Errorf("gobellim: tool: %w", err)
 	}
 	rec.Executed = true
 	t.engine.emit(ctx, Event{
 		Kind: EventToolCompleted, RunID: pending.RunID, Task: t.cfg.Name,
-		PrincipalID: p.UserID, Tenant: p.Tenant, Tool: ct.spec.name,
-		Effect: ct.spec.effect, Latency: time.Since(start),
+		PrincipalID: requester.UserID, Tenant: requester.Tenant, Tool: ct.spec.name,
+		Effect: ct.spec.effect, Latency: t.engine.now().Sub(start),
 	})
 	return out, rec, nil
 }
@@ -360,7 +420,7 @@ func (t *Task[In, Out]) runToolCall(
 	}
 	rec.Effect = ct.spec.effect
 
-	prep, err := ct.def.prepare(ctx, p, json.RawMessage(tc.Args), hs, t.engine.limits.MaxArgBytes)
+	prep, err := ct.def.prepare(ctx, p, json.RawMessage(tc.Args), hs, t.limits.MaxArgBytes)
 	if err != nil {
 		rule := "invalid-args"
 		if errors.Is(err, ErrUngrounded) {
@@ -402,7 +462,7 @@ func (t *Task[In, Out]) runToolCall(
 			rec.Error = err.Error()
 			return rec, toolError("tool result is not serializable"), nil
 		}
-		if len(body) > t.engine.limits.MaxOutputBytes {
+		if len(body) > t.limits.MaxOutputBytes {
 			rec.Error = "tool result exceeds the output budget"
 			t.engine.emit(ctx, Event{
 				Kind: EventToolCompleted, RunID: runID, Task: t.cfg.Name,
@@ -433,6 +493,7 @@ func (t *Task[In, Out]) pending(runID string, p Principal, c prepared, d Decisio
 		Task:      t.cfg.Name,
 		Tenant:    p.Tenant,
 		Tool:      c.spec.name,
+		Nonce:     newNonce(),
 		Args:      card.Args,
 		Digest:    card.Digest,
 		ExpiresAt: card.ExpiresAt,
@@ -449,10 +510,10 @@ func (t *Task[In, Out]) decodeOutput(resp Response) (Out, error) {
 	if content == "" {
 		return out, fmt.Errorf("%w: empty model output", ErrInvalidArgs)
 	}
-	if len(content) > t.engine.limits.MaxOutputBytes {
-		return out, fmt.Errorf("%w: output is %d bytes, cap is %d", ErrBudget, len(content), t.engine.limits.MaxOutputBytes)
+	if len(content) > t.limits.MaxOutputBytes {
+		return out, fmt.Errorf("%w: output is %d bytes, cap is %d", ErrBudget, len(content), t.limits.MaxOutputBytes)
 	}
-	decoded, err := decodeStrict[Out]([]byte(content), t.engine.limits.MaxOutputBytes)
+	decoded, err := decodeStrict[Out]([]byte(content), t.limits.MaxOutputBytes)
 	if err != nil {
 		return out, err
 	}
@@ -495,6 +556,27 @@ func newRunID() string {
 	return "r_" + hex.EncodeToString(b)
 }
 
+func newNonce() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	return "n_" + hex.EncodeToString(b)
+}
+
+// contextBytes measures what a request actually costs the provider: message
+// text plus tool-call arguments. Message count alone does not bound a run.
+func contextBytes(msgs []Message) int {
+	n := 0
+	for _, m := range msgs {
+		n += len(m.Content) + len(m.Name)
+		for _, tc := range m.ToolCalls {
+			n += len(tc.Name) + len(tc.Args)
+		}
+	}
+	return n
+}
+
 // errorClass maps an error to a stable audit value. Raw error text is never
 // written to an event: it may contain application data.
 func errorClass(err error) string {
@@ -509,6 +591,12 @@ func errorClass(err error) string {
 		return "unauthorized"
 	case errors.Is(err, ErrUnsupportedType):
 		return "unsupported-type"
+	case errors.Is(err, ErrApprovalReplay):
+		return "approval-replay"
+	case errors.Is(err, ErrApprovalExpired):
+		return "approval-expired"
+	case errors.Is(err, ErrApprovalDrift):
+		return "approval-drift"
 	case errors.Is(err, ErrApprovalInvalid):
 		return "approval"
 	default:
