@@ -37,6 +37,7 @@ nonce занимается атомарно. Без Store одноразовос
 		flow.WithAuthorizer(testkit.AllowAll),
 		flow.WithSealer(sealer),
 		flow.WithStore(flow.NewMemStore()),
+		flow.WithAudit(testkit.DiscardAudit()),
 		flow.WithTTL(time.Hour),
 	)
 	if err != nil {

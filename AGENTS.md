@@ -16,8 +16,16 @@ layer and must match the current code; if code and `DESIGN.md` disagree, fix bot
 - The model proposes; the Gate decides. Every model-initiated tool call goes
   through the Gate in `gate.go`. Never call a tool handler directly from the
   model loop.
+- `gobellim.New` and `flow.New` require a model, an authorizer and an audit sink;
+  each missing one is `ErrInvalidConfig`. Do not reintroduce a silent no-op
+  default: a run without an audit trail must be an explicit
+  `SlogSink{Logger: slog.New(slog.DiscardHandler)}`.
 - Unknown tool, invalid arguments, authorizer error, tenant mismatch and
   ungrounded arguments are `Deny`, never `Allow`.
+- Gate order is tenant binding → grounding → `Authorizer` → `Tool.Validate` →
+  effect ceiling. Do not move `Authorizer` before grounding: an id the model
+  invented must not reach the application's ACL, and `Validate` must not run for
+  a caller who is already unauthorized.
 - `Effect` has no permissive default. The zero value is `EffectUnknown` and
   `NewTask` rejects it; declare `EffectRead`, `EffectWrite`, `EffectEgress` or
   `EffectDestructive`.
@@ -58,6 +66,7 @@ layer and must match the current code; if code and `DESIGN.md` disagree, fix bot
   already consumes the nonce.
 - Tests use the standard library only. Validate with
   `go build ./... && go vet ./... && go test ./... -race -shuffle=on`.
+  `testkit.DiscardAudit()` is the explicit sink for a test that ignores audit.
 - Never log or persist prompt text, raw arguments, secrets or continuation
   tokens. Audit events carry digests and labels, not values.
 - The `gobellim:"..."` tag subset is documented in `DESIGN.md` §5.3 and

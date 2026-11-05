@@ -41,20 +41,6 @@ func (r fakeResult) RowsAffected() (int64, error) { return r.rows, nil }
 
 func newFakeExecer() *fakeExecer { return &fakeExecer{rows: 1} }
 
-func TestEnsure(t *testing.T) {
-	db := newFakeExecer()
-	s, err := New(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Ensure(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(db.queries) != 1 || !strings.Contains(db.queries[0], "CREATE TABLE IF NOT EXISTS gobellim_claims") {
-		t.Fatalf("queries = %v", db.queries)
-	}
-}
-
 func TestClaim(t *testing.T) {
 	db := newFakeExecer()
 	s, err := New(db)

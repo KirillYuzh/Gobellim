@@ -7,6 +7,11 @@
 // OpenAI's `tools`. The adapter maps gobellim.ToolSpec and ToolCall to that
 // shape. It also appends the requested JSON schema to the system message,
 // because GigaChat does not enforce response schemas natively.
+//
+// The legacy shape carries at most one function call per message, and the
+// adapter honors that both ways: a response becomes one ToolCall and a request
+// carries one function_call. Parallel tool calls therefore never reach the
+// core loop, so a Task run under this adapter makes one call at a time.
 package gigachat
 
 import (

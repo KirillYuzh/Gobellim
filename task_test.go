@@ -50,6 +50,9 @@ func principal() gobellim.Principal {
 
 func newEngine(t *testing.T, model gobellim.Model, authz gobellim.Authorizer, sink gobellim.Sink) *gobellim.Engine {
 	t.Helper()
+	if sink == nil {
+		sink = testkit.DiscardAudit()
+	}
 	e, err := gobellim.New(
 		gobellim.WithModel(model),
 		gobellim.WithAuthorizer(authz),
@@ -151,6 +154,93 @@ func TestUngroundedArgumentIsDenied(t *testing.T) {
 	}
 }
 
+func TestUngroundedCallDoesNotReachTheAuthorizer(t *testing.T) {
+	var authzCalls, validated, executed int
+	refund := gobellim.Tool[refundArgs, refundResult]{
+		Name:       "orders.refund",
+		Effect:     gobellim.Write,
+		Resource:   testResource[refundArgs],
+		Permission: "orders:refund",
+		Validate: func(context.Context, gobellim.Principal, refundArgs) error {
+			validated++
+			return nil
+		},
+		Run: func(context.Context, gobellim.Principal, refundArgs) (refundResult, error) {
+			executed++
+			return refundResult{}, nil
+		},
+	}
+	authz := gobellim.AuthorizerFunc(func(context.Context, gobellim.Principal, string, gobellim.Resource) (bool, error) {
+		authzCalls++
+		return true, nil
+	})
+	model := testkit.NewFakeModel(
+		testkit.Call("orders.refund", map[string]any{"OrderID": "A-100", "Cents": 500}),
+		testkit.Reply(validTriage),
+	)
+	task := newTriageTask(t, newEngine(t, model, authz, nil), []gobellim.ToolDef{refund})
+
+	res, err := task.Run(context.Background(), principal(), ticketIn{
+		TenantID: "acme", TicketID: "A-100", Body: "please refund", RequestedOrder: "A-100",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.ToolCalls[0].Decision.RuleIDs; len(got) == 0 || got[0] != "ungrounded" {
+		t.Fatalf("rule ids = %v", got)
+	}
+	// An argument the model invented must not become a resource id in the
+	// application's ACL, and no business rule may run for it.
+	if authzCalls != 0 || validated != 0 || executed != 0 {
+		t.Fatalf("authz=%d validate=%d run=%d, want 0", authzCalls, validated, executed)
+	}
+}
+
+func TestSuspendedBatchRecordsTheRemainingCalls(t *testing.T) {
+	refund := gobellim.Tool[refundArgs, refundResult]{
+		Name:       "orders.refund",
+		Effect:     gobellim.Write,
+		Resource:   testResource[refundArgs],
+		Permission: "orders:refund",
+		Run: func(context.Context, gobellim.Principal, refundArgs) (refundResult, error) {
+			t.Fatal("an escalated call executed")
+			return refundResult{}, nil
+		},
+	}
+	both := gobellim.Response{
+		Message: gobellim.Message{
+			Role: gobellim.RoleAssistant,
+			ToolCalls: []gobellim.ToolCall{
+				{ID: "c1", Name: "orders.refund", Args: testkit.JSON(map[string]any{"OrderID": "<h1>", "Cents": 100})},
+				{ID: "c2", Name: "orders.refund", Args: testkit.JSON(map[string]any{"OrderID": "<h1>", "Cents": 200})},
+			},
+		},
+		FinishReason: gobellim.FinishToolCalls,
+	}
+	rec := &testkit.Recorder{}
+	task := newTriageTask(t, newEngine(t, testkit.NewFakeModel(both), testkit.AllowAll, rec), []gobellim.ToolDef{refund})
+
+	res, err := task.Run(context.Background(), principal(), ticketIn{
+		TenantID: "acme", TicketID: "t-1", Body: "refund", RequestedOrder: "A-1042",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != gobellim.TaskApprovalRequired || res.Pending == nil {
+		t.Fatalf("status = %v pending = %v", res.Status, res.Pending)
+	}
+	if len(res.ToolCalls) != 2 {
+		t.Fatalf("tool calls = %+v, want the escalated one and the abandoned one", res.ToolCalls)
+	}
+	last := res.ToolCalls[1]
+	if last.Decision.Kind != gobellim.Deny || len(last.Decision.RuleIDs) == 0 || last.Decision.RuleIDs[0] != "batch-suspended" {
+		t.Fatalf("abandoned call = %+v", last)
+	}
+	if rec.Count(gobellim.EventGateDenied) == 0 {
+		t.Fatal("an abandoned call left no audit event")
+	}
+}
+
 func TestRBACDenyDoesNotExecute(t *testing.T) {
 	var executed int
 	refund := gobellim.Tool[refundArgs, refundResult]{
@@ -167,13 +257,13 @@ func TestRBACDenyDoesNotExecute(t *testing.T) {
 		return permission != "orders:refund", nil
 	})
 	model := testkit.NewFakeModel(
-		testkit.Call("orders.refund", refundArgs{OrderID: "A-100", Cents: 500}),
+		testkit.Call("orders.refund", map[string]any{"OrderID": "<h1>", "Cents": 500}),
 		testkit.Reply(validTriage),
 	)
 	task := newTriageTask(t, newEngine(t, model, authz, nil), []gobellim.ToolDef{refund})
 
 	res, err := task.Run(context.Background(), principal(), ticketIn{
-		TenantID: "acme", TicketID: "A-100", Body: "please refund",
+		TenantID: "acme", TicketID: "A-100", Body: "please refund", RequestedOrder: "A-100",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -360,6 +450,7 @@ func TestMaxToolCallsIsEnforced(t *testing.T) {
 	e, err := gobellim.New(
 		gobellim.WithModel(model),
 		gobellim.WithAuthorizer(testkit.AllowAll),
+		gobellim.WithAudit(testkit.DiscardAudit()),
 		gobellim.WithLimits(gobellim.Limits{MaxToolCalls: 1}),
 	)
 	if err != nil {
@@ -995,6 +1086,57 @@ func TestExecuteApprovedRecordsTheApprover(t *testing.T) {
 	}
 }
 
+func TestFourEyesRequiresADifferentApprover(t *testing.T) {
+	var executed int
+	refund := gobellim.Tool[refundArgs, refundResult]{
+		Name:       "orders.refund",
+		Effect:     gobellim.Write,
+		Permission: "orders:refund",
+		Resource:   testResource[refundArgs],
+		Run: func(context.Context, gobellim.Principal, refundArgs) (refundResult, error) {
+			executed++
+			return refundResult{}, nil
+		},
+	}
+	e := newEngine(t, testkit.NewFakeModel(
+		testkit.Call("orders.refund", map[string]any{"OrderID": "<h1>", "Cents": 100}),
+		testkit.Reply(validTriage),
+	), testkit.AllowAll, nil)
+	task, err := gobellim.NewTask[ticketIn, triageOut](e, gobellim.TaskConfig{
+		Name:        "ticket.triage",
+		Instruction: "Classify the ticket and propose a reply.",
+		Tools:       []gobellim.ToolDef{refund},
+		FourEyes:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := task.Run(context.Background(), principal(), ticketIn{
+		TenantID: "acme", TicketID: "t-1", Body: "refund", RequestedOrder: "A-1042",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Pending.Card.FourEyes {
+		t.Fatal("the card does not record the four-eyes requirement")
+	}
+	if _, _, err := task.ExecuteApproved(context.Background(), principal(), principal(), res.Pending); !errors.Is(err, gobellim.ErrApprovalInvalid) {
+		t.Fatalf("err = %v, want ErrApprovalInvalid", err)
+	}
+	if executed != 0 {
+		t.Fatal("the requester approved their own action")
+	}
+
+	approver := gobellim.Principal{UserID: "m-1", Tenant: "acme"}
+	if _, _, err := task.ExecuteApproved(context.Background(), principal(), approver, res.Pending); err != nil {
+		t.Fatal(err)
+	}
+	if executed != 1 {
+		t.Fatalf("executed = %d, want 1", executed)
+	}
+}
+
 func TestExecuteApprovedExpires(t *testing.T) {
 	refund := gobellim.Tool[refundArgs, refundResult]{
 		Name:       "orders.refund",
@@ -1014,6 +1156,7 @@ func TestExecuteApprovedExpires(t *testing.T) {
 	e, err := gobellim.New(
 		gobellim.WithModel(model),
 		gobellim.WithAuthorizer(testkit.AllowAll),
+		gobellim.WithAudit(testkit.DiscardAudit()),
 		gobellim.WithClock(func() time.Time { return now }),
 		gobellim.WithApprovalTTL(time.Minute),
 	)

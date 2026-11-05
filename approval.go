@@ -58,13 +58,17 @@ func (c ApprovalCard) normalize() ApprovalCard {
 
 // proofMessage is the canonical byte string an issued PendingAction is signed
 // over. Times are encoded as Unix nanoseconds so a JSON round trip through any
-// time zone produces the same message.
+// time zone produces the same message. FourEyes is included because it is a
+// policy bit: without it an application could drop a separation-of-duties
+// requirement from an action the engine signed.
 func proofMessage(p *PendingAction) []byte {
 	b := make([]byte, 0, 256)
 	for _, s := range []string{p.RunID, p.Task, p.Tenant, p.Tool, p.Nonce, p.Digest} {
 		b = append(b, s...)
 		b = append(b, 0)
 	}
+	b = strconv.AppendBool(b, p.Card.FourEyes)
+	b = append(b, 0)
 	b = strconv.AppendInt(b, p.ExpiresAt.UnixNano(), 10)
 	b = append(b, 0)
 	return strconv.AppendInt(b, p.Card.ExpiresAt.UnixNano(), 10)

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	gobellim "github.com/KirillYuzh/Gobellim"
@@ -140,4 +141,11 @@ func (r *Recorder) Count(kind gobellim.EventKind) int {
 		}
 	}
 	return n
+}
+
+// DiscardAudit returns a sink that writes nothing. It exists because an Engine
+// and a Flow require an audit sink, and a unit test that ignores audit should
+// say so explicitly.
+func DiscardAudit() gobellim.Sink {
+	return gobellim.SlogSink{Logger: slog.New(slog.DiscardHandler)}
 }

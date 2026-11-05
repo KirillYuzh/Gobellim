@@ -1,5 +1,18 @@
-// Package sqlstore is a database/sql implementation of flow.Store. It ships a
-// one-table schema and does not start a database or import a driver.
+// Package sqlstore is a database/sql implementation of flow.Store. It does not
+// start a database, import a driver or manage a schema: the claims table is the
+// application's migration, so the statement is part of its schema history.
+//
+// PostgreSQL:
+//
+//	CREATE TABLE gobellim_claims (
+//	    nonce      TEXT PRIMARY KEY,
+//	    expires_at TIMESTAMPTZ NOT NULL
+//	);
+//	CREATE INDEX gobellim_claims_expires_at ON gobellim_claims (expires_at);
+//
+// MySQL and SQLite accept the same columns; use DATETIME(6) and VARCHAR(128) on
+// MySQL, and pass ConflictClause("ON DUPLICATE KEY UPDATE nonce = nonce"). The
+// index on expires_at keeps Prune from scanning the table.
 package sqlstore
 
 import (
@@ -80,16 +93,6 @@ func New(db Execer, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("sqlstore: database is required")
 	}
 	return s, nil
-}
-
-// Ensure creates the claims table if it does not exist.
-func (s *Store) Ensure(ctx context.Context) error {
-	query := fmt.Sprintf(
-		`CREATE TABLE IF NOT EXISTS %s (nonce VARCHAR(128) PRIMARY KEY, expires_at TIMESTAMP NOT NULL)`,
-		s.table,
-	)
-	_, err := s.db.ExecContext(ctx, query)
-	return err
 }
 
 // Claim inserts the nonce and reports whether this caller won the race. A

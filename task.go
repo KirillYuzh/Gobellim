@@ -17,6 +17,11 @@ type TaskConfig struct {
 	Instruction string
 	Tools       []ToolDef
 	MaxTokens   int
+	// FourEyes requires an approver who is not the requester. It is recorded on
+	// the card and checked by ExecuteApproved. flow.ApproveConfig.FourEyes is the
+	// stronger form: there the approver is an authenticated Principal, here the
+	// application passes both identities itself.
+	FourEyes bool
 	// Limits tightens the engine budgets for this task. A zero field inherits
 	// the engine value.
 	Limits *Limits
@@ -265,7 +270,7 @@ func (t *Task[In, Out]) Run(ctx context.Context, p Principal, in In) (result Tas
 
 		// The assistant message carrying tool calls must precede the results.
 		req.Messages = append(req.Messages, resp.Message)
-		for _, tc := range resp.Message.ToolCalls {
+		for i, tc := range resp.Message.ToolCalls {
 			toolCalls++
 			if toolCalls > t.limits.MaxToolCalls {
 				return result, fmt.Errorf("%w: %d tool calls, cap is %d", ErrMaxSteps, toolCalls, t.limits.MaxToolCalls)
@@ -275,6 +280,10 @@ func (t *Task[In, Out]) Run(ctx context.Context, p Principal, in In) (result Tas
 			if escalation != nil {
 				result.Status = TaskApprovalRequired
 				result.Pending = escalation
+				// The rest of this batch is never attempted: the run ends here and the
+				// next one starts from a fresh request. Record it, so neither the result
+				// nor the audit implies the whole batch was handled.
+				result.ToolCalls = append(result.ToolCalls, t.abandoned(auditCtx, runID, p, resp.Message.ToolCalls[i+1:])...)
 				return result, nil
 			}
 			req.Messages = append(req.Messages, Message{
@@ -500,8 +509,30 @@ func (t *Task[In, Out]) runToolCall(
 	}
 }
 
+// abandoned records the calls a suspension left unattempted. They did not fail
+// and they were not authorized: the run stopped before reaching them.
+func (t *Task[In, Out]) abandoned(ctx context.Context, runID string, p Principal, rest []ToolCall) []ToolCallRecord {
+	out := make([]ToolCallRecord, 0, len(rest))
+	for _, tc := range rest {
+		rec := ToolCallRecord{
+			Name:     tc.Name,
+			Decision: Decision{Kind: Deny, RuleIDs: []string{"batch-suspended"}, Reason: "the run suspended before this call"},
+		}
+		if ct, ok := t.tools[tc.Name]; ok {
+			rec.Effect = ct.spec.effect
+		}
+		out = append(out, rec)
+		t.engine.emit(ctx, Event{
+			Kind: EventGateDenied, RunID: runID, Task: t.cfg.Name,
+			PrincipalID: p.UserID, Tenant: p.Tenant,
+			Tool: rec.Name, Effect: rec.Effect, Decision: Deny, RuleIDs: rec.Decision.RuleIDs,
+		})
+	}
+	return out
+}
+
 func (t *Task[In, Out]) pending(runID string, p Principal, c prepared, d Decision) *PendingAction {
-	card := *t.engine.card(runID, t.cfg.Name, c, d)
+	card := *t.engine.card(runID, t.cfg.Name, c, d, t.cfg.FourEyes)
 	pa := &PendingAction{
 		RunID:     runID,
 		Task:      t.cfg.Name,

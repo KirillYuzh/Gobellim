@@ -115,6 +115,7 @@ func runCase(ctx context.Context, p gobellim.Principal, input gateIn, label stri
 	engine, err := gobellim.New(
 		gobellim.WithModel(model),
 		gobellim.WithAuthorizer(testkit.AllowAll),
+		gobellim.WithAudit(testkit.DiscardAudit()),
 	)
 	if err != nil {
 		panic(err)

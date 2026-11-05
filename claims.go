@@ -18,7 +18,12 @@ type ClaimStore interface {
 
 // MemClaims is the default in-process ClaimStore: one approved action executes
 // once per process. Expired nonces are dropped in amortized O(1).
+//
+// Now is the clock used to decide whether a stored nonce is still live. An
+// Engine and a Flow point it at their own clock, so a deterministic clock
+// cannot disagree with its expiry checks. A nil value means time.Now.
 type MemClaims struct {
+	Now     func() time.Time
 	mu      sync.Mutex
 	claimed map[string]time.Time
 	n       int
@@ -35,7 +40,7 @@ func NewMemClaims() *MemClaims {
 func (m *MemClaims) Claim(_ context.Context, nonce string, expiresAt time.Time) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	now := time.Now()
+	now := m.now()
 	if exp, ok := m.claimed[nonce]; ok && now.Before(exp) {
 		return false, nil
 	}
@@ -61,4 +66,11 @@ func (m *MemClaims) forgetLocked(before time.Time) {
 			delete(m.claimed, nonce)
 		}
 	}
+}
+
+func (m *MemClaims) now() time.Time {
+	if m.Now == nil {
+		return time.Now()
+	}
+	return m.Now()
 }

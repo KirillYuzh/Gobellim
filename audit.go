@@ -141,7 +141,3 @@ func (s SlogSink) Emit(ctx context.Context, e Event) {
 	add("error", e.Error)
 	l.LogAttrs(ctx, slog.LevelInfo, "gobellim.audit", attrs...)
 }
-
-type nopSink struct{}
-
-func (nopSink) Emit(context.Context, Event) {}

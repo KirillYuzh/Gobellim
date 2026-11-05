@@ -160,6 +160,7 @@ if err != nil {
 wf, err := flow.New[RefundCase]("refund",
 	flow.WithAuthorizer(authz),
 	flow.WithSealer(sealer), // обязателен
+	flow.WithAudit(auditSink), // обязателен
 	flow.WithStore(store),
 	flow.WithTTL(24*time.Hour),
 )

@@ -196,7 +196,7 @@ refund := gobellim.Tool[RefundArgs, RefundResult]{
 engine, err := gobellim.New(
 	gobellim.WithModel(model),               // ваш адаптер; см. plugins/gigachat
 	gobellim.WithAuthorizer(existing),       // ваш RBAC/ACL
-	gobellim.WithAudit(gobellim.SlogSink{}), // или plugins/langfuse
+	gobellim.WithAudit(gobellim.SlogSink{}), // обязателен; или plugins/langfuse
 	gobellim.WithLimits(gobellim.Limits{
 		MaxInputBytes:  32 << 10,
 		MaxOutputBytes: 16 << 10,
@@ -226,14 +226,20 @@ if res.Status == gobellim.TaskApprovalRequired {
 }
 ```
 
-`gobellim.New` использует functional options. Nil-модель или nil-authorizer —
-`ErrInvalidConfig`; разрешающего дефолта нет. Бюджеты можно уточнить на задачу
-через `TaskConfig.Limits`; нулевое поле наследует значение `Engine`.
+`gobellim.New` использует functional options. Nil-модель, nil-authorizer или
+nil-audit sink — `ErrInvalidConfig`; разрешающего дефолта нет, и запуска без
+audit-следа тоже. В тесте, где audit не проверяется, передайте
+`gobellim.SlogSink{Logger: slog.New(slog.DiscardHandler)}`. Бюджеты можно
+уточнить на задачу через `TaskConfig.Limits`; нулевое поле наследует значение
+`Engine`.
 
 ## Gate
 
 Каждый вызов инструмента от модели проходит через Gate: tenant binding,
-RBAC/ACL, grounding, бизнес-валидация, потолок эффекта.
+grounding, RBAC/ACL, бизнес-валидация, потолок эффекта. Grounding идёт раньше
+ACL, чтобы придуманный моделью id ресурса не дошёл до вашего `Authorizer`, а
+авторизация — раньше `Validate`, чтобы бизнес-правило не запускалось для того,
+кто всё равно не смог бы выполнить действие.
 
 | Худшая целостность аргументов | Read  | Write    | Egress | Destructive |
 | ----------------------------- | ----- | -------- | ------ | ----------- |
@@ -324,6 +330,7 @@ if err != nil {
 wf, err := flow.New[RefundCase]("refund",
 	flow.WithAuthorizer(authz),
 	flow.WithSealer(sealer), // обязателен
+	flow.WithAudit(auditSink), // обязателен
 	flow.WithStore(store),
 	flow.WithTTL(24*time.Hour),
 )

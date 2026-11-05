@@ -86,18 +86,16 @@ func New(opts ...Option) (*Engine, error) {
 	if cfg.Authorizer == nil {
 		return nil, fmt.Errorf("%w: authorizer is required", ErrInvalidConfig)
 	}
+	if cfg.Audit == nil {
+		// A run without an audit trail cannot be explained afterwards, and a
+		// forgotten option is not a decision to have no trail.
+		return nil, fmt.Errorf("%w: audit sink is required", ErrInvalidConfig)
+	}
 	limits := cfg.Limits.withFallback(DefaultLimits())
 	if err := limits.validate(); err != nil {
 		return nil, err
 	}
 	audit := cfg.Audit
-	if audit == nil {
-		audit = nopSink{}
-	}
-	claims := cfg.Claims
-	if claims == nil {
-		claims = NewMemClaims()
-	}
 	ttl := cfg.ApprovalTTL
 	if ttl <= 0 {
 		ttl = defaultApprovalTTL
@@ -105,6 +103,12 @@ func New(opts ...Option) (*Engine, error) {
 	now := cfg.Now
 	if now == nil {
 		now = time.Now
+	}
+	claims := cfg.Claims
+	if claims == nil {
+		mem := NewMemClaims()
+		mem.Now = now
+		claims = mem
 	}
 	key := cfg.ApprovalKey
 	if len(key) == 0 {

@@ -7,8 +7,14 @@ import (
 )
 
 // check runs the checks that every action needs, whether or not a human
-// approved it: tenant binding, RBAC/ACL, grounding and business validation.
+// approved it: tenant binding, grounding, RBAC/ACL and business validation.
 // A nil result means the checks passed. Every check is fail-closed.
+//
+// The order is deliberate. Grounding is local and cheap, and it rejects an
+// argument the model invented before that argument's resource reaches the
+// application's ACL: an ACL that audits lookups must not record an ID the model
+// made up. Authorization comes before business validation, so an application
+// rule never runs for a caller who could not perform the action anyway.
 //
 // requireGrounding is false only for an approved action: its arguments were
 // already resolved and are bound to the digest the human saw, so there is no
@@ -21,15 +27,15 @@ func (e *Engine) check(ctx context.Context, p Principal, c prepared, requireGrou
 	if resource.TenantID != p.Tenant {
 		return &Decision{Kind: Deny, RuleIDs: []string{"tenant-mismatch"}, Reason: "resource is bound to another tenant"}
 	}
+	if requireGrounding && !c.grounded {
+		return &Decision{Kind: Deny, RuleIDs: []string{"ungrounded"}, Reason: "argument has no trusted origin"}
+	}
 	ok, err := e.authz.Allowed(ctx, p, c.spec.permission, resource)
 	switch {
 	case err != nil:
 		return &Decision{Kind: Deny, RuleIDs: []string{"authz-error"}, Reason: "authorizer failed"}
 	case !ok:
 		return &Decision{Kind: Deny, RuleIDs: []string{"rbac-acl"}, Reason: "permission denied"}
-	}
-	if requireGrounding && !c.grounded {
-		return &Decision{Kind: Deny, RuleIDs: []string{"ungrounded"}, Reason: "argument has no trusted origin"}
 	}
 	if err := c.tool.validate(ctx, p, c.args); err != nil {
 		return &Decision{Kind: Deny, RuleIDs: []string{"business-validate"}, Reason: "business validation failed"}
@@ -85,7 +91,7 @@ func (e *Engine) execute(ctx context.Context, p Principal, c prepared) (any, err
 	return c.tool.run(ctx, p, c.args)
 }
 
-func (e *Engine) card(runID, task string, c prepared, d Decision) *ApprovalCard {
+func (e *Engine) card(runID, task string, c prepared, d Decision, fourEyes bool) *ApprovalCard {
 	args, err := json.Marshal(c.args)
 	if err != nil {
 		args = nil
@@ -120,6 +126,7 @@ func (e *Engine) card(runID, task string, c prepared, d Decision) *ApprovalCard 
 		Reason:             d.Reason,
 		Provenance:         prov,
 		RequiredPermission: c.spec.permission,
+		FourEyes:           fourEyes,
 		ExpiresAt:          e.now().Add(e.approvalTTL),
 	}.normalize()
 	return &card

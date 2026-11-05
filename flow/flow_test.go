@@ -60,6 +60,7 @@ func buildFlow(authz gobellim.Authorizer, sealer *Sealer, store Store, opts ...O
 		WithAuthorizer(authz),
 		WithSealer(sealer),
 		WithStore(store),
+		WithAudit(silentAudit{}),
 		WithTTL(time.Hour),
 	}
 	base = append(base, opts...)
@@ -106,6 +107,11 @@ func buildFlow(authz gobellim.Authorizer, sealer *Sealer, store Store, opts ...O
 func newFlow(authz gobellim.Authorizer, opts ...Option) *Flow[refundState] {
 	return buildFlow(authz, mustSealer(), NewMemStore(), opts...)
 }
+
+// silentAudit keeps the tests that do not assert events readable.
+type silentAudit struct{}
+
+func (silentAudit) Emit(context.Context, gobellim.Event) {}
 
 func mustSealer() *Sealer {
 	s, err := NewSealer("test-key", bytes.Repeat([]byte{7}, 32))
@@ -305,6 +311,7 @@ func TestParallelResume(t *testing.T) {
 		WithAuthorizer(perms(defaultPerms())),
 		WithSealer(sealer),
 		WithStore(store),
+		WithAudit(silentAudit{}),
 		WithTTL(time.Hour),
 	)
 	if err != nil {
@@ -382,6 +389,7 @@ func TestFlowDrift(t *testing.T) {
 	f2, err := New[refundState]("refund",
 		WithAuthorizer(perms(defaultPerms())),
 		WithSealer(sealer),
+		WithAudit(silentAudit{}),
 		Version(2),
 	)
 	if err != nil {
@@ -403,6 +411,7 @@ func TestConditionalApprovalSkipped(t *testing.T) {
 	f, err := New[refundState]("refund",
 		WithAuthorizer(perms(defaultPerms())),
 		WithSealer(mustSealer()),
+		WithAudit(silentAudit{}),
 		WithTTL(time.Hour),
 	)
 	if err != nil {
@@ -512,6 +521,7 @@ func TestStepDrift(t *testing.T) {
 	other, err := New[refundState]("refund",
 		WithAuthorizer(perms(defaultPerms())),
 		WithSealer(sealer),
+		WithAudit(silentAudit{}),
 		WithTTL(time.Hour),
 	)
 	if err != nil {
@@ -593,6 +603,7 @@ func TestTaskApprovalInsideFlow(t *testing.T) {
 	engine, err := gobellim.New(
 		gobellim.WithModel(model),
 		gobellim.WithAuthorizer(perms(defaultPerms())),
+		gobellim.WithAudit(silentAudit{}),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -609,6 +620,7 @@ func TestTaskApprovalInsideFlow(t *testing.T) {
 	f, err := New[bridgeState]("refund-bridge",
 		WithAuthorizer(perms(defaultPerms())),
 		WithSealer(testSealer(t)),
+		WithAudit(silentAudit{}),
 		WithTTL(time.Hour),
 	)
 	if err != nil {
@@ -678,6 +690,7 @@ func TestResumeRejectsOversizedToken(t *testing.T) {
 	f, err := New[refundState]("refund",
 		WithAuthorizer(perms(defaultPerms())),
 		WithSealer(mustSealer()),
+		WithAudit(silentAudit{}),
 		WithMaxTokenBytes(64),
 	)
 	if err != nil {

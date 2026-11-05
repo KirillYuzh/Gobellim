@@ -172,10 +172,6 @@ type Flow[S any] struct {
 	err   error
 }
 
-type nopSink struct{}
-
-func (nopSink) Emit(context.Context, gobellim.Event) {}
-
 // New starts a flow. Configuration errors are returned immediately.
 func New[S any](name string, opts ...Option) (*Flow[S], error) {
 	cfg := config{
@@ -193,6 +189,8 @@ func New[S any](name string, opts ...Option) (*Flow[S], error) {
 		return nil, fmt.Errorf("%w: flow name is required", gobellim.ErrInvalidConfig)
 	case cfg.authz == nil:
 		return nil, fmt.Errorf("%w: authorizer is required", gobellim.ErrInvalidConfig)
+	case cfg.audit == nil:
+		return nil, fmt.Errorf("%w: audit sink is required", gobellim.ErrInvalidConfig)
 	case cfg.sealer == nil:
 		return nil, fmt.Errorf("%w: sealer is required", gobellim.ErrInvalidConfig)
 	case cfg.version < 1:
@@ -204,13 +202,12 @@ func New[S any](name string, opts ...Option) (*Flow[S], error) {
 	case cfg.maxWallTime <= 0:
 		return nil, fmt.Errorf("%w: max wall time must be positive", gobellim.ErrInvalidConfig)
 	}
-	if cfg.audit == nil {
-		cfg.audit = nopSink{}
-	}
 	if cfg.store == nil {
 		// A per-process store is the safe default: without it a token could be
 		// resumed an unlimited number of times inside one replica.
-		cfg.store = NewMemStore()
+		store := NewMemStore()
+		store.Now = cfg.now
+		cfg.store = store
 	}
 	if cfg.now == nil {
 		cfg.now = time.Now
