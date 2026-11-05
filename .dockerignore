@@ -1,0 +1,17 @@
+# Build contexts in this repository are either the root (the demo backend lives
+# in the root Go module) or demo/frontend. Neither needs the rest.
+.git
+.github
+.gocache
+.golangci.yml
+Makefile
+*.md
+demo/frontend
+lite-demo
+site
+docs
+models
+**/node_modules
+node_modules
+**/.env
+.env

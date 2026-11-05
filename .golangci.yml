@@ -1,264 +1,31 @@
-# kit lint config; the family rules mirror internal/importrules (I-13, BR-74).
-# The config is used for every module (D85); its `files` patterns are
-# module-relative, so the cross-module core boundary is enforced by the
-# tree-wide `internal/importrules` test, not by depguard.
-
 version: "2"
 
 run:
   timeout: 5m
   tests: true
-  relative-path-mode: gomod
-  # The ORT layer is behind the `ort` build tag. Without the tag the linter
-  # cannot see its users and reports the whole ONNX path as unused, so both
-  # build variants are analysed.
-  build-tags:
-    - ort
 
 linters:
   default: none
   enable:
-    - bodyclose # HTTP response bodies are closed
-    - depguard # import rules (I-13)
-    - errcheck # unchecked errors
-    - errorlint # error wrapping / errors.Is-As correctness
-    - gosec # security (I-13)
-    - govet # the vet suite
-    - ineffassign # ineffectual assignments
-    - misspell # common English misspellings
-    - revive # golint successor, minimal ruleset below
-    - staticcheck # staticcheck
-    - unused # unused code
-    - noctx # find missing context.Context
-    - contextcheck # check context propagation
+    - errcheck
+    - errorlint
+    - govet
+    - ineffassign
+    - misspell
+    - staticcheck
+    - unused
+    - noctx
+    - gosec
   settings:
     gosec:
       severity: medium
       confidence: medium
       excludes:
-        # Dev/CI tools read paths from their own CLI arguments; nothing in the
-        # library takes a filesystem path from untrusted input. G703 is gosec's
-        # taint-analysis variant of the same G304 class.
-        - G304
-        - G404
-        - G115
-        - G301
-        - G703
-    revive:
-      rules:
-        - name: blank-imports
-        - name: context-as-argument
-        - name: context-keys-type
-        - name: error-naming
-        - name: error-return
-        - name: error-strings
-        - name: errorf
-        - name: increment-decrement
-        - name: indent-error-flow
-        - name: range
-        - name: superfluous-else
-        - name: unreachable-code
-    depguard:
-      rules:
-        core-authz:
-          files:
-            - "authz/**"
-          deny:
-            - pkg: github.com/KirillYuzh/Gobellim/guard
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/model
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/embed
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/chunk
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/store
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/trace
-              desc: "core-family packages must not import each other (I-13)"
-        core-guard:
-          files:
-            - "guard/**"
-          deny:
-            - pkg: github.com/KirillYuzh/Gobellim/authz
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/model
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/embed
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/chunk
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/store
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/trace
-              desc: "core-family packages must not import each other (I-13)"
-        core-model:
-          files:
-            - "model/**"
-          deny:
-            - pkg: github.com/KirillYuzh/Gobellim/authz
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/guard
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/embed
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/chunk
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/store
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/trace
-              desc: "core-family packages must not import each other (I-13)"
-        core-embed:
-          files:
-            - "embed/**"
-          deny:
-            - pkg: github.com/KirillYuzh/Gobellim/authz
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/guard
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/model
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/chunk
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/store
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/trace
-              desc: "core-family packages must not import each other (I-13)"
-        core-chunk:
-          files:
-            - "chunk/**"
-          deny:
-            - pkg: github.com/KirillYuzh/Gobellim/authz
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/guard
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/model
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/embed
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/store
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/trace
-              desc: "core-family packages must not import each other (I-13)"
-        core-store:
-          files:
-            - "store/**"
-          deny:
-            - pkg: github.com/KirillYuzh/Gobellim/authz
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/guard
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/model
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/embed
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/chunk
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/trace
-              desc: "core-family packages must not import each other (I-13)"
-        core-trace:
-          files:
-            - "trace/**"
-          deny:
-            - pkg: github.com/KirillYuzh/Gobellim/authz
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/guard
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/model
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/embed
-              desc: "core-family packages must not import each other (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/chunk
-              desc: "core-family packages must not import each other (I-13)"
-
-        internal-leaves:
-          files:
-            - "internal/core/**"
-            - "internal/id/**"
-            - "internal/httpjson/**"
-            - "internal/oauth/**"
-            - "internal/ort/**"
-            - "internal/ratelimit/**"
-            - "internal/cache/**"
-            - "internal/importrules/**"
-          deny:
-            - pkg: github.com/KirillYuzh/Gobellim$
-              desc: "internal leaves must not import the kit façade (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/authz
-              desc: "internal leaves may import only internal/** (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/guard
-              desc: "internal leaves may import only internal/** (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/model
-              desc: "internal leaves may import only internal/** (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/embed
-              desc: "internal leaves may import only internal/** (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/chunk
-              desc: "internal leaves may import only internal/** (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/store
-              desc: "internal leaves may import only internal/** (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/trace
-              desc: "internal leaves may import only internal/** (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/eval
-              desc: "internal leaves may import only internal/** (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/flow
-              desc: "internal leaves may import only internal/** (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/rerank
-              desc: "internal leaves may import only internal/** (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/mcp
-              desc: "internal leaves may import only internal/** (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/webfetch
-              desc: "internal leaves may import only internal/** (I-13)"
-            - pkg: github.com/KirillYuzh/Gobellim/cmd
-              desc: "internal leaves may import only internal/** (I-13)"
-
-        internal-no-facade:
-          files:
-            - "internal/**"
-          deny:
-            - pkg: github.com/KirillYuzh/Gobellim$
-              desc: "no file under internal/ may import the kit façade (I-13, cycle risk)"
-
-  exclusions:
-    rules:
-      # Paths are module-relative (run.relative-path-mode: gomod): these match
-      # inside the cmd and scripts modules, which are separate modules (D85).
-      - path: '(^|/)kitctl/(latency|verify)\.go$|(^|/)guardqual/run\.go$'
-        linters:
-          - staticcheck
-        text: "SA4023"
-      - path: '(^|/)guardqual/main\.go$'
-        linters:
-          - errcheck
-      # kitctl downloads models from a URL the operator passes on the command
-      # line (--base-url + model name); it is a dev CLI, not a server. Scope the
-      # SSRF taint check to this file so webfetch's own checks stay covered.
-      - path: '(^|/)kitctl/main\.go$'
-        linters:
-          - gosec
-        text: "G704"
-      # G204: the MCP stdio transport spawns the server binary the operator
-      # names in their own configuration. The path is module-relative, so
-      # inside the mcp module the file is `stdio.go`; every other exec call
-      # stays covered by gosec.
-      - path: '(^|/)stdio\.go$'
-        linters:
-          - gosec
-        text: "G204"
-      # noctx: the MCP stdio transport owns the server process for the whole
-      # life of the transport, not for the life of one call: a per-call
-      # context would kill the server as soon as the first call returned. The
-      # process is stopped by Close.
-      - path: '(^|/)stdio\.go$'
-        linters:
-          - noctx
+        # The SQL adapter builds a query from a table name that it validates
+        # with a strict identifier regex before use.
+        - G201
+        - G202
 
 formatters:
   enable:
-    - gofumpt
-  settings:
-    gofumpt:
-      module-path: github.com/KirillYuzh/Gobellim
-
-issues:
-  max-issues-per-linter: 0
-  max-same-issues: 0
+    - gofmt

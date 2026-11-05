@@ -1,250 +1,371 @@
-// Package gigachat implements GigaChat chat and embedding clients for
-// gobellim. It is an optional plugin: the core model and embed packages expose
-// the interfaces, this package supplies the GigaChat adapters.
+// Package gigachat is a gobellim.Model adapter for the GigaChat API.
+//
+// It uses the freemium OAuth flow: the caller passes the Authorization key from
+// GigaChat Studio and the adapter exchanges it for a short-lived access token.
+//
+// GigaChat uses the legacy `functions`/`function_call` shape rather than
+// OpenAI's `tools`. The adapter maps gobellim.ToolSpec and ToolCall to that
+// shape. It also appends the requested JSON schema to the system message,
+// because GigaChat does not enforce response schemas natively.
+//
+// The legacy shape carries at most one function call per message, and the
+// adapter honors that both ways: a response becomes one ToolCall and a request
+// carries one function_call. Parallel tool calls therefore never reach the
+// core loop, so a Task run under this adapter makes one call at a time.
 package gigachat
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/tls"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
 
-	"github.com/KirillYuzh/Gobellim/internal/core"
-	"github.com/KirillYuzh/Gobellim/internal/httpjson"
-	"github.com/KirillYuzh/Gobellim/internal/oauth"
-	"github.com/KirillYuzh/Gobellim/model"
+	gobellim "github.com/KirillYuzh/Gobellim"
 )
+
+// Config configures the adapter.
+type Config struct {
+	// AuthKey is the Authorization key from GigaChat Studio. It is either the
+	// base64 key itself or "client_id:client_secret".
+	AuthKey    string
+	Scope      string
+	BaseURL    string
+	OAuthURL   string
+	Model      string
+	HTTPClient *http.Client
+	// InsecureTLS skips certificate verification. It exists for environments
+	// without the Russian trusted root CA and must be opt-in.
+	InsecureTLS bool
+}
 
 const (
-	// DefaultBaseURL is the default GigaChat API endpoint.
-	DefaultBaseURL = "https://api.giga.chat"
-	// DefaultAuthURL is the default OAuth token endpoint.
-	DefaultAuthURL = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
-	// DefaultScope is the default OAuth scope.
-	DefaultScope = "GIGACHAT_API_PERS"
-	// DefaultModel is the chat model used when Config.Model is empty.
-	DefaultModel = "GigaChat-2"
-	// DefaultEmbedModel is the embedding model used when EmbedConfig.Model is
-	// empty.
-	DefaultEmbedModel = "Embeddings"
+	defaultScope   = "GIGACHAT_API_PERS"
+	defaultBaseURL = "https://gigachat.devices.sberbank.ru/api/v1"
+	defaultOAuth   = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+	defaultModel   = "GigaChat"
 )
 
-// Config configures the GigaChat chat client; an empty BaseURL, AuthURL, Scope
-// or Model falls back to the matching Default* constant. Credentials is a
-// required base64 "client_id:client_secret" pair.
-type Config struct {
-	BaseURL       string
-	AuthURL       string
-	Credentials   string
-	Scope         string
-	Model         string
-	HTTPClient    *http.Client
-	ContextTokens int
+// Model implements gobellim.Model.
+type Model struct {
+	cfg    Config
+	client *http.Client
+
+	mu      sync.Mutex
+	token   string
+	expires time.Time
+	refresh sync.Mutex
 }
 
-// Client is a model.Client backed by GigaChat's chat API, authenticating with
-// OAuth bearer tokens.
-type Client struct {
-	cfg Config
-	hc  *http.Client
-	ts  *oauth.TokenSource
-}
+var _ gobellim.Model = (*Model)(nil)
 
-// New builds a GigaChat chat client, applying default URLs, scope and model; it
-// returns an error wrapping core.ErrInvalidConfig when Credentials is empty or
-// ContextTokens is negative.
-func New(cfg Config) (*Client, error) {
-	if cfg.BaseURL == "" {
-		cfg.BaseURL = DefaultBaseURL
-	}
-	if cfg.AuthURL == "" {
-		cfg.AuthURL = DefaultAuthURL
+// New builds a GigaChat model.
+func New(cfg Config) (*Model, error) {
+	if cfg.AuthKey == "" {
+		return nil, fmt.Errorf("gigachat: auth key is required")
 	}
 	if cfg.Scope == "" {
-		cfg.Scope = DefaultScope
+		cfg.Scope = defaultScope
+	}
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = defaultBaseURL
+	}
+	cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/")
+	if cfg.OAuthURL == "" {
+		cfg.OAuthURL = defaultOAuth
 	}
 	if cfg.Model == "" {
-		cfg.Model = DefaultModel
+		cfg.Model = defaultModel
 	}
-	if cfg.Credentials == "" {
-		return nil, fmt.Errorf("gigachat: Credentials is required: %w", core.ErrInvalidConfig)
+	if cfg.HTTPClient == nil {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		if cfg.InsecureTLS {
+			// #nosec G402 -- explicit opt-in for environments without the CA.
+			transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		}
+		cfg.HTTPClient = &http.Client{Timeout: 60 * time.Second, Transport: transport}
 	}
-	if cfg.ContextTokens < 0 {
-		return nil, fmt.Errorf("gigachat: ContextTokens must not be negative, got %d: %w", cfg.ContextTokens, core.ErrInvalidConfig)
-	}
-	hc := httpjson.Client(cfg.HTTPClient)
-	return &Client{
-		cfg: cfg,
-		hc:  hc,
-		ts:  &oauth.TokenSource{AuthURL: cfg.AuthURL, Credentials: cfg.Credentials, Scope: cfg.Scope, HTTPClient: hc},
-	}, nil
+	return &Model{cfg: cfg, client: cfg.HTTPClient}, nil
 }
 
-// Model returns the configured GigaChat model name.
-func (c *Client) Model() string { return c.cfg.Model }
-
-// ContextTokens returns the configured context window in tokens.
-func (c *Client) ContextTokens() int { return c.cfg.ContextTokens }
-
-// SupportsNativeSchema reports false: GigaChat has no native schema field, so
-// callers inline the schema.
-func (c *Client) SupportsNativeSchema() bool { return false }
-
-// Chat performs one non-streaming GigaChat request: tools are sent as
-// functions, and an empty choices list yields an error wrapping
-// core.ErrProvider.
-func (c *Client) Chat(ctx context.Context, req model.Request) (model.Response, error) {
-	token, err := c.ts.Token(ctx)
+// Chat sends one request to GigaChat. It retries 429 and 5xx with a bounded
+// backoff, and re-authenticates once on 401.
+func (m *Model) Chat(ctx context.Context, req gobellim.Request) (gobellim.Response, error) {
+	body, err := m.encode(req)
 	if err != nil {
-		return model.Response{}, err
+		return gobellim.Response{}, err
 	}
-
-	msgs, native := model.SchemaPlan(req)
-
-	body := gcRequest{
-		Model:       c.cfg.Model,
-		Temperature: req.Temperature,
-		MaxTokens:   req.MaxTokens,
-	}
-	for _, m := range msgs {
-		role := string(m.Role)
-		if m.Role == model.RoleTool {
-			role = "function"
-		}
-		content := m.Content
-		if m.Role == model.RoleTool && !json.Valid([]byte(content)) {
-			// GigaChat parses a function result as JSON. A spotlighted tool result is
-			// plain text wrapped in <untrusted-data>, so keep the wrapper and put it
-			// in a JSON envelope: the provider accepts it and the model still sees
-			// the spotlit text.
-			wrapped, err := json.Marshal(map[string]string{"result": content})
-			if err != nil {
-				return model.Response{}, fmt.Errorf("gigachat: encode function result: %w: %w", err, core.ErrProvider)
-			}
-			content = string(wrapped)
-		}
-		gm := gcMessage{Role: role, Content: content, Name: m.Name}
-		if m.Role == model.RoleAssistant && len(m.ToolCalls) > 0 {
-			// GigaChat's wire format carries one function_call per message, so a
-			// parallel call cannot be replayed faithfully: fail instead of dropping
-			// the extra calls while their results stay in the conversation.
-			if len(m.ToolCalls) > 1 {
-				return model.Response{}, fmt.Errorf("gigachat: assistant message carries %d tool calls, the provider supports one: %w", len(m.ToolCalls), core.ErrProvider)
-			}
-			tc := m.ToolCalls[0]
-			gm.FunctionCall = &gcFunctionCall{Name: tc.Name, Arguments: model.RawObject(tc.Args)}
-		}
-		body.Messages = append(body.Messages, gm)
-	}
-	if req.ToolChoice != "none" {
-		for _, t := range req.Tools {
-			body.Functions = append(body.Functions, gcFunction{Name: t.Name, Description: t.Description, Parameters: t.Schema})
-		}
-		switch {
-		case native:
-			body.Functions = append(body.Functions, gcFunction{Name: structuredFunctionName, Description: "Return the structured result.", Parameters: req.JSONSchema})
-			body.FunctionCall = map[string]string{"name": structuredFunctionName}
-		case req.ToolChoice == "" || req.ToolChoice == "auto":
-			if len(body.Functions) > 0 {
-				body.FunctionCall = "auto"
-			}
-		case req.ToolChoice == "required":
-			return model.Response{}, fmt.Errorf("gigachat: ToolChoice %q is not supported by the provider: %w", req.ToolChoice, core.ErrProvider)
-		default:
-			// A named tool is a forced call, which GigaChat expresses as an object.
-			if !offersTool(req.Tools, req.ToolChoice) {
-				return model.Response{}, fmt.Errorf("gigachat: ToolChoice %q names a tool that is not offered: %w", req.ToolChoice, core.ErrInvalidArgs)
-			}
-			body.FunctionCall = map[string]string{"name": req.ToolChoice}
-		}
-	}
-
-	headers := map[string]string{
-		"Authorization": "Bearer " + token,
-		"Accept":        "application/json",
-	}
-	outBody, err := model.ApplyProviderOptions(req, body)
+	token, err := m.accessToken(ctx)
 	if err != nil {
-		return model.Response{}, err
+		return gobellim.Response{}, err
 	}
-
-	var out gcResponse
-	if err := model.DoJSON(ctx, c.hc, http.MethodPost, httpjson.JoinURL(c.cfg.BaseURL, "/v1/chat/completions"), headers, outBody, &out); err != nil {
-		return model.Response{}, err
+	resp, err := m.chatWithRetry(ctx, token, body)
+	if err != nil {
+		return gobellim.Response{}, err
 	}
-	if len(out.Choices) == 0 {
-		return model.Response{}, fmt.Errorf("gigachat: empty choices: %w", core.ErrProvider)
-	}
-	choice := out.Choices[0].Message
-	msg := model.Message{Role: model.RoleAssistant, Content: choice.Content}
-	if choice.FunctionCall != nil {
-		args, err := json.Marshal(choice.FunctionCall.Arguments)
+	if resp.StatusCode == http.StatusUnauthorized {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+		_ = resp.Body.Close()
+		m.invalidate()
+		token, err = m.accessToken(ctx)
 		if err != nil {
-			return model.Response{}, fmt.Errorf("gigachat: encode tool args: %w", err)
+			return gobellim.Response{}, err
 		}
-		if choice.FunctionCall.Name == structuredFunctionName {
-			msg.Content = string(args)
-		} else {
-			msg.ToolCalls = append(msg.ToolCalls, model.ToolCall{
-				ID:   fmt.Sprintf("gc-%s", choice.FunctionCall.Name),
-				Name: choice.FunctionCall.Name,
-				Args: string(args),
-			})
+		resp, err = m.chatWithRetry(ctx, token, body)
+		if err != nil {
+			return gobellim.Response{}, err
 		}
 	}
-	return model.Response{
-		Message:      msg,
-		Model:        out.Model,
-		Usage:        model.Usage{PromptTokens: out.Usage.PromptTokens, CompletionTokens: out.Usage.CompletionTokens, TotalTokens: out.Usage.TotalTokens},
-		FinishReason: gcFinishReason(out.Choices[0].FinishReason, choice.FunctionCall),
+	return m.decode(resp)
+}
+
+// chatWithRetry retries the rate limit and transient server errors the same
+// way the provider documents: a few attempts with an exponential delay. The
+// last response is returned even if it is still an error, so decode can report
+// it.
+func (m *Model) chatWithRetry(ctx context.Context, token string, body []byte) (*http.Response, error) {
+	const maxAttempts = 3
+	delay := 500 * time.Millisecond
+	for attempt := 0; ; attempt++ {
+		resp, err := m.doChat(ctx, token, body)
+		if err != nil {
+			return nil, err
+		}
+		if attempt == maxAttempts-1 || (resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode < 500) {
+			return resp, nil
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+		_ = resp.Body.Close()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
+		delay *= 2
+	}
+}
+
+func (m *Model) doChat(ctx context.Context, token string, body []byte) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.cfg.BaseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("gigachat: build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	resp, err := m.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("gigachat: chat: %w", err)
+	}
+	return resp, nil
+}
+
+func (m *Model) decode(resp *http.Response) (gobellim.Response, error) {
+	defer func() { _ = resp.Body.Close() }()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return gobellim.Response{}, fmt.Errorf("gigachat: read response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return gobellim.Response{}, fmt.Errorf("gigachat: chat returned %s: %s", resp.Status, truncate(data))
+	}
+	var cr chatResponse
+	if err := json.Unmarshal(data, &cr); err != nil {
+		return gobellim.Response{}, fmt.Errorf("gigachat: decode response: %w", err)
+	}
+	if len(cr.Choices) == 0 {
+		return gobellim.Response{}, fmt.Errorf("gigachat: response has no choices")
+	}
+	choice := cr.Choices[0]
+	msg := gobellim.Message{Role: gobellim.RoleAssistant, Content: stripFences(choice.Message.Content)}
+	finish := mapFinish(choice.FinishReason)
+	if fc := choice.Message.FunctionCall; fc != nil && fc.Name != "" {
+		msg.ToolCalls = []gobellim.ToolCall{{ID: newID("call_"), Name: fc.Name, Args: fc.Arguments}}
+		finish = gobellim.FinishToolCalls
+	}
+	return gobellim.Response{
+		Message: msg,
+		Usage: gobellim.Usage{
+			PromptTokens:     cr.Usage.PromptTokens,
+			CompletionTokens: cr.Usage.CompletionTokens,
+			TotalTokens:      cr.Usage.TotalTokens,
+		},
+		Model:        cr.Model,
+		FinishReason: finish,
 	}, nil
 }
 
-const structuredFunctionName = "structured_output"
-
-func offersTool(tools []model.ToolSpec, name string) bool {
-	for _, t := range tools {
-		if t.Name == name {
-			return true
-		}
+func (m *Model) accessToken(ctx context.Context) (string, error) {
+	if token := m.cachedToken(); token != "" {
+		return token, nil
 	}
-	return false
+	// One refresh at a time: a burst of chats must not start a burst of OAuth
+	// exchanges.
+	m.refresh.Lock()
+	defer m.refresh.Unlock()
+	if token := m.cachedToken(); token != "" {
+		return token, nil
+	}
+
+	form := url.Values{"scope": {m.cfg.Scope}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.cfg.OAuthURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", fmt.Errorf("gigachat: build oauth request: %w", err)
+	}
+	req.Header.Set("Authorization", "Basic "+m.basicAuth())
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("RqUID", newUUID())
+
+	resp, err := m.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("gigachat: oauth: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", fmt.Errorf("gigachat: read oauth response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("gigachat: oauth returned %s: %s", resp.Status, truncate(data))
+	}
+	var tr tokenResponse
+	if err := json.Unmarshal(data, &tr); err != nil {
+		return "", fmt.Errorf("gigachat: decode oauth response: %w", err)
+	}
+	if tr.AccessToken == "" {
+		return "", fmt.Errorf("gigachat: oauth response has no access token")
+	}
+	expires := time.UnixMilli(tr.ExpiresAt).Add(-time.Minute)
+	if tr.ExpiresAt == 0 {
+		expires = time.Now().Add(25 * time.Minute)
+	}
+	m.mu.Lock()
+	m.token = tr.AccessToken
+	m.expires = expires
+	m.mu.Unlock()
+	return tr.AccessToken, nil
 }
 
-type gcFunction struct {
+func (m *Model) cachedToken() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.token != "" && time.Now().Before(m.expires) {
+		return m.token
+	}
+	return ""
+}
+
+func (m *Model) invalidate() {
+	m.mu.Lock()
+	m.token = ""
+	m.expires = time.Time{}
+	m.mu.Unlock()
+}
+
+func (m *Model) basicAuth() string {
+	if strings.Contains(m.cfg.AuthKey, ":") {
+		return base64.StdEncoding.EncodeToString([]byte(m.cfg.AuthKey))
+	}
+	return m.cfg.AuthKey
+}
+
+func (m *Model) encode(req gobellim.Request) ([]byte, error) {
+	schema := ""
+	if len(req.JSONSchema) > 0 {
+		schema = "\n\nReturn only a JSON object matching this schema. Do not wrap it in markdown.\n" + string(req.JSONSchema)
+	}
+	messages := make([]chatMessage, 0, len(req.Messages))
+	schemaAdded := false
+	for _, msg := range req.Messages {
+		cm := chatMessage{Role: string(msg.Role), Content: msg.Content, Name: msg.Name}
+		switch msg.Role {
+		case gobellim.RoleTool:
+			cm.Role = "function"
+		case gobellim.RoleAssistant:
+			if len(msg.ToolCalls) > 0 {
+				tc := msg.ToolCalls[0]
+				cm.FunctionCall = &functionCall{Name: tc.Name, Arguments: tc.Args}
+			}
+		case gobellim.RoleSystem:
+			if schema != "" && !schemaAdded {
+				cm.Content += schema
+				schemaAdded = true
+			}
+		}
+		messages = append(messages, cm)
+	}
+	if schema != "" && !schemaAdded {
+		messages = append([]chatMessage{{Role: "system", Content: strings.TrimSpace(schema)}}, messages...)
+	}
+
+	out := chatRequest{
+		Model:     m.cfg.Model,
+		Messages:  messages,
+		MaxTokens: req.MaxTokens,
+	}
+	for _, tool := range req.Tools {
+		params := tool.Schema
+		if len(params) == 0 {
+			params = json.RawMessage(`{"type":"object"}`)
+		}
+		out.Functions = append(out.Functions, function{
+			Name:        tool.Name,
+			Description: tool.Description,
+			Parameters:  params,
+		})
+	}
+	if len(out.Functions) > 0 {
+		out.FunctionCall = "auto"
+	}
+	body, err := json.Marshal(out)
+	if err != nil {
+		return nil, fmt.Errorf("gigachat: encode request: %w", err)
+	}
+	return body, nil
+}
+
+type chatRequest struct {
+	Model        string        `json:"model"`
+	Messages     []chatMessage `json:"messages"`
+	Functions    []function    `json:"functions,omitempty"`
+	FunctionCall any           `json:"function_call,omitempty"`
+	MaxTokens    int           `json:"max_tokens,omitempty"`
+}
+
+type chatMessage struct {
+	Role         string        `json:"role"`
+	Content      string        `json:"content,omitempty"`
+	Name         string        `json:"name,omitempty"`
+	FunctionCall *functionCall `json:"function_call,omitempty"`
+}
+
+type functionCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+type function struct {
 	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Parameters  json.RawMessage `json:"parameters"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
 }
 
-type gcFunctionCall struct {
-	Name      string         `json:"name"`
-	Arguments map[string]any `json:"arguments"`
-}
-
-type gcMessage struct {
-	Role         string          `json:"role"`
-	Content      string          `json:"content"`
-	Name         string          `json:"name,omitempty"`
-	FunctionCall *gcFunctionCall `json:"function_call,omitempty"`
-}
-
-type gcRequest struct {
-	Model        string       `json:"model"`
-	Messages     []gcMessage  `json:"messages"`
-	Functions    []gcFunction `json:"functions,omitempty"`
-	FunctionCall any          `json:"function_call,omitempty"`
-	Temperature  *float64     `json:"temperature,omitempty"`
-	MaxTokens    int          `json:"max_tokens,omitempty"`
-}
-
-type gcResponse struct {
-	Model   string `json:"model"`
+type chatResponse struct {
 	Choices []struct {
 		Message struct {
-			Role         string          `json:"role"`
-			Content      string          `json:"content"`
-			FunctionCall *gcFunctionCall `json:"function_call"`
+			Role         string        `json:"role"`
+			Content      string        `json:"content"`
+			FunctionCall *functionCall `json:"function_call"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -253,14 +374,62 @@ type gcResponse struct {
 		CompletionTokens int `json:"completion_tokens"`
 		TotalTokens      int `json:"total_tokens"`
 	} `json:"usage"`
+	Model string `json:"model"`
 }
 
-func gcFinishReason(reason string, call *gcFunctionCall) model.FinishReason {
-	if reason != "" {
-		return model.ParseFinishReason(reason)
+type tokenResponse struct {
+	AccessToken string `json:"access_token"`
+	ExpiresAt   int64  `json:"expires_at"`
+}
+
+func mapFinish(reason string) gobellim.FinishReason {
+	switch strings.ToLower(reason) {
+	case "stop":
+		return gobellim.FinishStop
+	case "function_call", "tool_calls":
+		return gobellim.FinishToolCalls
+	case "length":
+		return gobellim.FinishLength
+	default:
+		return gobellim.FinishOther
 	}
-	if call != nil {
-		return model.FinishToolCalls
+}
+
+func truncate(b []byte) string {
+	s := strings.ReplaceAll(string(b), "\n", " ")
+	if len(s) > 256 {
+		return s[:256] + "..."
 	}
-	return model.FinishStop
+	return s
+}
+
+// stripFences removes a markdown code fence around a JSON answer. GigaChat
+// often wraps JSON in ```json even when asked not to; the core decoder stays
+// strict, so normalization belongs to the adapter.
+func stripFences(s string) string {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "```") {
+		return s
+	}
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[i+1:]
+	}
+	s = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(s), "```"))
+	return s
+}
+
+func newID(prefix string) string {
+	var b [12]byte
+	_, _ = rand.Read(b[:])
+	return prefix + hex.EncodeToString(b[:])
+}
+
+// newUUID returns a version 4 UUID for the RqUID header. GigaChat requires the
+// header shape, so rand.Text is not an alternative here.
+func newUUID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }

@@ -1,7 +1,0 @@
-version: 1
-default: deny
-roles:
-  support:
-    permissions:
-      - search
-unexpected: true
