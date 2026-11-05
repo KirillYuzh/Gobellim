@@ -93,7 +93,7 @@ flowchart LR
     P --> T["Task: typed input<br/>labels, handles, limits"]
     T --> M["model proposes<br/>output or tool call"]
     M --> G{"Gate"}
-    G -->|"tenant · RBAC/ACL<br/>grounding · Validate · effect"| A["Allow"]
+    G -->|"tenant · RBAC/ACL · grounding · Validate · effect"| A["Allow"]
     G --> D["Deny"]
     G --> E["Escalate"]
     A --> X["your tool handler"]

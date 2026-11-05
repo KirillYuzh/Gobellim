@@ -92,7 +92,7 @@ flowchart LR
     P --> T["Task: типизированный вход<br/>labels, handles, лимиты"]
     T --> M["модель предлагает<br/>ответ или tool call"]
     M --> G{"Gate"}
-    G -->|"tenant · RBAC/ACL<br/>grounding · Validate · effect"| A["Allow"]
+    G -->|"tenant · RBAC/ACL · grounding · Validate · effect"| A["Allow"]
     G --> D["Deny"]
     G --> E["Escalate"]
     A --> X["ваш tool handler"]
