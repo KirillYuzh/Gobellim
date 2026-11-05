@@ -18,11 +18,12 @@ type Execer interface {
 }
 
 // Store keeps continuation nonces in one table. Exactly one replica can claim a
-// nonce; the loser is refused. Expired rows are removed by Prune.
+// nonce; the loser gets (false, nil). Expired rows are removed by Prune.
 type Store struct {
 	db          Execer
 	table       string
 	placeholder func(int) string
+	conflict    string
 }
 
 // Option configures a Store.
@@ -51,12 +52,24 @@ func Placeholder(fn func(int) string) Option {
 	}
 }
 
+// ConflictClause overrides the clause appended to the INSERT. The default
+// "ON CONFLICT DO NOTHING" fits PostgreSQL and SQLite; MySQL uses
+// "ON DUPLICATE KEY UPDATE nonce = nonce". An empty clause makes a duplicate
+// nonce an error instead of a lost claim.
+func ConflictClause(sql string) Option {
+	return func(s *Store) error {
+		s.conflict = sql
+		return nil
+	}
+}
+
 // New builds a Store over db.
 func New(db Execer, opts ...Option) (*Store, error) {
 	s := &Store{
 		db:          db,
 		table:       "gobellim_claims",
 		placeholder: func(int) string { return "?" },
+		conflict:    "ON CONFLICT DO NOTHING",
 	}
 	for _, o := range opts {
 		if err := o(s); err != nil {
@@ -79,17 +92,30 @@ func (s *Store) Ensure(ctx context.Context) error {
 	return err
 }
 
-// Claim inserts the nonce. A duplicate nonce is reported as an error, which
-// the workflow treats as a failed claim: fail-closed.
+// Claim inserts the nonce and reports whether this caller won the race. A
+// duplicate nonce is (false, nil); a database error is (false, err), which the
+// workflow treats as a failed claim.
 func (s *Store) Claim(ctx context.Context, nonce string, expiresAt time.Time) (bool, error) {
 	query := fmt.Sprintf(
 		"INSERT INTO %s (nonce, expires_at) VALUES (%s, %s)",
 		s.table, s.placeholder(1), s.placeholder(2),
 	)
-	if _, err := s.db.ExecContext(ctx, query, nonce, expiresAt); err != nil {
+	if s.conflict != "" {
+		query += " " + s.conflict
+	}
+	res, err := s.db.ExecContext(ctx, query, nonce, expiresAt)
+	if err != nil {
 		return false, fmt.Errorf("sqlstore: claim %s: %w", nonce, err)
 	}
-	return true, nil
+	if res == nil {
+		return false, fmt.Errorf("sqlstore: claim %s: driver returned no result", nonce)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		// An unverifiable claim must not execute the action.
+		return false, fmt.Errorf("sqlstore: claim %s: rows affected: %w", nonce, err)
+	}
+	return n > 0, nil
 }
 
 // Prune removes nonces that expired before the given time. A zero time means

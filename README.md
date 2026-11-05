@@ -82,7 +82,7 @@ if err != nil {
 	return err
 }
 
-task, err := gobellim.NewTask(engine, gobellim.TaskConfig[TicketInput, TriageOutput]{
+task, err := gobellim.NewTask[TicketInput, TriageOutput](engine, gobellim.TaskConfig{
 	Name:        "ticket.triage",
 	Instruction: "Classify the ticket and propose a reply.",
 	Tools:       []gobellim.ToolDef{refund},
@@ -96,7 +96,10 @@ if err != nil {
 	return err
 }
 if res.Status == gobellim.TaskApprovalRequired {
-	// res.Approval is the card. The action was not executed.
+	// res.Pending is the escalated action: card, resolved args, digest, expiry.
+	// Nothing was executed. After a human approves it:
+	//
+	//   out, rec, err := task.ExecuteApproved(ctx, requester, res.Pending)
 }
 ```
 
@@ -127,8 +130,19 @@ On top of the table:
 - a business `Validate` error is `Deny`;
 - the model's own claims about permissions never matter.
 
-A `Task` returns `TaskApprovalRequired` and a card for an escalated action. The
-action is not executed. For resumable human approval, use `flow`.
+**How an argument becomes `Validated`.** A handle-backed argument whose
+business meaning the application confirmed is `Validated`: the runtime minted
+the handle for this run, and `Tool.Validate` passed. Free model text stays
+`Derived`. A tool without `Validate` never gets the promotion, so a write still
+needs a human. This is the only path from model input to an unattended
+`Write`/`Egress`, and it still requires RBAC/ACL.
+
+A `Task` returns `TaskApprovalRequired` and a `PendingAction` for an escalated
+action. The action is not executed. `Task.ExecuteApproved` runs it after a human
+approves: the Gate re-checks tenant, RBAC/ACL, business validation and the
+digest of the exact arguments the human saw. For a resumable approval with a
+sealed token, TTL, four-eyes and replay protection, use `flow` and call
+`ExecuteApproved` in the step after `Approve`.
 
 ## Schema by tags
 
@@ -157,6 +171,11 @@ does not match `encoding/json` would lie to the model.
 The model-facing JSON Schema is generated from these tags, but the runtime
 decodes and validates the arguments again. The schema is not a security
 boundary.
+
+The same `sensitivity` tags apply to a tool **result** before it re-enters the
+model context: a `secret` field becomes a handle and a `pii` field is masked.
+A result struct is ordinary Go, so `time.Time` and `json.Marshaler` values are
+passed through unchanged.
 
 ## Grounding is a handle
 
@@ -209,7 +228,11 @@ wf.Step("prepare", prepareRefund).
 		Card:             refundApprovalCard,
 		Resource:         refundResource,
 	}).
-	Step("execute", executeRefund)
+	Step("execute", func(ctx context.Context, p gobellim.Principal, s *RefundCase) error {
+		// p is the requester: Resume re-runs the remaining steps as them.
+		_, _, err := task.ExecuteApproved(ctx, p, &s.Pending)
+		return err
+	})
 
 res, err := wf.Run(ctx, requester, state)
 // res.Status == flow.Suspended
@@ -218,10 +241,12 @@ res, err := wf.Run(ctx, requester, state)
 out, err := wf.Resume(ctx, approver, res.Suspension.Token, flow.Approve)
 ```
 
-Resume checks the AEAD, tenant binding, expiry, workflow version, approver
-permission, four-eyes, the requester's action permission, the action digest and
-an optional atomic claim. A rejected approval, an expired token, a revoked
-permission or a changed action never executes the step.
+Resume checks the AEAD, tenant binding, expiry, workflow version, the step id,
+approver permission, four-eyes, the requester's action permission, the action
+digest and an atomic claim. A rejected approval, an expired token, a revoked
+permission or a changed action never executes the step. Without `WithStore` the
+flow uses a process-local `MemStore`, so a token cannot be resumed twice inside
+one replica; a shared store is needed between replicas.
 
 `flow.Store` has one method: `Claim`. The SQL adapter also exposes `Prune` for
 expired nonces. The step after `Approve` is the action itself. Make it
@@ -268,10 +293,17 @@ Guaranteed when the application integrates correctly:
 - a `ground` argument cannot be satisfied by a raw model string;
 - free model text does not become trusted through a JSON schema or a
   paraphrase;
-- an approval is bound to the tool and arguments it was shown;
-- audit events carry labels and digests, not prompt text or secrets.
+- an approval is bound to the tool and arguments it was shown, and
+  `ExecuteApproved` re-runs the Gate before the handler;
+- `sensitivity` on a tool result keeps a secret out of the model context;
+- audit events carry labels and digests, not prompt text or secrets;
+- an unfinished run is audited as `task.failed`, never as `task.completed`.
 
 Not guaranteed:
+
+- exactly-once for `Task.ExecuteApproved`: it is a single call, the application
+  owns deduplication; `flow` provides a single-use claim;
+- redaction inside a map or a self-marshalling type in a tool result;
 
 - that the model produces no harmful or false text;
 - exact data-flow tracking inside the model;

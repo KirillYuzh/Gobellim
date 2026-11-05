@@ -57,25 +57,13 @@ const (
 	FinishOther FinishReason = "other"
 )
 
-// SchemaMode selects how a Request's JSONSchema is conveyed to the provider.
-type SchemaMode int
-
-const (
-	// SchemaNative asks the provider to enforce the schema natively.
-	SchemaNative SchemaMode = iota
-	// SchemaInline appends schema instructions to the last user message.
-	SchemaInline
-)
-
 // Request is one chat request. It carries no labels: provenance lives in the
 // runtime, not in the provider request.
 type Request struct {
-	Messages    []Message
-	Tools       []ToolSpec
-	JSONSchema  json.RawMessage
-	SchemaMode  SchemaMode
-	MaxTokens   int
-	Temperature *float64
+	Messages   []Message
+	Tools      []ToolSpec
+	JSONSchema json.RawMessage
+	MaxTokens  int
 }
 
 // Usage reports token counts for one model call.

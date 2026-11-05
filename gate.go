@@ -7,29 +7,47 @@ import (
 	"time"
 )
 
-// decide is the Gate. It is the only place that turns an action into Allow,
-// Deny or Escalate. Every check is fail-closed.
-func (e *Engine) decide(ctx context.Context, p Principal, c prepared) Decision {
+// check runs the checks that every action needs, whether or not a human
+// approved it: tenant binding, RBAC/ACL, grounding and business validation.
+// A nil result means the checks passed. Every check is fail-closed.
+//
+// requireGrounding is false only for an approved action: its arguments were
+// already resolved and are bound to the digest the human saw, so there is no
+// handle left to check.
+func (e *Engine) check(ctx context.Context, p Principal, c prepared, requireGrounding bool) *Decision {
 	resource := c.resource
 	if resource.TenantID == "" {
 		resource.TenantID = p.Tenant
 	}
 	if resource.TenantID != p.Tenant {
-		return Decision{Kind: Deny, RuleIDs: []string{"tenant-mismatch"}, Reason: "resource is bound to another tenant"}
+		return &Decision{Kind: Deny, RuleIDs: []string{"tenant-mismatch"}, Reason: "resource is bound to another tenant"}
 	}
 	ok, err := e.authz.Allowed(ctx, p, c.spec.permission, resource)
 	switch {
 	case err != nil:
-		return Decision{Kind: Deny, RuleIDs: []string{"authz-error"}, Reason: "authorizer failed"}
+		return &Decision{Kind: Deny, RuleIDs: []string{"authz-error"}, Reason: "authorizer failed"}
 	case !ok:
-		return Decision{Kind: Deny, RuleIDs: []string{"rbac-acl"}, Reason: "permission denied"}
+		return &Decision{Kind: Deny, RuleIDs: []string{"rbac-acl"}, Reason: "permission denied"}
 	}
-	if !c.grounded {
-		return Decision{Kind: Deny, RuleIDs: []string{"ungrounded"}, Reason: "argument has no trusted origin"}
+	if requireGrounding && !c.grounded {
+		return &Decision{Kind: Deny, RuleIDs: []string{"ungrounded"}, Reason: "argument has no trusted origin"}
 	}
 	if err := c.tool.validate(ctx, p, c.args); err != nil {
-		return Decision{Kind: Deny, RuleIDs: []string{"business-validate"}, Reason: "business validation failed"}
+		return &Decision{Kind: Deny, RuleIDs: []string{"business-validate"}, Reason: "business validation failed"}
 	}
+	return nil
+}
+
+// decide is the Gate. It is the only place that turns an action into Allow,
+// Deny or Escalate. Every check is fail-closed.
+func (e *Engine) decide(ctx context.Context, p Principal, c *prepared) Decision {
+	if d := e.check(ctx, p, *c, true); d != nil {
+		return *d
+	}
+	// The business validator passed, so a handle-backed argument is now
+	// promoted to Validated: its origin was minted by the runtime and the
+	// application confirmed the business meaning.
+	c.worst = c.effectiveWorst()
 
 	switch c.spec.effect {
 	case EffectRead:
@@ -52,6 +70,16 @@ func (e *Engine) decide(ctx context.Context, p Principal, c prepared) Decision {
 	default:
 		return Decision{Kind: Deny, RuleIDs: []string{"unknown-effect"}, Reason: "unknown effect"}
 	}
+}
+
+// decideApproved re-runs every check except the effect ceiling. A human
+// approval of this exact digest replaces the ceiling; it does not replace
+// tenant binding, RBAC/ACL, grounding or business validation.
+func (e *Engine) decideApproved(ctx context.Context, p Principal, c prepared) Decision {
+	if d := e.check(ctx, p, c, false); d != nil {
+		return *d
+	}
+	return Decision{Kind: Allow, RuleIDs: []string{"approved"}, Reason: "a human approved this action"}
 }
 
 func (e *Engine) execute(ctx context.Context, p Principal, c prepared) (any, error) {
@@ -93,7 +121,7 @@ func (e *Engine) card(runID, task string, c prepared, d Decision) *ApprovalCard 
 		Reason:             d.Reason,
 		Provenance:         prov,
 		RequiredPermission: c.spec.permission,
-		ExpiresAt:          timeNow().Add(24 * time.Hour),
+		ExpiresAt:          time.Now().Add(24 * time.Hour),
 	}.normalize()
 	return &card
 }

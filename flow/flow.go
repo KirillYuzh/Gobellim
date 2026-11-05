@@ -29,6 +29,9 @@ var (
 	ErrUnauthorized = errors.New("flow: approver is not authorized")
 	// ErrContinuationTooLarge signals a sealed state above the configured cap.
 	ErrContinuationTooLarge = errors.New("flow: continuation exceeds the size limit")
+	// ErrDecision signals an unknown approval decision. The zero Decision is
+	// never treated as an approval.
+	ErrDecision = errors.New("flow: unknown approval decision")
 )
 
 // Status is the outcome of a Run or Resume.
@@ -45,12 +48,8 @@ const (
 	Rejected
 	// Expired means the approval expired.
 	Expired
-	// Cancelled means the flow was cancelled.
-	Cancelled
 	// Failed means a step or a check failed.
 	Failed
-	// Compensating means compensation is running.
-	Compensating
 )
 
 // String returns the tag name of the status.
@@ -66,12 +65,8 @@ func (s Status) String() string {
 		return "rejected"
 	case Expired:
 		return "expired"
-	case Cancelled:
-		return "cancelled"
 	case Failed:
 		return "failed"
-	case Compensating:
-		return "compensating"
 	default:
 		return "unknown"
 	}
@@ -82,8 +77,11 @@ func (s Status) String() string {
 type Decision uint8
 
 const (
+	// DecisionUnknown is the zero value. It is never a valid answer and Resume
+	// rejects it, so an uninitialised variable cannot approve an action.
+	DecisionUnknown Decision = iota
 	// Approve lets the workflow continue.
-	Approve Decision = iota
+	Approve
 	// Reject terminates the workflow without executing the action.
 	Reject
 )
@@ -101,11 +99,11 @@ type Result[S any] struct {
 	Status     Status
 	State      S
 	Suspension *Suspension
-	Error      error
 }
 
 type config struct {
 	version       int
+	policyVersion string
 	authz         gobellim.Authorizer
 	audit         gobellim.Sink
 	sealer        *Sealer
@@ -121,6 +119,9 @@ type Option func(*config)
 
 // Version pins the workflow version checked on resume.
 func Version(v int) Option { return func(c *config) { c.version = v } }
+
+// WithPolicyVersion stamps audit events with the active policy version.
+func WithPolicyVersion(v string) Option { return func(c *config) { c.policyVersion = v } }
 
 // WithAuthorizer sets the RBAC/ACL adapter. It is required.
 func WithAuthorizer(a gobellim.Authorizer) Option { return func(c *config) { c.authz = a } }
@@ -205,6 +206,11 @@ func New[S any](name string, opts ...Option) (*Flow[S], error) {
 	}
 	if cfg.audit == nil {
 		cfg.audit = nopSink{}
+	}
+	if cfg.store == nil {
+		// A per-process store is the safe default: without it a token could be
+		// resumed an unlimited number of times inside one replica.
+		cfg.store = NewMemStore()
 	}
 	if cfg.now == nil {
 		cfg.now = time.Now
@@ -293,10 +299,10 @@ func (f *Flow[S]) Approve(id string, cfg ApproveConfig[S]) *Flow[S] {
 // boundary and Done when every step completed.
 func (f *Flow[S]) Run(ctx context.Context, p gobellim.Principal, s S) (Result[S], error) {
 	if f.err != nil {
-		return Result[S]{Status: Failed, State: s, Error: f.err}, f.err
+		return Result[S]{Status: Failed, State: s}, f.err
 	}
 	if err := p.Validate(); err != nil {
-		return Result[S]{Status: Failed, State: s, Error: err}, err
+		return Result[S]{Status: Failed, State: s}, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, f.cfg.maxWallTime)
 	defer cancel()
@@ -313,7 +319,7 @@ func (f *Flow[S]) runFrom(ctx context.Context, p gobellim.Principal, s S, from i
 					Kind: gobellim.EventWorkflowFailed, Flow: f.name, Step: st.id,
 					PrincipalID: p.UserID, Tenant: p.Tenant, Error: "step-failed",
 				})
-				return Result[S]{Status: Failed, State: s, Error: err}, err
+				return Result[S]{Status: Failed, State: s}, err
 			}
 			continue
 		}
@@ -326,7 +332,7 @@ func (f *Flow[S]) runFrom(ctx context.Context, p gobellim.Principal, s S, from i
 					Kind: gobellim.EventWorkflowFailed, Flow: f.name, Step: st.id,
 					PrincipalID: p.UserID, Tenant: p.Tenant, Error: "when-failed",
 				})
-				return Result[S]{Status: Failed, State: s, Error: err}, err
+				return Result[S]{Status: Failed, State: s}, err
 			}
 			needed = ok
 		}
@@ -340,7 +346,7 @@ func (f *Flow[S]) runFrom(ctx context.Context, p gobellim.Principal, s S, from i
 				Kind: gobellim.EventWorkflowFailed, Flow: f.name, Step: st.id,
 				PrincipalID: p.UserID, Tenant: p.Tenant, Error: "card-failed",
 			})
-			return Result[S]{Status: Failed, State: s, Error: err}, err
+			return Result[S]{Status: Failed, State: s}, err
 		}
 		card.RunID = newID("r_")
 		card.Flow = f.name
@@ -354,7 +360,7 @@ func (f *Flow[S]) runFrom(ctx context.Context, p gobellim.Principal, s S, from i
 
 		state, err := json.Marshal(s)
 		if err != nil {
-			return Result[S]{Status: Failed, State: s, Error: err}, fmt.Errorf("flow: encode state: %w", err)
+			return Result[S]{Status: Failed, State: s}, fmt.Errorf("flow: encode state: %w", err)
 		}
 		cont := continuation{
 			V:           1,
@@ -371,15 +377,15 @@ func (f *Flow[S]) runFrom(ctx context.Context, p gobellim.Principal, s S, from i
 		}
 		plain, err := json.Marshal(cont)
 		if err != nil {
-			return Result[S]{Status: Failed, State: s, Error: err}, fmt.Errorf("flow: encode continuation: %w", err)
+			return Result[S]{Status: Failed, State: s}, fmt.Errorf("flow: encode continuation: %w", err)
 		}
 		token, err := f.cfg.sealer.Seal(plain, f.aad(p.Tenant))
 		if err != nil {
-			return Result[S]{Status: Failed, State: s, Error: err}, err
+			return Result[S]{Status: Failed, State: s}, err
 		}
 		if len(token) > f.cfg.maxTokenBytes {
 			err := fmt.Errorf("%w: %d bytes, cap is %d", ErrContinuationTooLarge, len(token), f.cfg.maxTokenBytes)
-			return Result[S]{Status: Failed, State: s, Error: err}, err
+			return Result[S]{Status: Failed, State: s}, err
 		}
 
 		f.emit(ctx, gobellim.Event{
@@ -457,11 +463,14 @@ func (f *Flow[S]) Resume(ctx context.Context, approver gobellim.Principal, token
 	if c.Step < 0 || c.Step >= len(f.steps) || f.steps[c.Step].approve == nil {
 		return zero, fmt.Errorf("%w: step %d is not an approval boundary", ErrFlowDrift, c.Step)
 	}
+	if f.steps[c.Step].id != c.StepID {
+		return zero, fmt.Errorf("%w: step %d is %q, token is %q", ErrFlowDrift, c.Step, f.steps[c.Step].id, c.StepID)
+	}
 	a := f.steps[c.Step].approve
 
 	resource, err := a.resource(ctx, c.Requester, state)
 	if err != nil {
-		return Result[S]{Status: Failed, State: state, Error: err}, err
+		return Result[S]{Status: Failed, State: state}, err
 	}
 	ok, err := f.cfg.authz.Allowed(ctx, approver, a.permission, resource)
 	if err != nil || !ok {
@@ -473,12 +482,16 @@ func (f *Flow[S]) Resume(ctx context.Context, approver gobellim.Principal, token
 			fmt.Errorf("%w: approver lacks %s", ErrUnauthorized, a.permission)
 	}
 
-	if d == Reject {
+	switch d {
+	case Reject:
 		f.emit(ctx, gobellim.Event{
 			Kind: gobellim.EventApprovalDenied, RunID: c.Card.RunID, Flow: f.name, Step: c.StepID,
 			PrincipalID: approver.UserID, Tenant: approver.Tenant,
 		})
 		return Result[S]{Status: Rejected, State: state}, nil
+	case Approve:
+	default:
+		return Result[S]{Status: Failed, State: state}, fmt.Errorf("%w: %d", ErrDecision, d)
 	}
 
 	if a.fourEyes && approver.UserID == c.Requester.UserID {
@@ -503,21 +516,19 @@ func (f *Flow[S]) Resume(ctx context.Context, approver gobellim.Principal, token
 	// or an application-level mutation of the pending action.
 	rebuilt, err := a.card(ctx, c.Requester, state)
 	if err != nil {
-		return Result[S]{Status: Failed, State: state, Error: err}, err
+		return Result[S]{Status: Failed, State: state}, err
 	}
 	if rebuilt.ActionDigest() != c.Card.ActionDigest() {
 		return Result[S]{Status: Failed, State: state},
 			fmt.Errorf("%w: pending action changed", ErrFlowDrift)
 	}
 
-	if f.cfg.store != nil {
-		claimed, err := f.cfg.store.Claim(ctx, c.Nonce, c.ExpiresAt)
-		if err != nil {
-			return Result[S]{Status: Failed, State: state}, fmt.Errorf("flow: store claim: %w", err)
-		}
-		if !claimed {
-			return Result[S]{Status: Failed, State: state}, ErrReplay
-		}
+	claimed, err := f.cfg.store.Claim(ctx, c.Nonce, c.ExpiresAt)
+	if err != nil {
+		return Result[S]{Status: Failed, State: state}, fmt.Errorf("flow: store claim: %w", err)
+	}
+	if !claimed {
+		return Result[S]{Status: Failed, State: state}, ErrReplay
 	}
 
 	f.emit(ctx, gobellim.Event{
@@ -548,6 +559,7 @@ func (f *Flow[S]) aad(tenant string) []byte {
 
 func (f *Flow[S]) emit(ctx context.Context, e gobellim.Event) {
 	e.Time = f.cfg.now()
+	e.PolicyVersion = f.cfg.policyVersion
 	f.cfg.audit.Emit(ctx, e)
 }
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	gobellim "github.com/KirillYuzh/Gobellim"
+	"github.com/KirillYuzh/Gobellim/testkit"
 )
 
 type refundState struct {
@@ -449,5 +450,200 @@ func TestMalformedToken(t *testing.T) {
 	f := newFlow(perms(defaultPerms()))
 	if _, err := f.Resume(context.Background(), approver("m-1"), "", Approve); !errors.Is(err, ErrContinuation) {
 		t.Fatalf("err = %v, want ErrContinuation", err)
+	}
+}
+
+func TestUnknownDecisionIsNotApproval(t *testing.T) {
+	f := newFlow(perms(defaultPerms()))
+	res, err := f.Run(context.Background(), requester(), refundState{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Decision(9)); !errors.Is(err, ErrDecision) {
+		t.Fatalf("err = %v, want ErrDecision", err)
+	}
+	if _, err := f.Resume(context.Background(), approver("m-1"), res.Suspension.Token, DecisionUnknown); !errors.Is(err, ErrDecision) {
+		t.Fatalf("zero decision approved an action: %v", err)
+	}
+}
+
+func TestDefaultStorePreventsReplay(t *testing.T) {
+	f := buildFlow(perms(defaultPerms()), mustSealer(), nil)
+	res, err := f.Run(context.Background(), requester(), refundState{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Approve); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Approve); !errors.Is(err, ErrReplay) {
+		t.Fatalf("err = %v, want ErrReplay", err)
+	}
+}
+
+func TestStepDrift(t *testing.T) {
+	sealer := mustSealer()
+	f := buildFlow(perms(defaultPerms()), sealer, NewMemStore())
+	res, err := f.Run(context.Background(), requester(), refundState{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	other, err := New[refundState]("refund",
+		WithAuthorizer(perms(defaultPerms())),
+		WithSealer(sealer),
+		WithTTL(time.Hour),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other.Step("prepare", func(context.Context, gobellim.Principal, *refundState) error { return nil })
+	other.Approve("renamed", ApproveConfig[refundState]{
+		Card: func(context.Context, gobellim.Principal, refundState) (gobellim.ApprovalCard, error) {
+			return gobellim.ApprovalCard{Tool: "orders.refund"}, nil
+		},
+	})
+
+	if _, err := other.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Approve); !errors.Is(err, ErrFlowDrift) {
+		t.Fatalf("err = %v, want ErrFlowDrift", err)
+	}
+}
+
+func TestMemStoreExpiredNonceCanBeClaimedAgain(t *testing.T) {
+	store := NewMemStore()
+	ctx := context.Background()
+	if ok, err := store.Claim(ctx, "n", time.Now().Add(-time.Second)); err != nil || !ok {
+		t.Fatalf("first claim: ok=%v err=%v", ok, err)
+	}
+	if ok, err := store.Claim(ctx, "n", time.Now().Add(time.Hour)); err != nil || !ok {
+		t.Fatalf("expired nonce was not reusable: ok=%v err=%v", ok, err)
+	}
+	if ok, _ := store.Claim(ctx, "n", time.Now().Add(time.Hour)); ok {
+		t.Fatal("live nonce was claimed twice")
+	}
+	store.Forget(time.Now().Add(2 * time.Hour))
+	if ok, _ := store.Claim(ctx, "n", time.Now().Add(time.Hour)); !ok {
+		t.Fatal("Forget did not drop the expired nonce")
+	}
+}
+
+type bridgeIn struct {
+	TenantID string `gobellim:"source=principal,required"`
+	OrderID  string `gobellim:"sensitivity=secret,required"`
+}
+
+type bridgeOut struct {
+	OK bool
+}
+
+type bridgeArgs struct {
+	OrderID string `gobellim:"required,ground"`
+}
+
+type bridgeResult struct {
+	RefundID string
+}
+
+type bridgeState struct {
+	Pending  gobellim.PendingAction
+	Executed bool
+}
+
+// TestTaskApprovalInsideFlow is the end-to-end contract: a Task escalates, flow
+// seals the PendingAction, a human approves, and the exact action executes
+// through the Gate once.
+func TestTaskApprovalInsideFlow(t *testing.T) {
+	var executed int
+	refund := gobellim.Tool[bridgeArgs, bridgeResult]{
+		Name:       "orders.refund",
+		Effect:     gobellim.Write,
+		Permission: "orders:refund",
+		Run: func(context.Context, gobellim.Principal, bridgeArgs) (bridgeResult, error) {
+			executed++
+			return bridgeResult{RefundID: "r-1"}, nil
+		},
+	}
+	model := testkit.NewFakeModel(
+		testkit.Call("orders.refund", map[string]any{"OrderID": "<h1>"}),
+		testkit.Reply(`{"OK":true}`),
+	)
+	engine, err := gobellim.New(
+		gobellim.WithModel(model),
+		gobellim.WithAuthorizer(perms(defaultPerms())),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := gobellim.NewTask[bridgeIn, bridgeOut](engine, gobellim.TaskConfig{
+		Name:        "refund.propose",
+		Instruction: "propose a refund",
+		Tools:       []gobellim.ToolDef{refund},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := New[bridgeState]("refund-bridge",
+		WithAuthorizer(perms(defaultPerms())),
+		WithSealer(testSealer(t)),
+		WithTTL(time.Hour),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Step("propose", func(ctx context.Context, p gobellim.Principal, s *bridgeState) error {
+		res, err := task.Run(ctx, p, bridgeIn{TenantID: p.Tenant, OrderID: "A-1042"})
+		if err != nil {
+			return err
+		}
+		if res.Pending == nil {
+			return errors.New("the model did not propose an action")
+		}
+		s.Pending = *res.Pending
+		return nil
+	})
+	f.Approve("manager", ApproveConfig[bridgeState]{
+		Permission:       "refund:approve",
+		ActionPermission: "orders:refund",
+		Card: func(_ context.Context, _ gobellim.Principal, s bridgeState) (gobellim.ApprovalCard, error) {
+			return s.Pending.Card, nil
+		},
+		Resource: func(_ context.Context, p gobellim.Principal, s bridgeState) (gobellim.Resource, error) {
+			return gobellim.Resource{Type: "order", ID: "A-1042", TenantID: p.Tenant}, nil
+		},
+	})
+	f.Step("execute", func(ctx context.Context, p gobellim.Principal, s *bridgeState) error {
+		if _, rec, err := task.ExecuteApproved(ctx, p, &s.Pending); err != nil {
+			return err
+		} else if !rec.Executed {
+			return errors.New("the approved action did not run")
+		}
+		s.Executed = true
+		return nil
+	})
+
+	res, err := f.Run(context.Background(), requester(), bridgeState{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != Suspended {
+		t.Fatalf("status = %v", res.Status)
+	}
+	if executed != 0 {
+		t.Fatal("the escalated action ran before approval")
+	}
+
+	out, err := f.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Approve)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Status != Done || !out.State.Executed || executed != 1 {
+		t.Fatalf("status=%v state=%+v executed=%d", out.Status, out.State, executed)
+	}
+	if _, err := f.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Approve); !errors.Is(err, ErrReplay) {
+		t.Fatalf("err = %v, want ErrReplay", err)
+	}
+	if executed != 1 {
+		t.Fatalf("executed = %d, want 1", executed)
 	}
 }

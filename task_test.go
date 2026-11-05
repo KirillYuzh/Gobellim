@@ -61,7 +61,7 @@ func newEngine(t *testing.T, model gobellim.Model, authz gobellim.Authorizer, si
 
 func newTriageTask(t *testing.T, e *gobellim.Engine, tools []gobellim.ToolDef) *gobellim.Task[ticketIn, triageOut] {
 	t.Helper()
-	task, err := gobellim.NewTask(e, gobellim.TaskConfig[ticketIn, triageOut]{
+	task, err := gobellim.NewTask[ticketIn, triageOut](e, gobellim.TaskConfig{
 		Name:        "ticket.triage",
 		Instruction: "Classify the ticket and propose a reply.",
 		Tools:       tools,
@@ -103,10 +103,10 @@ func TestWriteEscalatesAndDoesNotExecute(t *testing.T) {
 	if executed != 0 {
 		t.Fatalf("tool executed %d times, want 0", executed)
 	}
-	if res.Approval == nil || res.Approval.Tool != "orders.refund" {
-		t.Fatalf("approval = %+v", res.Approval)
+	if res.Pending == nil || res.Pending.Card.Tool != "orders.refund" {
+		t.Fatalf("pending = %+v", res.Pending)
 	}
-	if res.Approval.Digest == "" {
+	if res.Pending.Card.Digest == "" {
 		t.Fatal("approval card has no digest")
 	}
 	if rec.Count(gobellim.EventGateEscalated) != 1 {
@@ -293,7 +293,7 @@ func TestTrustedHandleAllowsWrite(t *testing.T) {
 		testkit.Reply(validTriage),
 	)
 	e := newEngine(t, model, testkit.AllowAll, nil)
-	task, err := gobellim.NewTask(e, gobellim.TaskConfig[orderIn, triageOut]{
+	task, err := gobellim.NewTask[orderIn, triageOut](e, gobellim.TaskConfig{
 		Name:        "order.apply",
 		Instruction: "Apply the order.",
 		Tools:       []gobellim.ToolDef{apply},
@@ -359,7 +359,7 @@ func TestMaxToolCallsIsEnforced(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	task, err := gobellim.NewTask(e, gobellim.TaskConfig[ticketIn, triageOut]{
+	task, err := gobellim.NewTask[ticketIn, triageOut](e, gobellim.TaskConfig{
 		Name: "ticket.triage", Instruction: "Search.", Tools: []gobellim.ToolDef{read},
 	})
 	if err != nil {
@@ -415,7 +415,7 @@ func TestToolRequiresExplicitEffect(t *testing.T) {
 		},
 	}
 	e := newEngine(t, testkit.NewFakeModel(), testkit.AllowAll, nil)
-	_, err := gobellim.NewTask(e, gobellim.TaskConfig[ticketIn, triageOut]{
+	_, err := gobellim.NewTask[ticketIn, triageOut](e, gobellim.TaskConfig{
 		Name: "x", Instruction: "x", Tools: []gobellim.ToolDef{tool},
 	})
 	if !errors.Is(err, gobellim.ErrInvalidConfig) {
@@ -536,5 +536,245 @@ func TestResourceTenantMismatchIsDenied(t *testing.T) {
 	got := res.ToolCalls[0].Decision
 	if got.Kind != gobellim.Deny || len(got.RuleIDs) == 0 || got.RuleIDs[0] != "tenant-mismatch" {
 		t.Fatalf("decision = %+v, want Deny tenant-mismatch", got)
+	}
+}
+
+type handleOnlyArgs struct {
+	OrderID string `gobellim:"required,ground"`
+}
+
+type secretResult struct {
+	Card  string `gobellim:"sensitivity=secret"`
+	Email string `gobellim:"sensitivity=pii"`
+	Note  string
+}
+
+// A grounded handle plus a passing business validator is Validated: the runtime
+// minted the handle and the application confirmed the rule.
+func TestValidatedHandleAllowsWrite(t *testing.T) {
+	var executed int
+	apply := gobellim.Tool[handleOnlyArgs, refundResult]{
+		Name:     "orders.apply",
+		Effect:   gobellim.Write,
+		Validate: func(context.Context, gobellim.Principal, handleOnlyArgs) error { return nil },
+		Run: func(context.Context, gobellim.Principal, handleOnlyArgs) (refundResult, error) {
+			executed++
+			return refundResult{RefundID: "r-1"}, nil
+		},
+	}
+	model := testkit.NewFakeModel(
+		testkit.Call("orders.apply", map[string]any{"OrderID": "<h1>"}),
+		testkit.Reply(validTriage),
+	)
+	e := newEngine(t, model, testkit.AllowAll, nil)
+	task := newTriageTask(t, e, []gobellim.ToolDef{apply})
+
+	res, err := task.Run(context.Background(), principal(), ticketIn{
+		TenantID: "acme", TicketID: "t-1", Body: "refund", RequestedOrder: "A-1042",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executed != 1 {
+		t.Fatalf("executed = %d, want 1; decision=%+v", executed, res.ToolCalls)
+	}
+	if got := res.ToolCalls[0].Decision.Kind; got != gobellim.Allow {
+		t.Fatalf("decision = %v, want Allow", got)
+	}
+}
+
+// Without a validator the same handle is only Derived, so a write still needs a
+// human. Promotion is not a free pass.
+func TestGroundedHandleWithoutValidatorEscalates(t *testing.T) {
+	var executed int
+	apply := gobellim.Tool[handleOnlyArgs, refundResult]{
+		Name:   "orders.apply",
+		Effect: gobellim.Write,
+		Run: func(context.Context, gobellim.Principal, handleOnlyArgs) (refundResult, error) {
+			executed++
+			return refundResult{}, nil
+		},
+	}
+	model := testkit.NewFakeModel(
+		testkit.Call("orders.apply", map[string]any{"OrderID": "<h1>"}),
+		testkit.Reply(validTriage),
+	)
+	e := newEngine(t, model, testkit.AllowAll, nil)
+	task := newTriageTask(t, e, []gobellim.ToolDef{apply})
+
+	res, err := task.Run(context.Background(), principal(), ticketIn{
+		TenantID: "acme", TicketID: "t-1", Body: "refund", RequestedOrder: "A-1042",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executed != 0 || res.Status != gobellim.TaskApprovalRequired || res.Pending == nil {
+		t.Fatalf("executed=%d status=%v pending=%v", executed, res.Status, res.Pending)
+	}
+}
+
+func TestValidatedHandleAllowsEgress(t *testing.T) {
+	var executed int
+	send := gobellim.Tool[handleOnlyArgs, refundResult]{
+		Name:     "mail.send",
+		Effect:   gobellim.Egress,
+		Validate: func(context.Context, gobellim.Principal, handleOnlyArgs) error { return nil },
+		Run: func(context.Context, gobellim.Principal, handleOnlyArgs) (refundResult, error) {
+			executed++
+			return refundResult{}, nil
+		},
+	}
+	model := testkit.NewFakeModel(
+		testkit.Call("mail.send", map[string]any{"OrderID": "<h1>"}),
+		testkit.Reply(validTriage),
+	)
+	e := newEngine(t, model, testkit.AllowAll, nil)
+	task := newTriageTask(t, e, []gobellim.ToolDef{send})
+
+	res, err := task.Run(context.Background(), principal(), ticketIn{
+		TenantID: "acme", TicketID: "t-1", Body: "send", RequestedOrder: "A-1042",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executed != 1 || res.ToolCalls[0].Decision.Kind != gobellim.Allow {
+		t.Fatalf("executed=%d decision=%+v", executed, res.ToolCalls)
+	}
+}
+
+func TestToolResultIsRedacted(t *testing.T) {
+	read := gobellim.Tool[readArgs, secretResult]{
+		Name:   "customer.read",
+		Effect: gobellim.Read,
+		Run: func(context.Context, gobellim.Principal, readArgs) (secretResult, error) {
+			return secretResult{Card: "4111 1111 1111 1111", Email: "a@b.co", Note: "ok"}, nil
+		},
+	}
+	model := testkit.NewFakeModel(
+		testkit.Call("customer.read", map[string]any{"Query": "x"}),
+		testkit.Reply(validTriage),
+	)
+	e := newEngine(t, model, testkit.AllowAll, nil)
+	task := newTriageTask(t, e, []gobellim.ToolDef{read})
+
+	if _, err := task.Run(context.Background(), principal(), ticketIn{TenantID: "acme", TicketID: "t-1", Body: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	calls := model.Calls()
+	toolMsg := calls[1].Messages[len(calls[1].Messages)-1]
+	if strings.Contains(toolMsg.Content, "4111") {
+		t.Fatalf("a secret reached the model: %s", toolMsg.Content)
+	}
+	if strings.Contains(toolMsg.Content, "a@b.co") {
+		t.Fatalf("PII reached the model: %s", toolMsg.Content)
+	}
+	if !strings.Contains(toolMsg.Content, "<h1>") || !strings.Contains(toolMsg.Content, "ok") {
+		t.Fatalf("tool result lost its shape: %s", toolMsg.Content)
+	}
+}
+
+func TestExecuteApprovedRunsTheAction(t *testing.T) {
+	var executed int
+	refund := gobellim.Tool[refundArgs, refundResult]{
+		Name:   "orders.refund",
+		Effect: gobellim.Write,
+		Run: func(context.Context, gobellim.Principal, refundArgs) (refundResult, error) {
+			executed++
+			return refundResult{RefundID: "r-1"}, nil
+		},
+	}
+	model := testkit.NewFakeModel(
+		testkit.Call("orders.refund", map[string]any{"OrderID": "<h1>", "Cents": 100}),
+		testkit.Reply(validTriage),
+	)
+	e := newEngine(t, model, testkit.AllowAll, nil)
+	task := newTriageTask(t, e, []gobellim.ToolDef{refund})
+
+	res, err := task.Run(context.Background(), principal(), ticketIn{
+		TenantID: "acme", TicketID: "t-1", Body: "refund", RequestedOrder: "A-1042",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Pending == nil {
+		t.Fatalf("no pending action: %+v", res.ToolCalls)
+	}
+	if executed != 0 {
+		t.Fatal("the escalated action ran before approval")
+	}
+
+	out, rec, err := task.ExecuteApproved(context.Background(), principal(), res.Pending)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executed != 1 || !rec.Executed {
+		t.Fatalf("executed=%d rec=%+v", executed, rec)
+	}
+	if got := out.(refundResult).RefundID; got != "r-1" {
+		t.Fatalf("result = %q", got)
+	}
+}
+
+func TestExecuteApprovedRejectsADifferentAction(t *testing.T) {
+	refund := gobellim.Tool[refundArgs, refundResult]{
+		Name:   "orders.refund",
+		Effect: gobellim.Write,
+		Run: func(context.Context, gobellim.Principal, refundArgs) (refundResult, error) {
+			t.Fatal("a tampered action was executed")
+			return refundResult{}, nil
+		},
+	}
+	model := testkit.NewFakeModel(
+		testkit.Call("orders.refund", map[string]any{"OrderID": "<h1>", "Cents": 100}),
+		testkit.Reply(validTriage),
+	)
+	e := newEngine(t, model, testkit.AllowAll, nil)
+	task := newTriageTask(t, e, []gobellim.ToolDef{refund})
+
+	res, err := task.Run(context.Background(), principal(), ticketIn{
+		TenantID: "acme", TicketID: "t-1", Body: "refund", RequestedOrder: "A-1042",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered := *res.Pending
+	tampered.Args = []byte(`{"OrderID":"A-999","Cents":100}`)
+	if _, _, err := task.ExecuteApproved(context.Background(), principal(), &tampered); !errors.Is(err, gobellim.ErrApprovalInvalid) {
+		t.Fatalf("err = %v, want ErrApprovalInvalid", err)
+	}
+
+	other := *res.Pending
+	other.Tenant = "other"
+	if _, _, err := task.ExecuteApproved(context.Background(), principal(), &other); !errors.Is(err, gobellim.ErrApprovalInvalid) {
+		t.Fatalf("err = %v, want ErrApprovalInvalid", err)
+	}
+}
+
+func TestPanicIsAuditedAsFailure(t *testing.T) {
+	boom := gobellim.Tool[readArgs, readResult]{
+		Name:   "boom",
+		Effect: gobellim.Read,
+		Run: func(context.Context, gobellim.Principal, readArgs) (readResult, error) {
+			panic("tool blew up")
+		},
+	}
+	model := testkit.NewFakeModel(
+		testkit.Call("boom", map[string]any{"Query": "x"}),
+		testkit.Reply(validTriage),
+	)
+	rec := &testkit.Recorder{}
+	e := newEngine(t, model, testkit.AllowAll, rec)
+	task := newTriageTask(t, e, []gobellim.ToolDef{boom})
+
+	func() {
+		defer func() { _ = recover() }()
+		_, _ = task.Run(context.Background(), principal(), ticketIn{TenantID: "acme", TicketID: "t-1", Body: "b"})
+	}()
+
+	if rec.Count(gobellim.EventTaskCompleted) != 0 {
+		t.Fatal("a panicking run was audited as completed")
+	}
+	if rec.Count(gobellim.EventTaskFailed) != 1 {
+		t.Fatalf("events = %+v", rec.Events())
 	}
 }

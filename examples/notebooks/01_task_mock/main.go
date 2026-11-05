@@ -78,7 +78,7 @@ source=principal требует, чтобы TenantID совпадал с Princip
 		panic(err)
 	}
 
-	task, err := gobellim.NewTask(engine, gobellim.TaskConfig[TicketInput, TriageOutput]{
+	task, err := gobellim.NewTask[TicketInput, TriageOutput](engine, gobellim.TaskConfig{
 		Name:        "ticket.triage",
 		Instruction: "Classify the ticket and propose a reply.",
 		Tools:       []gobellim.ToolDef{refund},
@@ -95,14 +95,14 @@ source=principal требует, чтобы TenantID совпадал с Princip
 	notebook.Result("prompt sent to the model:\n%s", model.Calls()[0].Messages[1].Content)
 	notebook.Result("tool executed: %d", executed)
 	notebook.Result("task status: %v", res.Status)
-	if res.Approval != nil {
+	if res.Pending != nil {
 		notebook.Cell("2. Gate остановил write", `
 Аргумент OrderID пришёл из untrusted-поля, поэтому Write не разрешён молча.
 Возвращается approval card; tool handler не вызывался.`)
-		notebook.Result("tool: %s, effect: %s", res.Approval.Tool, res.Approval.Effect)
-		notebook.Result("args (resolved for the approver): %s", string(res.Approval.Args))
-		notebook.Result("digest: %s", res.Approval.Digest)
-		for _, p := range res.Approval.Provenance {
+		notebook.Result("tool: %s, effect: %s", res.Pending.Card.Tool, res.Pending.Card.Effect)
+		notebook.Result("args (resolved for the approver): %s", string(res.Pending.Card.Args))
+		notebook.Result("digest: %s", res.Pending.Card.Digest)
+		for _, p := range res.Pending.Card.Provenance {
 			notebook.Result("provenance: %s ← %s (%s)", p.Arg, p.Source, p.Integrity)
 		}
 	}
@@ -110,6 +110,8 @@ source=principal требует, чтобы TenantID совпадал с Princip
 	notebook.Cell("3. Что произошло", `
 Модель не получила ни e-mail, ни номер заказа в открытом виде.
 Даже если она подставит handle в write-инструмент, Gate не выполнит действие
-без одобрения человека. Следующий notebook показывает остальные отказы.`)
+без одобрения человека. После одобрения приложение вызывает
+Task.ExecuteApproved с той же карточкой: Gate перепроверит tenant, ACL,
+бизнес-валидацию и digest. Следующий notebook показывает остальные отказы.`)
 	fmt.Println()
 }
