@@ -2,7 +2,7 @@
 
 **[Русский](README.ru.md) · [English](README.md)**
 
-![Go](https://img.shields.io/badge/Go-1.24-00ADD8?logo=go&logoColor=white)
+![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ![Gobellim](./site/public/gobellim-compact-white.svg)
