@@ -12,84 +12,10 @@ permissions:
 
 env:
   GO_VERSION: "1.26"
-  # Optional packages live in their own modules (D85); rerank stays in the core.
-  OPTIONAL_MODULES: "mcp webfetch flow eval kittest cmd scripts plugins/elasticsearch plugins/gigachat plugins/otel"
-  # Pinned so the vulnerability scan is reproducible; invoked by absolute path
-  # because $(go env GOPATH)/bin is not necessarily on PATH.
-  GOVULNCHECK_VERSION: "v1.9.0"
 
 jobs:
-  build:
-    name: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-      - name: go build (core)
-        run: go build ./...
-      - name: go vet (core)
-        run: go vet ./...
-      - name: go build/vet (optional modules)
-        run: |
-          for dir in $OPTIONAL_MODULES; do
-            echo "==> $dir"
-            if [ "$dir" = "cmd" ]; then
-              (cd "$dir" && go build -o /dev/null ./... && go vet ./...)
-            else
-              (cd "$dir" && go build ./... && go vet ./...)
-            fi
-          done
-
-  deps:
-    name: deps (tidy + govulncheck)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-          cache-dependency-path: '**/go.sum'
-      - name: install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
-      # A stale go.sum is how broken dependencies reach develop: `go mod tidy`
-      # must be a no-op for the core, every optional module, and lite-demo.
-      - name: go mod tidy (core, optional modules, lite-demo)
-        run: |
-          set -euo pipefail
-          go mod tidy
-          for dir in $OPTIONAL_MODULES lite-demo; do
-            echo "==> $dir"
-            (cd "$dir" && go mod tidy)
-          done
-      - name: go mod tidy changed nothing
-        run: |
-          set -euo pipefail
-          if ! git diff --exit-code -- go.mod go.sum; then
-            echo "core go.mod/go.sum are not tidy - run 'make tidy' and commit the result"
-            exit 1
-          fi
-          for dir in $OPTIONAL_MODULES lite-demo; do
-            if ! git diff --exit-code -- "$dir/go.mod" "$dir/go.sum"; then
-              echo "$dir/go.mod or $dir/go.sum are not tidy - run 'make tidy' and commit the result"
-              exit 1
-            fi
-          done
-      - name: govulncheck (core)
-        run: '"$(go env GOPATH)/bin/govulncheck" ./...'
-      - name: govulncheck (optional modules, lite-demo)
-        run: |
-          set -euo pipefail
-          for dir in $OPTIONAL_MODULES lite-demo; do
-            echo "==> $dir"
-            (cd "$dir" && "$(go env GOPATH)/bin/govulncheck" ./...)
-          done
-
   test:
-    name: test
+    name: build, vet, test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -97,19 +23,13 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: go test (core)
-        run: go test ./... -count=1
-      - name: import rules (I-13)
-        run: go test ./internal/importrules/ -run TestImportRules -v
-      - name: go test (optional modules)
-        run: |
-          for dir in $OPTIONAL_MODULES; do
-            echo "==> $dir"
-            (cd "$dir" && go test ./... -count=1)
-          done
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./... -race -shuffle=on -count=1
+      - run: go test ./internal/importrules/ -v
 
-  race:
-    name: race
+  tidy:
+    name: tidy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -117,32 +37,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: go test -race (core)
-        run: go test -race -shuffle=on -count=1 ./...
-      - name: go test -race (optional modules)
-        run: |
-          for dir in $OPTIONAL_MODULES; do
-            echo "==> $dir"
-            (cd "$dir" && go test -race -shuffle=on -count=1 ./...)
-          done
-
-  ort-vet:
-    name: ort-vet
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-      - name: go vet -tags ort (core)
-        run: go vet -tags ort ./...
-      - name: go vet -tags ort (optional modules)
-        run: |
-          for dir in $OPTIONAL_MODULES; do
-            echo "==> $dir"
-            (cd "$dir" && go vet -tags ort ./...)
-          done
+      - run: go mod tidy -diff
 
   lint:
     name: lint
@@ -153,20 +48,13 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: golangci-lint (core)
-        uses: golangci/golangci-lint-action@v9
+      - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.13.0
           verify: true
-      - name: golangci-lint (optional modules)
-        run: |
-          for dir in $OPTIONAL_MODULES; do
-            echo "==> $dir"
-            (cd "$dir" && golangci-lint run)
-          done
 
   fumpt:
-    name: fumpt
+    name: gofumpt
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -174,20 +62,11 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: install gofumpt
-        run: go install mvdan.cc/gofumpt@v0.7.0
-      - name: gofumpt -l
-        run: |
-          out="$(gofumpt -l .)"
-          if [ -n "$out" ]; then
-            echo "gofumpt: the following files need formatting:"
-            echo "$out"
-            echo "run 'gofumpt -w .' to fix"
-            exit 1
-          fi
+      - run: go install mvdan.cc/gofumpt@v0.7.0
+      - run: test -z "$(gofumpt -l .)"
 
-  docs-lint:
-    name: docs-lint
+  vuln:
+    name: govulncheck
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -195,97 +74,5 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: docs-lint
-        run: go -C scripts run ./docslint
-
-  guard-quality:
-    name: guard quality (L1)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-      # The ONNX weights are deliberately not in git, so this gate measures the
-      # L1 regex layer only. The L2 parity gate needs -tags ort and the runtime.
-      - name: guard quality report
-        run: |
-          set -o pipefail
-          go -C scripts run ./guardqual | tee guard-quality.md
-      - name: publish report to the job summary
-        if: always()
-        run: cat guard-quality.md >> "$GITHUB_STEP_SUMMARY"
-
-  perf:
-    name: perf budget
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-      # Hard gate: direct requires, go.sum size, and the module closure of the
-      # default build. A dependency cannot land silently.
-      - name: dependency budgets
-        run: go -C scripts run ./perfbudget/
-      # Published, not gated: ns/op depends on the runner. The allocation gate
-      # lives in perf_gate_test.go and runs in the `test` job.
-      - name: benchmarks (core overhead, no L2)
-        run: |
-          set -o pipefail
-          go test -run '^$' -bench . -benchmem ./... | tee bench.txt
-      - name: publish benchmarks to the job summary
-        if: always()
-        run: |
-          {
-            echo '### Benchmarks — core overhead, no L2'
-            echo '```'
-            cat bench.txt
-            echo '```'
-            echo '**Published, not gated.** ns/op depends on the runner, so these numbers are not a pass/fail gate.'
-            echo 'To compare two runs: download both `bench` artifacts and run `benchstat old.txt new.txt`.'
-          } >> "$GITHUB_STEP_SUMMARY"
-      - name: upload benchmarks
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: bench
-          path: bench.txt
-
-  lite-demo:
-    name: lite-demo
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: lite-demo
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-          cache-dependency-path: lite-demo/go.sum
-      - name: go build
-        run: go build ./...
-      - name: go vet
-        run: go vet ./...
-      - name: go vet -tags ort
-        run: go vet -tags ort ./...
-      - name: go test -race -shuffle=on
-        run: go test -race -shuffle=on -count=1 ./...
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.13.0
-          working-directory: lite-demo
-      - name: install gofumpt and govulncheck
-        run: |
-          go install mvdan.cc/gofumpt@v0.7.0
-          go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      - name: gofumpt -l
-        run: test -z "$(gofumpt -l .)"
-      - name: govulncheck
-        run: '"$(go env GOPATH)/bin/govulncheck" ./...'
+      - run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+      - run: govulncheck ./...

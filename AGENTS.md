@@ -1,58 +1,73 @@
 # AGENTS.md
 
-This repository is **gobellim**. The specification lives in `docs/` only: read it before changing code.
-Code comments are not a contract — do not infer behaviour from them, and never let a comment
-override the specification.
-
-Two tiers of code: the **core** is the root Go module — the default `go build ./...` from the repository root builds only it, with no native libraries and no ONNX runtime; its direct dependencies are `golang.org/x/text`, two JSON Schema libraries, `gopkg.in/yaml.v3`, `github.com/daulet/tokenizers` and `github.com/yalue/onnxruntime_go` (the latter two are pure-Go modules used by the tokenizer and ORT pool; the native ORT library is loaded only behind `//go:build ort`). The OpenTelemetry adapter lives in the optional `plugins/otel` module, so `trace` itself has no external dependencies. The optional packages (`mcp`, `webfetch`, `flow`, `eval`, `kittest`, `cmd`, `lite-demo`, `scripts`, `plugins/elasticsearch`, `plugins/gigachat`) are separate Go modules of the same repository (`D85`); `rerank` stays in the core because the façade imports it (`D84`). The ML layer is opt-in: `guard/gliner` is L2 detection behind `//go:build ort`, and `gobellim.Config.GuardL2` must be set explicitly — pass `guard.L1Only()` to run L1-only on purpose (`D80`).
+This repository is **gobellim**: a small in-process execution and policy layer
+around an LLM. The specification is `DESIGN.md`. The `docs/` tree is the how-to
+layer and must match the current code; if code and `DESIGN.md` disagree, fix both.
 
 ## Read order
 
-1. `docs/README.md` — the index and "where to look".
-2. `docs/overview.md` — the public facade and the one call path.
-3. `docs/reference/gobellim.md` — `Config`, operations, types, errors.
-4. `docs/reference/policy.md` and `docs/guard/README.md` — who may call what, and the guard rails.
-5. `docs/tools/README.md` and `docs/workflows/README.md` — declaring tools and scenarios.
-
-Documents under `docs/internals/`, and the `I-xx`, `BR-xx` and `D-xx` identifiers
-that code comments cite, predate this tree and are not part of the current
-specification. Do not invent them; use the documents above.
-
-`docs/guides/` is the how-to layer — task recipes (providers, structured output, tool calling, guardrails, retrieval, observability, eval, pipelines, errors, deployment, performance, security). `docs/concepts/` is the explanation layer, and `docs/reference/` is the lookup layer; see `docs/guides/README.md` for the Diátaxis split.
+1. `DESIGN.md` — threat model, invariants, API, workflow, roadmap.
+2. `README.md` — install, quickstart, the one call path.
+3. `docs/README.md` — task recipes.
+4. `examples/notebooks/README.md` — runnable, notebook-style scenarios.
 
 ## Rules
 
-- If code and docs disagree, fix the docs in the same change.
-- Every operation goes through `internal/call` (`authz → guard → span → fn`). Never add user-facing middleware or bypass the policy.
-- `authz`, `guard`, `model`, `embed`, `chunk`, `store`, `trace` must not import each other; the only permitted core-to-core edge is `trace → store`. `eval` imports `trace` and `internal/**` only and never `gobellim`. The core (the `gobellim` façade, `internal/**` and the seven subsystems) must not import the optional packages (`mcp`, `webfetch`, `flow`, `eval`, `kittest`, `rerank`, `cmd`, `lite-demo`, `scripts`, `plugins/...`); the only recorded edge is `gobellim → rerank` (`D84`), enforced by the stdlib-only test `internal/importrules` (`core-no-optional`; a core _test_ may still import an optional package). The family rules are enforced by the same test (run in the core module, it walks the whole tree including the submodules) and by the `depguard` rules in `.golangci.yml` (run in every module; their patterns are module-relative, so the cross-module boundary lives in `internal/importrules` alone).
-- The default build (`go build ./...`) must not require native libraries; ONNX/ORT code goes behind `//go:build ort`.
-- Detection does not depend on the rail; the rail only affects the decision table.
-- Traces carry masked text by default (`Config.TraceContent`, `trace.ContentRedacted`); never log or persist raw message text. Raw text is recorded only with `trace.ContentFull`, which is an explicit opt-in.
-- Tests use the standard library only. Validate the core with `go build ./... && go vet ./... && go test ./...`; validate every module with `make check`, which runs build, `vet`, tests, `gofumpt` and `golangci-lint` for the core and for each of `mcp`, `webfetch`, `flow`, `eval`, `kittest`, `cmd`, `lite-demo`, `scripts`, `plugins/elasticsearch`, `plugins/gigachat`, `plugins/otel`.
-- Exported API in published packages carries a godoc comment (`internal/apidoc` enforces it); a comment is still not a contract — `docs/` is (`BR-75`).
+- The model proposes; the Gate decides. Every model-initiated tool call goes
+  through the Gate in `gate.go`. Never call a tool handler directly from the
+  model loop.
+- Unknown tool, invalid arguments, authorizer error, tenant mismatch and
+  ungrounded arguments are `Deny`, never `Allow`.
+- `Effect` has no permissive default. The zero value is `EffectUnknown` and
+  `NewTask` rejects it; declare `EffectRead`, `EffectWrite`, `EffectEgress` or
+  `EffectDestructive`.
+- An empty label set is `Untrusted`. Do not initialize an accumulator to
+  `Trusted` without a non-empty-label check.
+- `ground` means "the value must be an existing handle minted for this run". A
+  raw string from the model never grounds an argument. To let the model
+  reference a value, mark the input field `sensitivity=secret` or
+  `sensitivity=pii`.
+- Labels only worsen. Do not add a path that promotes `Untrusted`/`Derived` to
+  `Trusted`/`Validated` without an explicit validator or a human approval.
+  Free model text is `Derived`; `oneof` and numeric ranges constrain shape, not
+  truth.
+- `Readers` / per-reader ACL is not implemented. Do not claim it exists. The
+  application owns its data ACL.
+- `Resource.TenantID` must match `Principal.Tenant`; the Gate enforces this
+  before the `Authorizer`.
+- The core `go.mod` has no required dependencies. Do not add one without an ADR
+  and a benchmark; put optional code in its own package or module.
+- `flow`, `store/sql`, `testkit`, `plugins/*` and `examples/*` are optional
+  packages of the same module. The root package must not import them.
+  `internal/importrules` enforces this.
+- `flow.Store` has one method: `Claim`. Do not reintroduce `Commit`; `Claim`
+  already consumes the nonce.
+- Tests use the standard library only. Validate with
+  `go build ./... && go vet ./... && go test ./... -race -shuffle=on`.
+- Never log or persist prompt text, raw arguments, secrets or continuation
+  tokens. Audit events carry digests and labels, not values.
+- The `gobellim:"..."` tag subset is documented in `DESIGN.md` §5.3 and
+  `README.md`. Rejecting an unknown tag is intentional.
+- `source` and `ground` apply to strings only. `sensitivity` applies to strings
+  and `[]string`. `time.Time`, `[]byte`, maps, pointers and embedded structs
+  without an explicit `json` name are rejected at `NewTask`.
+- `DESIGN.md` lists P2 work (replay/diff, detectors, HTTP approval handlers,
+  OpenTelemetry, quorum, compensation, editing approved arguments) that is not
+  implemented. Do not claim it exists.
 
 ## Layout
 
-| Path                                                                                     | What                                                                                                                                                                                                                                                                |
-| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `docs/`                                                                                  | the specification: `overview.md`, the per-topic guides (`tools/`, `workflows/`, `guard/`, `tracing/`, `retrieval/`, `providers/`, `memory/`, `mcp/`), `reference/` and `installation.md`                                                                            |
-| `gobellim.go` (root)                                                                     | the `gobellim` facade: re-exports `internal/app` (`New`, `Chat`, `ChatStream`, `Health`, `Ingest`, `Search`, `Delete`, `Score`, `Prune`, `Generate`, `Tool`, `RawTool`, `RetrievalTool`)                                                                            |
-| `internal/app/`                                                                          | operation implementations: `App`, `Config`, `New`, chat, tool loop, retrieval, memory, stream, generate, audit                                                                                                                                                      |
-| `internal/`                                                                              | call primitive, core types, ORT pool, shared helpers                                                                                                                                                                                                                |
-| `internal/importrules/`                                                                  | stdlib-only test enforcing the package dependency rules (I-13)                                                                                                                                                                                                      |
-| `authz/` `guard/` `model/` `embed/` `chunk/` `store/` `trace/`                           | the subsystems (`trace` is the span signal only; the OpenTelemetry adapter lives in `plugins/otel`)                                                                                                                                                                 |
-| `guard/guardtest/`                                                                       | `AllowAll` test detector (I-15)                                                                                                                                                                                                                                     |
-| `kittest/` (module)                                                                      | test toolkit: fake `model.Client` (`Scripted`), scripted `guard.Detector`, and the conformance tests for plugins (`DetectorContract`, `ScopeIsolation`)                                                                                                             |
-| `plugins/otel/` (module)                                                                 | OpenTelemetry adapter: turns `trace.Provider` into an OpenTelemetry tracer (`plugins/otel.NewProvider`)                                                                                                                                                             |
-| `eval/` (module)                                                                         | deterministic checks over recorded traces (stdlib only; imports `trace`)                                                                                                                                                                                            |
-| `flow/` (module)                                                                         | typed `Step[In,Out]` with schema validation and suspend/resume, plus a fluent `Workflow` chain (`.Then`/`.Branch`, observer logging with principal; no parallel/human-in-the-loop, `D87`)                                                                           |
-| `rerank/`                                                                                | cross-encoder reranking behind `rerank.Reranker` (TEI/Cohere adapter) plus a deterministic `Reorder`; stays in the core (`D84`)                                                                                                                                     |
-| `mcp/` (module)                                                                          | Model Context Protocol client (stdio and streamable HTTP); `Register` exposes tools as `mcp:<server>:<tool>`                                                                                                                                                        |
-| `webfetch/` (module)                                                                     | SSRF-hardened outbound HTTP fetch tool; the built-in `EffectEgress` tool                                                                                                                                                                                            |
-| `cmd/` (module), `lite-demo/` (module)                                                   | CLI (`model pull`, `policy check`, `verify …`), integration example; the local stack (`docker-compose.yml`) lives in `lite-demo/`                                                                                                                                   |
-| `scripts/` (module)                                                                      | `docslint`, `perfbudget`, `guardqual`; run as `go -C scripts run ./<tool>`                                                                                                                                                                                          |
-| `plugins/elasticsearch/` (module)                                                        | concrete `store.ES` client over `net/http` (URL+path prefix, API key or basic auth, response cap)                                                                                                                                                                   |
-| `plugins/gigachat/` (module)                                                             | GigaChat chat client (`model.Client`) and embedder (`embed.Embedder`), OAuth via `internal/oauth`                                                                                                                                                                   |
-| `site/`                                                                                  | docs site (Next.js + Fumadocs) rendering `docs/` as it lies: `lib/sidebar.ts` holds the sidebar order and folder labels, each folder's `README.md` is its index. `npm install && npm run dev` in `site/`, static export to `site/out`; not part of `go build ./...` |
-| `tools/gliner/`                                                                          | L2 model export (`export.py`) + pipeline/graph spec; generates `models/` (gitignored)                                                                                                                                                                               |
-| `.github/workflows/ci.yml`, `.github/workflows/nightly.yml`, `.golangci.yml`, `Makefile` | the CI harness (build, test, race, ort-vet, lint, fumpt; nightly ORT parity) and the local `make check` gate                                                                                                                                                        |
+| Path                    | What                                                                                                                 |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `*.go`                  | the root `gobellim` package: `Engine`, `Task`, `Tool`, `Gate`, labels, handles, schema, audit                        |
+| `flow/`                 | sequential workflow, approval card, sealed continuation, `Store` interface, `MemStore`                               |
+| `store/sql/`            | `database/sql` claims adapter with `Prune`                                                                           |
+| `plugins/langfuse/`     | optional audit sink: batched trace/generation/span ingestion, dry-run mode                                           |
+| `plugins/gigachat/`     | optional GigaChat model adapter: freemium OAuth, `functions`/`function_call` mapping                                 |
+| `examples/notebooks/`   | runnable notebook-style scenarios: deterministic mocks and real GigaChat free-tier calls                             |
+| `testkit/`              | fake model, authorizers, audit recorder                                                                              |
+| `internal/importrules/` | stdlib-only dependency-direction test                                                                                |
+| `DESIGN.md`             | the specification                                                                                                    |
+| `docs/`                 | how-to documentation                                                                                                 |
+| `site/`                 | docs site                                                                                                            |
+| `embedding-demo/`       | embeddings example: e5-small via ONNX Runtime in-process, hybrid BM25 + kNN in Elasticsearch, own module and compose |
