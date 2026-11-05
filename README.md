@@ -197,7 +197,7 @@ refund := gobellim.Tool[RefundArgs, RefundResult]{
 engine, err := gobellim.New(
 	gobellim.WithModel(model),               // your adapter; see plugins/gigachat
 	gobellim.WithAuthorizer(existing),       // your RBAC/ACL
-	gobellim.WithAudit(gobellim.SlogSink{}), // or plugins/langfuse
+	gobellim.WithAudit(gobellim.SlogSink{}), // required; or plugins/langfuse
 	gobellim.WithLimits(gobellim.Limits{
 		MaxInputBytes:  32 << 10,
 		MaxOutputBytes: 16 << 10,
@@ -227,14 +227,19 @@ if res.Status == gobellim.TaskApprovalRequired {
 }
 ```
 
-`gobellim.New` uses functional options. A nil model or authorizer is
-`ErrInvalidConfig`; there is no permissive default. Budgets can be tightened per
+`gobellim.New` uses functional options. A nil model, authorizer or audit sink is
+`ErrInvalidConfig`; there is no permissive default and no silent run without an
+audit trail. In a test that ignores audit, pass
+`gobellim.SlogSink{Logger: slog.New(slog.DiscardHandler)}`. Budgets can be tightened per
 task with `TaskConfig.Limits`; a zero field inherits the engine value.
 
 ## The Gate
 
-Every model-initiated call goes through the Gate: tenant binding, RBAC/ACL,
-grounding, business validation, then the effect ceiling.
+Every model-initiated call goes through the Gate: tenant binding, grounding,
+RBAC/ACL, business validation, then the effect ceiling. Grounding comes before
+the ACL so a resource id the model invented never reaches your `Authorizer`, and
+authorization comes before `Validate` so a business rule never runs for a caller
+who could not perform the action anyway.
 
 | Worst argument integrity | Read  | Write    | Egress | Destructive |
 | ------------------------ | ----- | -------- | ------ | ----------- |
@@ -334,6 +339,7 @@ if err != nil {
 wf, err := flow.New[RefundCase]("refund",
 	flow.WithAuthorizer(authz),
 	flow.WithSealer(sealer), // required
+	flow.WithAudit(auditSink), // required
 	flow.WithStore(store),
 	flow.WithTTL(24*time.Hour),
 )
