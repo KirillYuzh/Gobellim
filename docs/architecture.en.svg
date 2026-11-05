@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="430" viewBox="0 0 900 430" role="img" aria-label="Components: your service, kit and external dependencies">
+<defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#444444"/></marker></defs>
+<rect width="900" height="430" fill="#FFFFFF"/>
+<rect x="20" y="30" width="250" height="360" fill="none" stroke="#9E9E9E" stroke-width="1"/>
+<text x="32" y="52" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#555555">Your service</text>
+<rect x="290" y="30" width="320" height="360" fill="none" stroke="#9E9E9E" stroke-width="1"/>
+<text x="302" y="52" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#555555">kit (a library in your process)</text>
+<rect x="630" y="30" width="250" height="360" fill="none" stroke="#9E9E9E" stroke-width="1"/>
+<text x="642" y="52" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#555555">What you provide</text>
+<line x1="270" y1="222" x2="290" y2="222" stroke="#444444" stroke-width="1" marker-end="url(#ar)"/>
+<line x1="610" y1="222" x2="630" y2="222" stroke="#444444" stroke-width="1" marker-end="url(#ar)"/>
+<rect x="36" y="64" width="218" height="64" fill="#FFFFFF" stroke="#444444" stroke-width="1"/>
+<text x="48" y="91" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" fill="#111111">HTTP handler</text>
+<text x="48" y="108" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#555555">calls kit operations</text>
+<rect x="36" y="148" width="218" height="64" fill="#FFFFFF" stroke="#444444" stroke-width="1"/>
+<text x="48" y="175" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" fill="#111111">Tools</text>
+<text x="48" y="192" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#555555">plain Go functions</text>
+<rect x="36" y="232" width="218" height="64" fill="#FFFFFF" stroke="#444444" stroke-width="1"/>
+<text x="48" y="259" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" fill="#111111">Principal</text>
+<text x="48" y="276" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#555555">user, roles, tenant</text>
+<rect x="36" y="316" width="218" height="64" fill="#FFFFFF" stroke="#444444" stroke-width="1"/>
+<text x="48" y="343" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" fill="#111111">policy.yaml</text>
+<text x="48" y="360" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#555555">roles and permissions</text>
+<rect x="306" y="106" width="288" height="64" fill="#FFFFFF" stroke="#444444" stroke-width="1"/>
+<text x="318" y="133" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" fill="#111111">Operations</text>
+<text x="318" y="150" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#555555">Chat, Ingest, Search, Delete, Score, Generate</text>
+<rect x="306" y="190" width="288" height="64" fill="#FFFFFF" stroke="#444444" stroke-width="1"/>
+<text x="318" y="217" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" fill="#111111">Call path</text>
+<text x="318" y="234" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#555555">authz, guard, span, fn</text>
+<rect x="306" y="274" width="288" height="64" fill="#FFFFFF" stroke="#444444" stroke-width="1"/>
+<text x="318" y="301" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" fill="#111111">Subsystems</text>
+<text x="318" y="318" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#555555">tools, model, embed, chunk, store, trace</text>
+<rect x="646" y="96" width="218" height="74" fill="#FFFFFF" stroke="#444444" stroke-width="1"/>
+<text x="658" y="128" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" fill="#111111">Elasticsearch</text>
+<text x="658" y="145" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#555555">chunks, vectors, traces</text>
+<rect x="646" y="185" width="218" height="74" fill="#FFFFFF" stroke="#444444" stroke-width="1"/>
+<text x="658" y="208" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" fill="#111111">Model</text>
+<text x="658" y="225" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#555555">vLLM, Ollama,</text>
+<text x="658" y="242" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#555555">OpenAI API, GigaChat</text>
+<rect x="646" y="274" width="218" height="74" fill="#FFFFFF" stroke="#444444" stroke-width="1"/>
+<text x="658" y="306" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700" fill="#111111">Embedder</text>
+<text x="658" y="323" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#555555">needed for Ingest and Search</text>
+</svg>

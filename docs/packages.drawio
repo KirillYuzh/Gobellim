@@ -1,0 +1,55 @@
+<mxfile host="app.diagrams.net" agent="Gobellim" version="24.7.17">
+  <diagram id="packages" name="packages">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="900" pageHeight="430" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="c1" value="Подсистемы" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#9E9E9E;strokeWidth=1;align=left;verticalAlign=top;fontColor=#555555;fontSize=12;spacingLeft=10;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="20" y="126" width="860" height="204" as="geometry" />
+        </mxCell>
+        <mxCell id="c2" value="&lt;b&gt;kit (фасад)&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;New, Setup, Chat, Ingest, Search, Delete, Score, Generate, Tool&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#444444;strokeWidth=1;fontColor=#111111;fontSize=13;verticalAlign=middle;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="20" y="50" width="860" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="c3" value="&lt;b&gt;authz&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;проверка прав&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#444444;strokeWidth=1;fontColor=#111111;fontSize=13;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="30" y="160" width="200" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="c4" value="&lt;b&gt;guard&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;L0, L1, L2&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#444444;strokeWidth=1;fontColor=#111111;fontSize=13;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="243" y="160" width="200" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="c5" value="&lt;b&gt;model&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;провайдеры LLM&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#444444;strokeWidth=1;fontColor=#111111;fontSize=13;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="456" y="160" width="200" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="c6" value="&lt;b&gt;embed&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;Query, Passages&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#444444;strokeWidth=1;fontColor=#111111;fontSize=13;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="669" y="160" width="200" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="c7" value="&lt;b&gt;chunk&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;чанкинг по токенам&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#444444;strokeWidth=1;fontColor=#111111;fontSize=13;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="137" y="248" width="200" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="c8" value="&lt;b&gt;store&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;запросы к ES&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#444444;strokeWidth=1;fontColor=#111111;fontSize=13;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="350" y="248" width="200" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="c9" value="&lt;b&gt;trace&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;запись трейсов&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#444444;strokeWidth=1;fontColor=#111111;fontSize=13;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="563" y="248" width="200" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" style="endArrow=block;html=1;rounded=0;strokeColor=#444444;strokeWidth=1;endFill=1;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="450" y="110" as="sourcePoint" />
+            <mxPoint x="450" y="126" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c11" value="Пакеты и правила зависимостей." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontColor=#555555;fontSize=12;spacingLeft=0;" vertex="1" parent="1">
+          <mxGeometry x="30" y="19" width="200" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="c12" value="Каждая операция проходит через internal/call." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontColor=#555555;fontSize=12;spacingLeft=0;" vertex="1" parent="1">
+          <mxGeometry x="30" y="345" width="292" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="c13" value="Подсистемы не импортируют друг друга. Исключения: trace импортирует store, guard и embed импортируют internal/ort." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontColor=#555555;fontSize=12;spacingLeft=0;" vertex="1" parent="1">
+          <mxGeometry x="30" y="369" width="741" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="c14" value="internal/core с Principal и ошибками импортируют все. Глобального состояния нет." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontColor=#555555;fontSize=12;spacingLeft=0;" vertex="1" parent="1">
+          <mxGeometry x="30" y="393" width="520" height="20" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
