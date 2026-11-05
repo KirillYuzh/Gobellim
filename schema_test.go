@@ -253,3 +253,18 @@ func TestSchemaRejectsUnsupportedCommonTypes(t *testing.T) {
 		})
 	}
 }
+
+func TestHandleDedupeKeepsLabelsApart(t *testing.T) {
+	hs := newHandleSet()
+	trusted := Label{Integrity: Trusted, Sensitivity: Secret, Sources: []SourceRef{{Kind: "application"}}}
+	untrusted := Label{Integrity: Untrusted, Sensitivity: Secret, Sources: []SourceRef{{Kind: "input"}}}
+	a := hs.put("same", trusted)
+	b := hs.put("same", untrusted)
+	if a == b {
+		t.Fatalf("an untrusted value reused a trusted handle %s", a)
+	}
+	entry, ok := hs.get(b)
+	if !ok || entry.label.Integrity != Untrusted {
+		t.Fatalf("label = %+v", entry.label)
+	}
+}

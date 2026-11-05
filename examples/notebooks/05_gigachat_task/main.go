@@ -76,7 +76,7 @@ Langfuse. Без них sink работает в dry-run и ничего не п
 	if err != nil {
 		panic(err)
 	}
-	task, err := gobellim.NewTask(engine, gobellim.TaskConfig[askIn, askOut]{
+	task, err := gobellim.NewTask[askIn, askOut](engine, gobellim.TaskConfig{
 		Name:        "gigachat.answer",
 		Instruction: "Answer in Russian, briefly. Return JSON with the Answer field.",
 		MaxTokens:   300,

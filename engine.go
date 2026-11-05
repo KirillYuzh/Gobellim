@@ -6,9 +6,6 @@ import (
 	"time"
 )
 
-// timeNow is a variable so tests can pin the clock.
-var timeNow = time.Now
-
 // Config holds the Engine's dependencies.
 type Config struct {
 	Model         Model
@@ -79,7 +76,7 @@ func New(opts ...Option) (*Engine, error) {
 func (e *Engine) Limits() Limits { return e.limits }
 
 func (e *Engine) emit(ctx context.Context, ev Event) {
-	ev.Time = timeNow()
+	ev.Time = time.Now()
 	ev.PolicyVersion = e.policyVersion
 	e.audit.Emit(ctx, ev)
 }

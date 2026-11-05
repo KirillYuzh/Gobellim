@@ -93,7 +93,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	task, err := gobellim.NewTask(engine, gobellim.TaskConfig[refundIn, refundOut]{
+	task, err := gobellim.NewTask[refundIn, refundOut](engine, gobellim.TaskConfig{
 		Name: "gigachat.refund",
 		Instruction: "If the user asks for a refund, call orders.refund with the OrderID exactly as it appears in " +
 			"the input (it may look like <h1>) and the amount in Cents. Otherwise return JSON with the Answer field.",
@@ -130,16 +130,27 @@ runtime ищет инструмент в закрытом реестре и от
 	}
 	notebook.Result("tool executed: %d", executed)
 
-	if res.Approval != nil {
+	if res.Pending != nil {
 		notebook.Cell("3. Approval card", `
 Write с аргументом из untrusted-поля не выполняется. Карточка содержит
 резолвнутые аргументы для апрувера, digest действия и provenance.
 В реальном сервисе карточка уходит в UI; приложение применяет ACL апрувера.`)
-		notebook.Result("tool: %s, effect: %s", res.Approval.Tool, res.Approval.Effect)
-		notebook.Result("args: %s", string(res.Approval.Args))
-		notebook.Result("digest: %s", res.Approval.Digest)
-		for _, p := range res.Approval.Provenance {
+		notebook.Result("tool: %s, effect: %s", res.Pending.Card.Tool, res.Pending.Card.Effect)
+		notebook.Result("args: %s", string(res.Pending.Card.Args))
+		notebook.Result("digest: %s", res.Pending.Card.Digest)
+		for _, p := range res.Pending.Card.Provenance {
 			notebook.Result("provenance: %s ← %s (%s)", p.Arg, p.Source, p.Integrity)
+		}
+
+		notebook.Cell("4. Человек одобрил", `
+Приложение вызывает ExecuteApproved только после реального одобрения и
+передаёт Principal запросившего, а не апрувера. Gate заново проверяет tenant,
+RBAC/ACL и бизнес-валидацию; аргументы должны совпасть с digest карточки.`)
+		_, rec, err := task.ExecuteApproved(ctx, gobellim.Principal{UserID: "u-1", Tenant: "acme"}, res.Pending)
+		if err != nil {
+			notebook.Result("execute: error %v", err)
+		} else {
+			notebook.Result("execute: decision=%v executed=%v, tool runs=%d", rec.Decision.Kind, rec.Executed, executed)
 		}
 	} else {
 		notebook.Cell("3. Модель не вызвала инструмент", `

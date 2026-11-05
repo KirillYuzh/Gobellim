@@ -51,7 +51,7 @@ engine, err := gobellim.New(
 	gobellim.WithAuthorizer(existing),  // ваш RBAC/ACL
 	gobellim.WithAudit(auditSink),      // например, plugins/langfuse
 )
-task, err := gobellim.NewTask(engine, gobellim.TaskConfig[TicketInput, TriageOutput]{
+task, err := gobellim.NewTask[TicketInput, TriageOutput](engine, gobellim.TaskConfig{
 	Name:        "ticket.triage",
 	Instruction: "Classify the ticket and propose a reply.",
 	Tools:       []gobellim.ToolDef{refund},
@@ -60,9 +60,12 @@ res, err := task.Run(ctx, principalFromRequest(r), in)
 ```
 
 `res.Status == gobellim.TaskApprovalRequired` означает, что модель предложила
-write-действие, но оно **не выполнено**. В `res.Approval` лежит карточка с
-аргументами, digest и provenance. Для возобновляемого approval используйте
-`flow`.
+write-действие, но оно **не выполнено**. В `res.Pending` лежит карточка с
+аргументами, digest и provenance, а также всё нужное для продолжения. После
+реального одобрения приложение вызывает `task.ExecuteApproved(ctx, requester,
+res.Pending)`: Gate заново проверяет tenant, RBAC/ACL, бизнес-валидацию и
+digest, и только потом исполняет действие. Для возобновляемого approval с
+sealed-токеном, TTL и four-eyes используйте `flow` (шаг после `Approve`).
 
 ## Теги schema
 
@@ -86,6 +89,10 @@ write-действие, но оно **не выполнено**. В `res.Approva
 двух уровней и встроенные struct без явного `json`-имени отклоняются на
 `NewTask`: лучше fail на старте, чем schema, которая врёт модели.
 
+Те же `sensitivity`-теги применяются к **результату** инструмента перед тем,
+как он попадёт обратно в контекст модели: `secret` становится handle, `pii`
+маскируется.
+
 ## Gate
 
 Каждый вызов инструмента от модели проходит через Gate. Порядок:
@@ -106,6 +113,11 @@ write-действие, но оно **не выполнено**. В `res.Approva
 Нулевой `Effect` — `EffectUnknown`, а не `Read`: забыть эффект нельзя.
 Неизвестный инструмент, невалидные аргументы, ошибка authorizer и чужой tenant —
 `Deny`, никогда `Allow`.
+
+**Как аргумент получает `Validated`.** Handle-аргумент, бизнес-смысл которого
+подтвердил `Tool.Validate`, становится `Validated`: handle выпущен рантаймом для
+этого запуска, правило проверено приложением. Свободный текст модели остаётся
+`Derived`. Без `Validate` повышения нет — write по-прежнему требует человека.
 
 ## Grounding — это handles
 
@@ -147,16 +159,22 @@ wf.Step("prepare", prepareRefund).
 		Card:             refundApprovalCard,
 		Resource:         refundResource,
 	}).
-	Step("execute", executeRefund)
+	Step("execute", func(ctx context.Context, p gobellim.Principal, s *RefundCase) error {
+		// p — requester: после Resume шаги идут от его имени.
+		_, _, err := task.ExecuteApproved(ctx, p, &s.Pending)
+		return err
+	})
 
 res, err := wf.Run(ctx, requester, state)          // res.Status == flow.Suspended
 out, err := wf.Resume(ctx, approver, token, flow.Approve)
 ```
 
-`Resume` проверяет AEAD, tenant, expiry, версию flow, право апрувера,
+`Resume` проверяет AEAD, tenant, expiry, версию flow, id шага, право апрувера,
 Four-Eyes, право requester'а, digest действия и атомарный claim nonce.
-`Store` имеет один метод `Claim`; SQL-адаптер также умеет `Prune` просроченных
-nonce.
+`DecisionUnknown` (нулевое значение) никогда не считается одобрением.
+Без `WithStore` flow использует process-local `MemStore`: повторный resume в том
+же процессе невозможен, между репликами нужен общий `Store`. SQL-адаптер также
+умеет `Prune` просроченных nonce и принимает `ConflictClause` для MySQL.
 
 ## Observability
 

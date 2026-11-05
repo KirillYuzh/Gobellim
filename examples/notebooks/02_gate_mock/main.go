@@ -116,7 +116,7 @@ func runCase(ctx context.Context, p gobellim.Principal, input gateIn, label stri
 	if err != nil {
 		panic(err)
 	}
-	task, err := gobellim.NewTask(engine, gobellim.TaskConfig[gateIn, out]{
+	task, err := gobellim.NewTask[gateIn, out](engine, gobellim.TaskConfig{
 		Name:        "gate.demo",
 		Instruction: "Call the tool if needed.",
 		Tools:       tools,

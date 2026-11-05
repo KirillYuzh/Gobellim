@@ -38,15 +38,17 @@ type toolSpec struct {
 }
 
 type prepared struct {
-	tool        ToolDef
-	spec        toolSpec
-	args        any
-	labels      map[string]Label
-	resource    Resource
-	digest      string
-	grounded    bool
-	worst       Integrity
-	sensitivity Sensitivity
+	tool         ToolDef
+	spec         toolSpec
+	args         any
+	labels       map[string]Label
+	handled      map[string]bool
+	resource     Resource
+	digest       string
+	grounded     bool
+	hasValidator bool
+	worst        Integrity
+	sensitivity  Sensitivity
 }
 
 // ToolDef is the sealed, type-erased form of Tool[A, R].
@@ -106,8 +108,10 @@ func (t Tool[A, R]) prepare(_ context.Context, p Principal, raw json.RawMessage,
 		return prepared{}, err
 	}
 	labels := s.labels(Label{Integrity: Derived, Sources: []SourceRef{{Kind: "model"}}})
+	handled := make(map[string]bool, len(handleLabels))
 	for path, l := range handleLabels {
 		labels[path] = l
+		handled[path] = true
 	}
 	resource := Resource{}
 	if t.Resource != nil {
@@ -127,16 +131,35 @@ func (t Tool[A, R]) prepare(_ context.Context, p Principal, raw json.RawMessage,
 		worst = Untrusted
 	}
 	return prepared{
-		tool:        t,
-		spec:        t.toolSpec(),
-		args:        args,
-		labels:      labels,
-		resource:    resource,
-		digest:      actionDigest(t.Name, argsJSON),
-		grounded:    groundedArgs(s, args, handleLabels),
-		worst:       worst,
-		sensitivity: sensitivity,
+		tool:         t,
+		args:         args,
+		labels:       labels,
+		handled:      handled,
+		resource:     resource,
+		digest:       actionDigest(t.Name, argsJSON),
+		grounded:     groundedArgs(s, args, handleLabels),
+		hasValidator: t.Validate != nil,
+		worst:        worst,
+		sensitivity:  sensitivity,
 	}, nil
+}
+
+// effectiveWorst recomputes the worst integrity after the Gate has run the
+// business validator. A handle-backed argument whose business meaning the
+// application confirmed is Validated: the runtime minted the handle for this
+// run, and the application checked the rule. Free model text stays Derived.
+func (c prepared) effectiveWorst() Integrity {
+	if len(c.labels) == 0 {
+		return Untrusted
+	}
+	worst := Trusted
+	for path, l := range c.labels {
+		if c.hasValidator && c.handled[path] && l.Integrity < Validated {
+			l.Integrity = Validated
+		}
+		worst = worseIntegrity(worst, l.Integrity)
+	}
+	return worst
 }
 
 func (t Tool[A, R]) validate(ctx context.Context, p Principal, args any) error {

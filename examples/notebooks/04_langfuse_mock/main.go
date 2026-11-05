@@ -68,7 +68,7 @@ decision, latency и токены.`)
 	if err != nil {
 		panic(err)
 	}
-	task, err := gobellim.NewTask(engine, gobellim.TaskConfig[askIn, askOut]{
+	task, err := gobellim.NewTask[askIn, askOut](engine, gobellim.TaskConfig{
 		Name:        "kb.answer",
 		Instruction: "Answer from the knowledge base.",
 		Tools:       []gobellim.ToolDef{search},

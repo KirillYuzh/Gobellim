@@ -28,9 +28,13 @@ layer and must match the current code; if code and `DESIGN.md` disagree, fix bot
   reference a value, mark the input field `sensitivity=secret` or
   `sensitivity=pii`.
 - Labels only worsen. Do not add a path that promotes `Untrusted`/`Derived` to
-  `Trusted`/`Validated` without an explicit validator or a human approval.
-  Free model text is `Derived`; `oneof` and numeric ranges constrain shape, not
-  truth.
+  `Trusted`/`Validated` without an explicit validator or a human approval. The
+  one promotion in the core is `Tool.Validate` returning nil on a handle-backed
+  argument; a tool without `Validate` promotes nothing. Free model text is
+  `Derived`; `oneof` and numeric ranges constrain shape, not truth.
+- A tool result re-enters the model context, so `sensitivity` on the result
+  struct is honoured before the result is marshalled (`redact.go`). Do not add a
+  path that puts a raw `secret` field into a tool message.
 - `Readers` / per-reader ACL is not implemented. Do not claim it exists. The
   application owns its data ACL.
 - `Resource.TenantID` must match `Principal.Tenant`; the Gate enforces this

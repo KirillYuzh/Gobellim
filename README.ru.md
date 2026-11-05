@@ -64,7 +64,7 @@ engine, err := gobellim.New(
 	gobellim.WithAuthorizer(existing),       // ваш RBAC/ACL
 	gobellim.WithAudit(gobellim.SlogSink{}), // или plugins/langfuse
 )
-task, err := gobellim.NewTask(engine, gobellim.TaskConfig[TicketInput, TriageOutput]{
+task, err := gobellim.NewTask[TicketInput, TriageOutput](engine, gobellim.TaskConfig{
 	Name:        "ticket.triage",
 	Instruction: "Classify the ticket and propose a reply.",
 	Tools:       []gobellim.ToolDef{refund},
@@ -73,8 +73,11 @@ res, err := task.Run(ctx, principalFromRequest(r), in)
 ```
 
 `res.Status == gobellim.TaskApprovalRequired` означает, что модель предложила
-write-действие, но оно **не выполнено**. В `res.Approval` лежит карточка с
-аргументами, digest и provenance. Для возобновляемого approval используйте
+write-действие, но оно **не выполнено**. В `res.Pending` лежит сериализуемое
+описание действия: карточка с аргументами, digest, provenance и expiry. После
+реального одобрения приложение вызывает `task.ExecuteApproved(ctx, requester,
+res.Pending)`: Gate заново проверяет tenant, RBAC/ACL, `Validate` и digest.
+Для возобновляемого approval с sealed-токеном, TTL и four-eyes используйте
 `flow`.
 
 ## Gate
@@ -100,6 +103,12 @@ RBAC/ACL, grounding, бизнес-валидация, потолок эффек�
 - `ground`-поле принимает только существующий handle; сырая строка — `Deny`;
 - ошибка `Validate` — `Deny`;
 - заявления модели о правах не учитываются.
+
+`Validated` достижим только одним путём: аргумент пришёл через handle этого
+запуска и `Tool.Validate` вернул `nil`. Свободный текст модели остаётся
+`Derived`, инструмент без `Validate` повышения не получает. `worst` считается
+по всем аргументам, поэтому один model-derived аргумент в write-вызове всё
+равно требует человека.
 
 ## Теги schema
 

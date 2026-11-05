@@ -58,6 +58,7 @@ type Model struct {
 	mu      sync.Mutex
 	token   string
 	expires time.Time
+	refresh sync.Mutex
 }
 
 var _ gobellim.Model = (*Model)(nil)
@@ -91,7 +92,8 @@ func New(cfg Config) (*Model, error) {
 	return &Model{cfg: cfg, client: cfg.HTTPClient}, nil
 }
 
-// Chat sends one request to GigaChat.
+// Chat sends one request to GigaChat. It retries 429 and 5xx with a bounded
+// backoff, and re-authenticates once on 401.
 func (m *Model) Chat(ctx context.Context, req gobellim.Request) (gobellim.Response, error) {
 	body, err := m.encode(req)
 	if err != nil {
@@ -101,7 +103,7 @@ func (m *Model) Chat(ctx context.Context, req gobellim.Request) (gobellim.Respon
 	if err != nil {
 		return gobellim.Response{}, err
 	}
-	resp, err := m.doChat(ctx, token, body)
+	resp, err := m.chatWithRetry(ctx, token, body)
 	if err != nil {
 		return gobellim.Response{}, err
 	}
@@ -113,12 +115,38 @@ func (m *Model) Chat(ctx context.Context, req gobellim.Request) (gobellim.Respon
 		if err != nil {
 			return gobellim.Response{}, err
 		}
-		resp, err = m.doChat(ctx, token, body)
+		resp, err = m.chatWithRetry(ctx, token, body)
 		if err != nil {
 			return gobellim.Response{}, err
 		}
 	}
 	return m.decode(resp)
+}
+
+// chatWithRetry retries the rate limit and transient server errors the same
+// way the provider documents: a few attempts with an exponential delay. The
+// last response is returned even if it is still an error, so decode can report
+// it.
+func (m *Model) chatWithRetry(ctx context.Context, token string, body []byte) (*http.Response, error) {
+	const maxAttempts = 3
+	delay := 500 * time.Millisecond
+	for attempt := 0; ; attempt++ {
+		resp, err := m.doChat(ctx, token, body)
+		if err != nil {
+			return nil, err
+		}
+		if attempt == maxAttempts-1 || (resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode < 500) {
+			return resp, nil
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+		_ = resp.Body.Close()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
+		delay *= 2
+	}
 }
 
 func (m *Model) doChat(ctx context.Context, token string, body []byte) (*http.Response, error) {
@@ -172,13 +200,16 @@ func (m *Model) decode(resp *http.Response) (gobellim.Response, error) {
 }
 
 func (m *Model) accessToken(ctx context.Context) (string, error) {
-	m.mu.Lock()
-	if m.token != "" && time.Now().Before(m.expires) {
-		token := m.token
-		m.mu.Unlock()
+	if token := m.cachedToken(); token != "" {
 		return token, nil
 	}
-	m.mu.Unlock()
+	// One refresh at a time: a burst of chats must not start a burst of OAuth
+	// exchanges.
+	m.refresh.Lock()
+	defer m.refresh.Unlock()
+	if token := m.cachedToken(); token != "" {
+		return token, nil
+	}
 
 	form := url.Values{"scope": {m.cfg.Scope}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.cfg.OAuthURL, strings.NewReader(form.Encode()))
@@ -218,6 +249,15 @@ func (m *Model) accessToken(ctx context.Context) (string, error) {
 	m.expires = expires
 	m.mu.Unlock()
 	return tr.AccessToken, nil
+}
+
+func (m *Model) cachedToken() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.token != "" && time.Now().Before(m.expires) {
+		return m.token
+	}
+	return ""
 }
 
 func (m *Model) invalidate() {
@@ -264,10 +304,9 @@ func (m *Model) encode(req gobellim.Request) ([]byte, error) {
 	}
 
 	out := chatRequest{
-		Model:       m.cfg.Model,
-		Messages:    messages,
-		MaxTokens:   req.MaxTokens,
-		Temperature: req.Temperature,
+		Model:     m.cfg.Model,
+		Messages:  messages,
+		MaxTokens: req.MaxTokens,
 	}
 	for _, tool := range req.Tools {
 		params := tool.Schema
@@ -296,7 +335,6 @@ type chatRequest struct {
 	Functions    []function    `json:"functions,omitempty"`
 	FunctionCall any           `json:"function_call,omitempty"`
 	MaxTokens    int           `json:"max_tokens,omitempty"`
-	Temperature  *float64      `json:"temperature,omitempty"`
 }
 
 type chatMessage struct {
