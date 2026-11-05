@@ -658,7 +658,9 @@ func marshalNoEscape(v any) ([]byte, error) {
 }
 
 // prepareInput validates In, redacts what must be redacted and returns the JSON
-// the model may see plus the provenance map.
+// the model may see plus the provenance of each field. Run does not need the
+// provenance itself, but it is the only observable record of how an input value
+// was labelled before masking.
 func (s *structSchema) prepareInput(in any, p Principal, hs *handleSet) (map[string]any, map[string]Label, error) {
 	rv := reflect.ValueOf(in)
 	for rv.Kind() == reflect.Pointer {

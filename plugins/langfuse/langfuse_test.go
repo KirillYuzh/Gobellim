@@ -127,6 +127,9 @@ func TestCloseIsIdempotentAndEmitAfterCloseIsSafe(t *testing.T) {
 		t.Fatal(err)
 	}
 	sink.Emit(context.Background(), gobellim.Event{Kind: gobellim.EventTaskStarted})
+	if sink.Dropped() != 1 {
+		t.Fatalf("dropped = %d, want 1: an event lost after Close must still be visible", sink.Dropped())
+	}
 }
 
 func TestOnDrop(t *testing.T) {

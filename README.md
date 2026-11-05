@@ -110,8 +110,9 @@ flowchart LR
   `Escalate`. Unknown tool, invalid arguments, an authorizer error or a tenant
   mismatch are never `Allow`.
 - **PendingAction** — a serializable escalation: resolved arguments, digest,
-  nonce, expiry. It is the only way to execute what a human approved, and it is
-  single-use.
+  nonce, expiry, and an HMAC that ties it to the engine that issued it. It is the
+  only way to execute what a human approved, it is single-use, and an approval
+  endpoint must never accept its fields from a client.
 - **Audit** — labels, digests, decisions and counters. No prompt text, no raw
   arguments, no secrets.
 
@@ -135,7 +136,8 @@ and tests behind it.
   [`redact.go`](./redact.go)); the model can only reference a handle.
 - **An approval is a bound, single-use action.** The digest covers the tool and
   its arguments; the nonce is claimed before the handler runs
-  ([`claims.go`](./claims.go), [`flow/`](./flow)).
+  ([`claims.go`](./claims.go), [`flow/`](./flow)); and the engine's HMAC rejects
+  an action it did not issue ([`approval.go`](./approval.go)).
 - **Audit is not a log of everything.** Events carry labels and digests, not
   values ([`audit.go`](./audit.go)); an unfinished run is audited as a failure,
   never as success.
@@ -368,9 +370,10 @@ out, err := wf.Resume(ctx, approver, res.Suspension.Token, flow.Approve)
 Resume checks the AEAD, tenant binding, expiry, workflow version, the step id,
 approver permission, four-eyes, the requester's action permission, the action
 digest and an atomic claim. A rejected approval, an expired token, a revoked
-permission or a changed action never executes the step. Without `WithStore` the
-flow uses a process-local `MemStore`, so a token cannot be resumed twice inside
-one replica; a shared store is needed between replicas.
+permission or a changed action never executes the step. A rejection claims the
+nonce as well, so a "no" cannot be replayed later as a "yes". Without
+`WithStore` the flow uses a process-local `MemStore`, so a token cannot be
+resumed twice inside one replica; a shared store is needed between replicas.
 
 `Task.ExecuteApproved` runs a `PendingAction` after a human approved it. The Gate
 re-checks tenant, RBAC/ACL, `Validate`, tool/effect and the digest of the exact
@@ -378,6 +381,13 @@ arguments the human saw; the approver is recorded as `approval.granted`. The
 nonce is claimed before your handler runs, so a second call is
 `ErrApprovalReplay` and a crash in that window loses the approval instead of
 double-executing it.
+
+A `PendingAction` also carries an HMAC over its fields, keyed by the engine. Keep
+it on the server: an approval endpoint that decodes a `PendingAction` from a
+request body hands the client the arguments, the digest and the nonce, and the
+engine rejects it as `ErrApprovalDrift`. A random per-process key is the default;
+`gobellim.WithApprovalKey` sets a shared 32-byte key when one replica escalates
+and another executes.
 
 ## Observability
 
@@ -421,7 +431,8 @@ Guaranteed when the application integrates correctly:
 - free model text does not become trusted through a JSON schema or a
   paraphrase;
 - an approval is bound to the tool and arguments it was shown,
-  `ExecuteApproved` re-runs the Gate, and the approval is single-use;
+  `ExecuteApproved` re-runs the Gate, the approval is single-use, and an action
+  the engine did not issue is rejected;
 - `sensitivity` on a tool result keeps a secret out of the model context;
 - audit events carry labels and digests, not prompt text or secrets;
 - an unfinished run is audited as `task.failed`, never as `task.completed`.

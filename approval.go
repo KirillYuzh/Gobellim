@@ -1,9 +1,11 @@
 package gobellim
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strconv"
 	"time"
 )
 
@@ -52,4 +54,31 @@ func (c ApprovalCard) normalize() ApprovalCard {
 		c.Digest = c.ActionDigest()
 	}
 	return c
+}
+
+// proofMessage is the canonical byte string an issued PendingAction is signed
+// over. Times are encoded as Unix nanoseconds so a JSON round trip through any
+// time zone produces the same message.
+func proofMessage(p *PendingAction) []byte {
+	b := make([]byte, 0, 256)
+	for _, s := range []string{p.RunID, p.Task, p.Tenant, p.Tool, p.Nonce, p.Digest} {
+		b = append(b, s...)
+		b = append(b, 0)
+	}
+	b = strconv.AppendInt(b, p.ExpiresAt.UnixNano(), 10)
+	b = append(b, 0)
+	return strconv.AppendInt(b, p.Card.ExpiresAt.UnixNano(), 10)
+}
+
+// sign binds a pending action to this engine. Without it the struct is a bearer
+// token: an approval endpoint that decodes one from a request body would let a
+// client choose its own arguments, digest and nonce.
+func (e *Engine) sign(p *PendingAction) []byte {
+	m := hmac.New(sha256.New, e.approvalKey)
+	m.Write(proofMessage(p))
+	return m.Sum(nil)
+}
+
+func (e *Engine) signedByUs(p *PendingAction) bool {
+	return len(p.Proof) > 0 && hmac.Equal(p.Proof, e.sign(p))
 }

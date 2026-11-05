@@ -171,6 +171,25 @@ func TestReject(t *testing.T) {
 	}
 }
 
+func TestRejectConsumesTheToken(t *testing.T) {
+	f := newFlow(perms(defaultPerms()))
+	res, err := f.Run(context.Background(), requester(), refundState{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Reject); err != nil {
+		t.Fatal(err)
+	}
+	// The same continuation must not be replayed as an approval.
+	out, err := f.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Approve)
+	if !errors.Is(err, ErrReplay) {
+		t.Fatalf("err = %v, want ErrReplay", err)
+	}
+	if out.State.Executed {
+		t.Fatal("a rejected action executed on replay")
+	}
+}
+
 func TestTamperedToken(t *testing.T) {
 	f := newFlow(perms(defaultPerms()))
 	res, err := f.Run(context.Background(), requester(), refundState{})

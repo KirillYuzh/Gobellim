@@ -61,14 +61,18 @@ res, err := task.Run(ctx, principalFromRequest(r), in)
 
 `res.Status == gobellim.TaskApprovalRequired` означает, что модель предложила
 write-действие, но оно **не выполнено**. В `res.Pending` лежит сериализуемое
-описание действия: карточка с аргументами, digest, provenance, expiry и nonce.
-После реального одобрения приложение вызывает `task.ExecuteApproved(ctx,
-requester, approver, res.Pending)`: Gate заново проверяет tenant, RBAC/ACL,
-`Validate`, tool/effect и digest, а `approver` попадает в audit как
-`approval.granted`. Одобрение одноразовое: nonce уходит в `ClaimStore` (по
-умолчанию — процессный, `gobellim.WithClaimStore` — общий). Для
-возобновляемого approval с sealed-токеном, TTL и four-eyes используйте `flow`
-(шаг после `Approve`, approver берётся из `flow.ApproverFrom(ctx)`).
+описание действия: карточка с аргументами, digest, provenance, expiry, nonce и
+HMAC-подпись engine. Храните его на сервере: если endpoint одобрения декодирует
+`PendingAction` из тела запроса, клиент сам выбирает аргументы и digest, и
+engine отвергнет такой объект как `ErrApprovalDrift`. После реального одобрения
+приложение вызывает `task.ExecuteApproved(ctx, requester, approver,
+res.Pending)`: Gate заново проверяет tenant, RBAC/ACL, `Validate`, tool/effect и
+digest, а `approver` попадает в audit как `approval.granted`. Одобрение
+одноразовое: nonce уходит в `ClaimStore` (по умолчанию — процессный,
+`gobellim.WithClaimStore` — общий). Для возобновляемого approval с
+sealed-токеном, TTL и four-eyes используйте `flow` (шаг после `Approve`,
+approver берётся из `flow.ApproverFrom(ctx)`). `flow.Reject` тоже забирает
+nonce: отклонённое действие нельзя позже провести как одобренное.
 
 ## Теги schema
 

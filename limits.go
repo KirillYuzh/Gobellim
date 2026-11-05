@@ -44,37 +44,9 @@ func DefaultLimits() Limits {
 	}
 }
 
-func (l Limits) withDefaults() Limits {
-	d := DefaultLimits()
-	if l.MaxInputBytes == 0 {
-		l.MaxInputBytes = d.MaxInputBytes
-	}
-	if l.MaxOutputBytes == 0 {
-		l.MaxOutputBytes = d.MaxOutputBytes
-	}
-	if l.MaxArgBytes == 0 {
-		l.MaxArgBytes = d.MaxArgBytes
-	}
-	if l.MaxContextBytes == 0 {
-		l.MaxContextBytes = d.MaxContextBytes
-	}
-	if l.MaxToolCalls == 0 {
-		l.MaxToolCalls = d.MaxToolCalls
-	}
-	if l.MaxModelCalls == 0 {
-		l.MaxModelCalls = d.MaxModelCalls
-	}
-	if l.MaxContextItems == 0 {
-		l.MaxContextItems = d.MaxContextItems
-	}
-	if l.MaxWallTime == 0 {
-		l.MaxWallTime = d.MaxWallTime
-	}
-	return l
-}
-
-// withFallback fills every zero field from base, so a task can tighten one
-// budget without restating the engine defaults.
+// withFallback fills every zero field from base: the engine passes DefaultLimits,
+// a task passes the engine's limits so it can tighten one budget without
+// restating the rest.
 func (l Limits) withFallback(base Limits) Limits {
 	if l.MaxInputBytes == 0 {
 		l.MaxInputBytes = base.MaxInputBytes

@@ -51,7 +51,6 @@ type Sink struct {
 
 	wmu     sync.Mutex
 	wg      sync.WaitGroup
-	seq     atomic.Uint64
 	dropped atomic.Uint64
 	once    sync.Once
 
@@ -94,23 +93,23 @@ func New(cfg Config) (*Sink, error) {
 	return s, nil
 }
 
-// Emit queues one event. It never blocks the caller; when the queue is full
-// the event is dropped, counted and reported to OnDrop.
+// Emit queues one event. It never blocks the caller; when the queue is full or
+// the sink is closing the event is dropped, counted and reported to OnDrop.
 func (s *Sink) Emit(_ context.Context, e gobellim.Event) {
 	s.mu.RLock()
-	if s.closed {
-		s.mu.RUnlock()
-		return
-	}
-	select {
-	case s.events <- e:
-		s.mu.RUnlock()
-	default:
-		s.dropped.Add(1)
-		s.mu.RUnlock()
-		if s.cfg.OnDrop != nil {
-			s.cfg.OnDrop(e)
+	closed := s.closed
+	if !closed {
+		select {
+		case s.events <- e:
+			s.mu.RUnlock()
+			return
+		default:
 		}
+	}
+	s.mu.RUnlock()
+	s.dropped.Add(1)
+	if s.cfg.OnDrop != nil {
+		s.cfg.OnDrop(e)
 	}
 }
 
@@ -388,8 +387,6 @@ func formatTime(t time.Time) string {
 
 func (s *Sink) newID() string {
 	var b [12]byte
-	if _, err := rand.Read(b[:]); err == nil {
-		return hex.EncodeToString(b[:])
-	}
-	return fmt.Sprintf("ev-%d", s.seq.Add(1))
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }

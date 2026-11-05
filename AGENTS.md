@@ -41,7 +41,10 @@ layer and must match the current code; if code and `DESIGN.md` disagree, fix bot
 - `PendingAction` is single-use. `Task.ExecuteApproved` claims its nonce in the
   `Engine` ClaimStore before the handler runs; a second call is
   `ErrApprovalReplay`. Claim before the effect is deliberate: a crash loses the
-  approval instead of double-executing it.
+  approval instead of double-executing it. A `PendingAction` also carries an HMAC
+  from the issuing `Engine`; an object the engine did not issue is
+  `ErrApprovalDrift`, so an approval endpoint must never decode one from a
+  client. `flow.Reject` claims the nonce too, so a rejection is final.
 - `Readers` / per-reader ACL is not implemented. Do not claim it exists. The
   application owns its data ACL.
 - `Resource.TenantID` must match `Principal.Tenant`; the Gate enforces this

@@ -415,17 +415,15 @@ func stripFences(s string) string {
 
 func newID(prefix string) string {
 	var b [12]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return prefix + "unknown"
-	}
+	_, _ = rand.Read(b[:])
 	return prefix + hex.EncodeToString(b[:])
 }
 
+// newUUID returns a version 4 UUID for the RqUID header. GigaChat requires the
+// header shape, so rand.Text is not an alternative here.
 func newUUID() string {
 	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "00000000-0000-4000-8000-000000000000"
-	}
+	_, _ = rand.Read(b[:])
 	b[6] = (b[6] & 0x0f) | 0x40
 	b[8] = (b[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])

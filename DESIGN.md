@@ -463,9 +463,9 @@ HTTP-ответ `202 Accepted` может содержать approval card и co
 
 Go не умеет безопасно сериализовать стек произвольной функции. Поэтому `gobellim` не обещает магически продолжить выполнение с середины произвольной Go-функции.
 
-Вместо этого `Task` возвращает явный typed outcome: `Completed`, `ApprovalRequired` или `Failed`. При `ApprovalRequired` runtime возвращает `PendingAction` — сериализуемое описание ровно того действия, которое было остановлено: задача, tool, уже разрезолвленные аргументы, digest, tenant, expiry и карточку. Tool handler не вызывается.
+Вместо этого `Task` возвращает явный typed outcome: `Completed`, `ApprovalRequired` или `Failed`. При `ApprovalRequired` runtime возвращает `PendingAction` — сериализуемое описание ровно того действия, которое было остановлено: задача, tool, уже разрезолвленные аргументы, digest, tenant, expiry, карточку и HMAC-подпись engine. Tool handler не вызывается.
 
-После реального одобрения приложение вызывает `task.ExecuteApproved(ctx, requester, approver, pending)`. Метод заново прогоняет tenant binding, RBAC/ACL и `Tool.Validate`, сверяет tool/effect и digest аргументов с карточкой, фиксирует `approval.granted` с id апрувера и только потом вызывает handler. Потолок эффекта — единственная проверка, которую заменяет решение человека. `PendingAction` — обычный JSON (включая `nonce`), поэтому `flow` запечатывает его в continuation token и передаёт в шаг после `Approve`; `flow.ApproverFrom(ctx)` отдаёт апрувера этому шагу. Повторный `ExecuteApproved` с тем же `PendingAction` возвращает `ErrApprovalReplay`.
+После реального одобрения приложение вызывает `task.ExecuteApproved(ctx, requester, approver, pending)`. Метод проверяет HMAC, которым engine подписал выданный `PendingAction` (поэтому объект, собранный клиентом или другим процессом без общего `WithApprovalKey`, — `ErrApprovalDrift`), заново прогоняет tenant binding, RBAC/ACL и `Tool.Validate`, сверяет tool/effect и digest аргументов с карточкой, фиксирует `approval.granted` с id апрувера и только потом вызывает handler. Потолок эффекта — единственная проверка, которую заменяет решение человека. `PendingAction` — обычный JSON (включая `nonce` и `proof`), поэтому `flow` запечатывает его в continuation token и передаёт в шаг после `Approve`; `flow.ApproverFrom(ctx)` отдаёт апрувера этому шагу. Повторный `ExecuteApproved` с тем же `PendingAction` возвращает `ErrApprovalReplay`.
 
 Уже завершённые шаги не перевычисляются: `flow` продолжает с шага после `Approve`. `Task` не восстанавливает стек и не продолжает модельный цикл после одобрения — новый ход начинается новым `Run`.
 
@@ -492,7 +492,7 @@ Go не умеет безопасно сериализовать стек про
 
 Карточка должна объяснять, почему действие остановлено, откуда взялись аргументы, какие ограничения сработали и что именно апрувер разрешает. В текущей реализации `ApprovalCard.Args` содержит уже резолвнутые значения; библиотека не знает личность апрувера в момент приостановки, поэтому сервис обязан применить свой approver ACL перед показом карточки. Сам по себе hash аргументов не доказывает их безопасность; provenance нужен для осмысленного решения.
 
-Поддерживаемые решения: `Approve`, `Reject`. `Edit` аргументов — P2 и в текущей реализации отсутствует.
+Поддерживаемые решения: `Approve`, `Reject`. `Reject` необратим: он тоже забирает nonce из `Store`, поэтому тот же continuation нельзя позже возобновить как `Approve`; повторное решение требует нового `Run`. `Edit` аргументов — P2 и в текущей реализации отсутствует.
 
 ### 8.5. Sealed continuation
 

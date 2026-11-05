@@ -505,6 +505,15 @@ func (f *Flow[S]) Resume(ctx context.Context, approver gobellim.Principal, token
 
 	switch d {
 	case Reject:
+		// A rejection consumes the token: a human who said no must not be
+		// replayed as a yes by the same continuation. A retry needs a new Run.
+		claimed, err := f.cfg.store.Claim(ctx, c.Nonce, c.ExpiresAt)
+		if err != nil {
+			return Result[S]{Status: Failed, State: state}, fmt.Errorf("flow: store claim: %w", err)
+		}
+		if !claimed {
+			return Result[S]{Status: Failed, State: state}, ErrReplay
+		}
 		f.emit(ctx, gobellim.Event{
 			Kind: gobellim.EventApprovalDenied, RunID: c.Card.RunID, Flow: f.name, Step: c.StepID,
 			PrincipalID: approver.UserID, Tenant: approver.Tenant,
@@ -605,11 +614,9 @@ func (f *Flow[S]) emit(ctx context.Context, e gobellim.Event) {
 }
 
 func newID(prefix string) string {
-	b := make([]byte, 12)
-	if _, err := rand.Read(b); err != nil {
-		return prefix + "unknown"
-	}
-	return prefix + hex.EncodeToString(b)
+	var b [12]byte
+	_, _ = rand.Read(b[:])
+	return prefix + hex.EncodeToString(b[:])
 }
 
 type continuation struct {

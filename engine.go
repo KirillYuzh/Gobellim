@@ -17,6 +17,11 @@ type Config struct {
 	// in-process store; a shared store is needed between replicas.
 	Claims      ClaimStore
 	ApprovalTTL time.Duration
+	// ApprovalKey signs a PendingAction. A nil value generates a random
+	// per-process key, so an action escalated on one replica can be approved
+	// only on that replica; set a shared 32-byte key to move approvals between
+	// replicas.
+	ApprovalKey []byte
 	Now         func() time.Time
 }
 
@@ -45,6 +50,11 @@ func WithClaimStore(s ClaimStore) Option { return func(c *Config) { c.Claims = s
 // is 24 hours.
 func WithApprovalTTL(d time.Duration) Option { return func(c *Config) { c.ApprovalTTL = d } }
 
+// WithApprovalKey sets the HMAC key that authenticates a PendingAction. It must
+// be 32 bytes. Use it when an action escalated on one replica may be approved
+// on another.
+func WithApprovalKey(key []byte) Option { return func(c *Config) { c.ApprovalKey = key } }
+
 // WithClock overrides the clock. It exists for tests.
 func WithClock(fn func() time.Time) Option { return func(c *Config) { c.Now = fn } }
 
@@ -58,6 +68,7 @@ type Engine struct {
 	policyVersion string
 	claims        ClaimStore
 	approvalTTL   time.Duration
+	approvalKey   []byte
 	now           func() time.Time
 }
 
@@ -75,7 +86,7 @@ func New(opts ...Option) (*Engine, error) {
 	if cfg.Authorizer == nil {
 		return nil, fmt.Errorf("%w: authorizer is required", ErrInvalidConfig)
 	}
-	limits := cfg.Limits.withDefaults()
+	limits := cfg.Limits.withFallback(DefaultLimits())
 	if err := limits.validate(); err != nil {
 		return nil, err
 	}
@@ -95,6 +106,12 @@ func New(opts ...Option) (*Engine, error) {
 	if now == nil {
 		now = time.Now
 	}
+	key := cfg.ApprovalKey
+	if len(key) == 0 {
+		key = []byte(randomHex(32))
+	} else if len(key) != 32 {
+		return nil, fmt.Errorf("%w: approval key must be 32 bytes", ErrInvalidConfig)
+	}
 	return &Engine{
 		model:         cfg.Model,
 		authz:         cfg.Authorizer,
@@ -103,12 +120,17 @@ func New(opts ...Option) (*Engine, error) {
 		policyVersion: cfg.PolicyVersion,
 		claims:        claims,
 		approvalTTL:   ttl,
+		approvalKey:   key,
 		now:           now,
 	}, nil
 }
 
 // Limits returns the effective budgets.
 func (e *Engine) Limits() Limits { return e.limits }
+
+// elapsed measures a step on the same clock that stamps events and checks
+// expiry, so an injected clock cannot report a latency of several years.
+func (e *Engine) elapsed(start time.Time) time.Duration { return e.now().Sub(start) }
 
 func (e *Engine) emit(ctx context.Context, ev Event) {
 	ev.Time = e.now()

@@ -2,6 +2,7 @@ package gobellim_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -853,6 +854,106 @@ func TestExecuteApprovedRejectsChangedEffect(t *testing.T) {
 	changed.Card.Effect = gobellim.Read
 	if _, _, err := task.ExecuteApproved(context.Background(), principal(), principal(), &changed); !errors.Is(err, gobellim.ErrApprovalDrift) {
 		t.Fatalf("err = %v, want ErrApprovalDrift", err)
+	}
+}
+
+func TestExecuteApprovedRejectsATamperedPendingAction(t *testing.T) {
+	refund := gobellim.Tool[refundArgs, refundResult]{
+		Name:       "orders.refund",
+		Effect:     gobellim.Write,
+		Permission: "orders:refund",
+		Resource:   testResource[refundArgs],
+		Run: func(context.Context, gobellim.Principal, refundArgs) (refundResult, error) {
+			t.Fatal("a tampered pending action was executed")
+			return refundResult{}, nil
+		},
+	}
+	model := testkit.NewFakeModel(
+		testkit.Call("orders.refund", map[string]any{"OrderID": "<h1>", "Cents": 100}),
+		testkit.Reply(validTriage),
+	)
+	e := newEngine(t, model, testkit.AllowAll, nil)
+	task := newTriageTask(t, e, []gobellim.ToolDef{refund})
+
+	res, err := task.Run(context.Background(), principal(), ticketIn{
+		TenantID: "acme", TicketID: "t-1", Body: "refund", RequestedOrder: "A-1042",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tampered := []func(p *gobellim.PendingAction){
+		func(p *gobellim.PendingAction) { p.Card.RunID = "r_other" },
+		func(p *gobellim.PendingAction) { p.Card.ExpiresAt = p.Card.ExpiresAt.Add(time.Hour) },
+		func(p *gobellim.PendingAction) { p.ExpiresAt = p.ExpiresAt.Add(time.Hour) },
+	}
+	for i, mutate := range tampered {
+		changed := *res.Pending
+		mutate(&changed)
+		if _, rec, err := task.ExecuteApproved(context.Background(), principal(), principal(), &changed); !errors.Is(err, gobellim.ErrApprovalDrift) {
+			t.Fatalf("case %d: err = %v, want ErrApprovalDrift", i, err)
+		} else if rec.Executed {
+			t.Fatalf("case %d: tampered action executed", i)
+		}
+	}
+}
+
+func TestExecuteApprovedRejectsAForgedPendingAction(t *testing.T) {
+	refund := gobellim.Tool[refundArgs, refundResult]{
+		Name:       "orders.refund",
+		Effect:     gobellim.Write,
+		Permission: "orders:refund",
+		Resource:   testResource[refundArgs],
+		Validate: func(context.Context, gobellim.Principal, refundArgs) error {
+			return nil
+		},
+		Run: func(context.Context, gobellim.Principal, refundArgs) (refundResult, error) {
+			t.Fatal("a forged pending action was executed")
+			return refundResult{}, nil
+		},
+	}
+	model := testkit.NewFakeModel(
+		testkit.Call("orders.refund", map[string]any{"OrderID": "<h1>", "Cents": 100}),
+		testkit.Reply(validTriage),
+	)
+	e := newEngine(t, model, testkit.AllowAll, nil)
+	task := newTriageTask(t, e, []gobellim.ToolDef{refund})
+
+	res, err := task.Run(context.Background(), principal(), ticketIn{
+		TenantID: "acme", TicketID: "t-1", Body: "refund", RequestedOrder: "A-1042",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The client-supplied shape: every field is under the caller's control.
+	args, err := json.Marshal(refundArgs{OrderID: "A-1042", Cents: 4900})
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := gobellim.ApprovalCard{Tool: "orders.refund", Args: args}.ActionDigest()
+	forged := &gobellim.PendingAction{
+		RunID:     "r_forged",
+		Task:      "ticket.triage",
+		Tenant:    "acme",
+		Tool:      "orders.refund",
+		Nonce:     "n_forged",
+		Args:      args,
+		Digest:    digest,
+		ExpiresAt: res.Pending.ExpiresAt,
+		Card: gobellim.ApprovalCard{
+			RunID: "r_forged", Tool: "orders.refund", Effect: gobellim.Write,
+			Args: args, Digest: digest, ExpiresAt: res.Pending.ExpiresAt,
+		},
+	}
+	if _, _, err := task.ExecuteApproved(context.Background(), principal(), principal(), forged); !errors.Is(err, gobellim.ErrApprovalDrift) {
+		t.Fatalf("err = %v, want ErrApprovalDrift", err)
+	}
+
+	// A real action from a different engine is not ours either.
+	otherTask := newTriageTask(t, newEngine(t, model, testkit.AllowAll, nil), []gobellim.ToolDef{refund})
+	if _, _, err := otherTask.ExecuteApproved(context.Background(), principal(), principal(), res.Pending); err == nil {
+		t.Fatal("an action issued by another engine was executed")
 	}
 }
 

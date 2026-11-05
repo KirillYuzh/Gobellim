@@ -62,7 +62,9 @@ type TaskResult[Out any] struct {
 //
 // The card carries the resolved arguments and their digest. ExecuteApproved
 // re-runs the Gate on them, so an approval cannot execute a different action.
-// Nonce makes the approval single-use.
+// Nonce makes the approval single-use. Proof is an HMAC over the rest of the
+// struct, so a pending action the engine did not issue cannot be executed: an
+// approval endpoint must never accept these fields from a client.
 type PendingAction struct {
 	RunID     string          `json:"run_id"`
 	Task      string          `json:"task"`
@@ -73,6 +75,7 @@ type PendingAction struct {
 	Digest    string          `json:"digest"`
 	ExpiresAt time.Time       `json:"expires_at"`
 	Card      ApprovalCard    `json:"card"`
+	Proof     []byte          `json:"proof,omitempty"`
 }
 
 type compiledTool struct {
@@ -179,7 +182,7 @@ func (t *Task[In, Out]) Run(ctx context.Context, p Principal, in In) (result Tas
 	defer func() {
 		ev := Event{
 			RunID: runID, Task: t.cfg.Name, PrincipalID: p.UserID, Tenant: p.Tenant,
-			Latency: time.Since(start), ModelCalls: result.ModelCalls, ToolCalls: toolCalls,
+			Latency: t.engine.elapsed(start), ModelCalls: result.ModelCalls, ToolCalls: toolCalls,
 			PromptTokens: result.Usage.PromptTokens, CompletionTokens: result.Usage.CompletionTokens, TotalTokens: result.Usage.TotalTokens,
 		}
 		switch {
@@ -233,7 +236,7 @@ func (t *Task[In, Out]) Run(ctx context.Context, p Principal, in In) (result Tas
 		if n := contextBytes(req.Messages); n > t.limits.MaxContextBytes {
 			return result, fmt.Errorf("%w: context is %d bytes, cap is %d", ErrBudget, n, t.limits.MaxContextBytes)
 		}
-		start := t.engine.now()
+		modelStart := t.engine.now()
 		resp, err := t.engine.model.Chat(runCtx, req)
 		if err != nil {
 			return result, fmt.Errorf("gobellim: model: %w", err)
@@ -245,7 +248,7 @@ func (t *Task[In, Out]) Run(ctx context.Context, p Principal, in In) (result Tas
 		t.engine.emit(auditCtx, Event{
 			Kind: EventModelCompleted, RunID: runID, Task: t.cfg.Name,
 			PrincipalID: p.UserID, Tenant: p.Tenant,
-			Latency: time.Since(start), Model: resp.Model,
+			Latency: t.engine.elapsed(modelStart), Model: resp.Model,
 			PromptTokens: resp.Usage.PromptTokens, CompletionTokens: resp.Usage.CompletionTokens, TotalTokens: resp.Usage.TotalTokens,
 			ModelCalls: result.ModelCalls, ToolCalls: toolCalls,
 		})
@@ -314,6 +317,13 @@ func (t *Task[In, Out]) ExecuteApproved(ctx context.Context, requester, approved
 	if pending.Nonce == "" || pending.Digest == "" || pending.ExpiresAt.IsZero() {
 		return nil, rec, fmt.Errorf("%w: %w: pending action is incomplete", ErrApprovalInvalid, ErrApprovalDrift)
 	}
+	if !t.engine.signedByUs(pending) {
+		// Only an action this engine escalated may be executed. Without this the
+		// struct is a bearer token: whoever can call ExecuteApproved could supply
+		// its own arguments, digest and nonce.
+		rec.Decision = Decision{Kind: Deny, RuleIDs: []string{"approval-forged"}, Reason: "pending action was not issued by this engine"}
+		return nil, rec, fmt.Errorf("%w: %w: pending action was not issued by this engine", ErrApprovalInvalid, ErrApprovalDrift)
+	}
 	ct, ok := t.tools[pending.Tool]
 	if !ok {
 		rec.Decision = Decision{Kind: Deny, RuleIDs: []string{"unknown-tool"}, Reason: "unknown tool"}
@@ -330,6 +340,10 @@ func (t *Task[In, Out]) ExecuteApproved(ctx context.Context, requester, approved
 	if pending.Card.Tool != ct.spec.name || pending.Card.Effect != ct.spec.effect {
 		rec.Decision = Decision{Kind: Deny, RuleIDs: []string{"approval-drift"}, Reason: "tool or effect changed since approval"}
 		return nil, rec, fmt.Errorf("%w: %w: tool or effect changed since approval", ErrApprovalInvalid, ErrApprovalDrift)
+	}
+	if pending.Card.RunID != pending.RunID || !pending.Card.ExpiresAt.Equal(pending.ExpiresAt) {
+		rec.Decision = Decision{Kind: Deny, RuleIDs: []string{"approval-drift"}, Reason: "run or expiry changed since approval"}
+		return nil, rec, fmt.Errorf("%w: %w: run or expiry changed since approval", ErrApprovalInvalid, ErrApprovalDrift)
 	}
 	if pending.Card.FourEyes && approvedBy.UserID == requester.UserID {
 		return nil, rec, fmt.Errorf("%w: four-eyes requires a different approver", ErrApprovalInvalid)
@@ -450,7 +464,7 @@ func (t *Task[In, Out]) runToolCall(
 			t.engine.emit(ctx, Event{
 				Kind: EventToolCompleted, RunID: runID, Task: t.cfg.Name,
 				PrincipalID: p.UserID, Tenant: p.Tenant, Tool: ct.spec.name,
-				Effect: ct.spec.effect, Latency: time.Since(start), Error: "tool-failed",
+				Effect: ct.spec.effect, Latency: t.engine.elapsed(start), Error: "tool-failed",
 			})
 			return rec, toolError("tool failed"), nil
 		}
@@ -467,14 +481,14 @@ func (t *Task[In, Out]) runToolCall(
 			t.engine.emit(ctx, Event{
 				Kind: EventToolCompleted, RunID: runID, Task: t.cfg.Name,
 				PrincipalID: p.UserID, Tenant: p.Tenant, Tool: ct.spec.name,
-				Effect: ct.spec.effect, Latency: time.Since(start), Error: "output-budget",
+				Effect: ct.spec.effect, Latency: t.engine.elapsed(start), Error: "output-budget",
 			})
 			return rec, toolError("tool result exceeds budget"), nil
 		}
 		t.engine.emit(ctx, Event{
 			Kind: EventToolCompleted, RunID: runID, Task: t.cfg.Name,
 			PrincipalID: p.UserID, Tenant: p.Tenant, Tool: ct.spec.name,
-			Effect: ct.spec.effect, Latency: time.Since(start),
+			Effect: ct.spec.effect, Latency: t.engine.elapsed(start),
 		})
 		return rec, string(body), nil
 
@@ -488,7 +502,7 @@ func (t *Task[In, Out]) runToolCall(
 
 func (t *Task[In, Out]) pending(runID string, p Principal, c prepared, d Decision) *PendingAction {
 	card := *t.engine.card(runID, t.cfg.Name, c, d)
-	return &PendingAction{
+	pa := &PendingAction{
 		RunID:     runID,
 		Task:      t.cfg.Name,
 		Tenant:    p.Tenant,
@@ -499,6 +513,8 @@ func (t *Task[In, Out]) pending(runID string, p Principal, c prepared, d Decisio
 		ExpiresAt: card.ExpiresAt,
 		Card:      card,
 	}
+	pa.Proof = t.engine.sign(pa)
+	return pa
 }
 
 func (t *Task[In, Out]) decodeOutput(resp Response) (Out, error) {
@@ -548,21 +564,17 @@ func toolError(msg string) string {
 	return string(b)
 }
 
-func newRunID() string {
-	b := make([]byte, 12)
-	if _, err := rand.Read(b); err != nil {
-		return "r_unknown"
-	}
-	return "r_" + hex.EncodeToString(b)
+// randomHex returns n random bytes as hex. crypto/rand.Read always fills its
+// argument, so there is no error to report and no weaker fallback to invent.
+func randomHex(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
-func newNonce() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return ""
-	}
-	return "n_" + hex.EncodeToString(b)
-}
+func newRunID() string { return "r_" + randomHex(12) }
+
+func newNonce() string { return "n_" + randomHex(16) }
 
 // contextBytes measures what a request actually costs the provider: message
 // text plus tool-call arguments. Message count alone does not bound a run.
