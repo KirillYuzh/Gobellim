@@ -7,32 +7,33 @@
 
 ![Gobellim](./site/public/gobellim-compact-white.svg)
 
-Нативные Go-примитивы для безопасной работы с LLM: поиск, вызов инструментов и
-guardrails за одним путём вызова, проверяющим права.
+Слой исполнения и политики для одного LLM use-case внутри существующего
+Go-сервиса. Gobellim — библиотека, а не платформа: она не поднимает сервер, БД
+или брокер, а core-модуль не имеет обязательных зависимостей.
 
 ![Архитектура Gobellim](docs/architecture.svg)
 
-## Посмотреть за 60 секунд
+Главный инвариант:
 
-[lite-demo](./lite-demo) — небольшой сервис с собственным движком инструментов,
-workflow и клиентом GigaChat. В нём есть principal, файл политики, инструменты и
-сценарий исследования, который останавливается и ждёт ответ пользователя. Первый
-запуск тянет образы; дальше стек поднимается примерно за полминуты.
+> Модель может предложить текст, аргументы или действие. Она не может выдать
+> себе права, изменить policy, зарегистрировать инструмент или выполнить side
+> effect в обход Gate.
 
-```sh
-cd lite-demo
-docker compose up -d --build
-```
+## Статус
 
-Откройте <http://localhost:8080> — там страница чата. Сервис слушает `:8080`.
-Ручки, статусы и готовые `curl` — в [lite-demo/README.md](./lite-demo/README.md).
+P0 и P1 из [`DESIGN.md`](./DESIGN.md) реализованы: типизированные Task и Tool,
+schema по тегам, labels и handles, Gate, привязка к tenant, audit, лимиты,
+линейный workflow с approval card, sealed continuation, проверки Resume и
+`database/sql` store.
 
-Поиск, типизированный вывод, guardrails и трейсы идут тем же путём вызова, что даёт
-библиотека.
+P2 не реализован: replay/diff, детекторы, HTTP approval handlers,
+OpenTelemetry, quorum, компенсации и редактирование одобренных аргументов.
+
+Запускаемые ноутбуки — [`examples/notebooks`](./examples/notebooks/README.md).
 
 ## Дельта: один хендлер, сделанный безопасным
 
-Обычный HTTP-хендлер вызывает ваш LLM-клиент напрямую:
+Обычный HTTP-хендлер вызывает LLM-клиент напрямую:
 
 ```go
 func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
@@ -60,233 +61,391 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
          return
      }
 -    answer, err := h.llm.Complete(r.Context(), req.Prompt)
-+    ctx := gobellim.WithPrincipal(r.Context(), gobellim.Principal{
-+        UserID: req.UserID, Roles: req.Roles, Tenant: req.Tenant,
-+    })
-+    res, err := h.app.Chat(ctx, gobellim.ChatRequest{
-+        Messages: []model.Message{{Role: model.RoleUser, Content: req.Prompt}},
++    res, err := h.task.Run(r.Context(), h.principal(r), TicketInput{
++        TenantID: principalFromRequest(r).Tenant,
++        TicketID: req.TicketID,
++        Body:     req.Prompt,
 +    })
      if err != nil {
          http.Error(w, err.Error(), http.StatusBadGateway)
          return
      }
 -    writeJSON(w, map[string]string{"answer": answer})
-+    writeJSON(w, map[string]string{"answer": res.Message.Content})
++    if res.Status == gobellim.TaskApprovalRequired {
++        // res.Pending — остановленное действие. Ничего не выполнено.
++        writeJSON(w, map[string]any{"status": "approval_required", "action": res.Pending.Card})
++        return
++    }
++    writeJSON(w, map[string]string{"answer": res.Output.Reply})
  }
 ```
 
-Это всё изменение в хендлере. Приложение собирается один раз на старте (`gobellim.New`,
-ниже). `Chat` проверяет права до любого вызова модели или хранилища, прогоняет
-guard по входу, результатам инструментов и выходу, пишет трейс и отдаёт модели
-только те инструменты, которые вызывающему разрешены.
+Хендлер сохраняет свой `ctx`, свои инструменты и бизнес-функции. Gobellim
+добавляет одно место, где решается судьба каждого модельного вызова, и одно
+место, откуда одобренное действие продолжается.
 
 ## Что добавляет Gobellim
 
-Вы оставляете себе хендлер, `ctx` и клиент Elasticsearch, который у вас уже есть.
-Gobellim добавляет четыре гейта:
-
 ```mermaid
 flowchart LR
-    H["ваш хендлер"] --> P["principal"]
-    P --> A["policy"]
-    A --> G["guard"]
-    G --> T["trace"]
-    T --> X["LLM / tool / ES"]
+    H["ваш handler"] --> P["Principal"]
+    P --> T["Task: типизированный вход<br/>labels, handles, лимиты"]
+    T --> M["модель предлагает<br/>ответ или tool call"]
+    M --> G{"Gate"}
+    G -->|"tenant · RBAC/ACL<br/>grounding · Validate · effect"| A["Allow"]
+    G --> D["Deny"]
+    G --> E["Escalate"]
+    A --> X["ваш tool handler"]
+    X --> R["отредактированный результат<br/>обратно в модель"]
+    E --> C["PendingAction<br/>digest · nonce · expiry"]
+    C -->|"человек одобрил"| EA["ExecuteApproved<br/>Gate прогоняется снова"]
+    EA --> X
+    G --> AU["audit: labels и digest"]
 ```
 
-- **principal** — кто вызывает: пользователь, роли, тенант.
-- **policy** — что вызывающему можно; по умолчанию запрещено всё.
-- **guard** — детерминированные правила L1 плюс обязательный L2-детектор.
-- **trace** — каждый вызов записан, по умолчанию замаскирован и может быть оценён.
+- **Principal** — кто вызывает: пользователь, tenant, роли. Приходит из вашего
+  слоя аутентификации, никогда из текста модели.
+- **Gate** — одна функция, превращающая предложенное действие в `Allow`,
+  `Deny` или `Escalate`. Неизвестный инструмент, невалидные аргументы, ошибка
+  authorizer и чужой tenant никогда не становятся `Allow`.
+- **PendingAction** — сериализуемая эскалация: разрезолвленные аргументы,
+  digest, nonce, expiry. Это единственный способ исполнить одобренное
+  человеком действие, и он одноразовый.
+- **Audit** — labels, digest, решения и счётчики. Без prompt text, сырых
+  аргументов и секретов.
 
-Каждый — гейт на пути вызова, а не хук, который можно забыть.
+Каждый — это гейт на пути вызова, а не хук, который можно забыть.
 
 ## Почему Gobellim
 
-Gobellim — библиотека, а не сервис: вы сохраняете свои хендлеры, конкурентность и
-инфраструктуру. Каждое утверждение ниже — структурное, и за каждым стоят код и
+Gobellim — библиотека, а не сервис: вы сохраняете свои хендлеры, конкурентность
+и инфраструктуру. Каждое утверждение ниже структурно, и за каждым есть код и
 тесты.
 
-- **Один путь вызова, без обхода.** Любая операция идёт через
-  [`internal/call`](./internal/call) — авторизация, guard, span, выполнение, — а
-  [`internal/importrules`](./internal/importrules) проверяет граф пакетов на этапе
-  сборки.
-- **Модель не решает про доступ.** Инструменты, недоступные вызывающему, вырезаются
-  из схемы до вызова модели и проверяются снова при исполнении
-  ([`authz.AllowedTools`](./authz/authz.go), `TestAllowedTools`).
-- **Поиск не может расшириться на другой тенант.** Тенант и ACL входят в kNN-фильтр,
-  а поиск deny-by-default ([`store/filter.go`](./store/filter.go),
-  `filter_test.go`, `filter_fuzz_test.go`).
-- **Трейсы по умолчанию несут маскированный текст.** Исходный текст сообщений не
-  сохраняется, пока вы явно не включите это ([`trace/config.go`](./trace/config.go),
-  `pii_test.go`).
-- **L2 обязателен намеренно.** Внутренний security review или сертификация обычно
-  требуют ML-слой. `guard.L1Only()` существует для явного L1-only и виден в
-  `Health()`, а не молчит (`D80`).
+- **Один путь вызова, без обхода.** Каждый модельный tool call решается в
+  [`gate.go`](./gate.go); цикл в [`task.go`](./task.go) не может дойти до
+  handler'а мимо него. [`internal/importrules`](./internal/importrules) — это
+  build-time проверка графа пакетов.
+- **Модель не участвует в доступе.** Permission и эффект объявлены на
+  инструменте ([`tool.go`](./tool.go)), проверяются вашим `Authorizer` и
+  перепроверяются, когда одобренное действие продолжается.
+- **Сырые секреты не попадают в prompt.** Входные поля и результаты
+  инструментов маскируются или заменяются handle'ами ([`handles.go`](./handles.go),
+  [`redact.go`](./redact.go)); модель может ссылаться только на handle.
+- **Одобрение привязано и одноразово.** Digest покрывает инструмент и его
+  аргументы; nonce фиксируется до запуска handler'а ([`claims.go`](./claims.go),
+  [`flow/`](./flow)).
+- **Audit — не лог всего.** События несут labels и digest, а не значения
+  ([`audit.go`](./audit.go)); незавершённый запуск аудируется как ошибка, а не
+  как успех.
 
-Универсальные Go-фреймворки для LLM дают адаптеры. Вы можете обернуть один из них
-policy и guard сами — и тогда этот wrapper и его тесты остаются на вас. Gobellim —
-это такой wrapper, уже протестированный: hardening-, egress- и concurrency-наборы
-идут вместе с ним.
+Универсальные Go-фреймворки для LLM дают адаптеры. Вы можете обернуть один из
+них policy и guard'ом сами — и тогда владеете этой обёрткой и её тестами.
+Gobellim — это такая обёртка: Gate, approval и security-наборы идут вместе с
+ней.
 
 ## Установка
 
 ```sh
-go get github.com/KirillYuzh/Gobellim@v0.1.0
+go get github.com/KirillYuzh/Gobellim
 ```
+
+## Быстрый старт
+
+Приложение сохраняет свой handler, `context.Context` и бизнес-функции.
+Gobellim фиксирует вокруг них модельный цикл.
+
+```go
+type TicketInput struct {
+	TenantID string `gobellim:"source=principal,required"`
+	TicketID string `gobellim:"source=application,required"`
+	Body     string `gobellim:"required,sensitivity=pii"`
+	OrderID  string `gobellim:"sensitivity=secret"`
+}
+
+type TriageOutput struct {
+	Category string `gobellim:"required,oneof=billing|technical|other"`
+	Reply    string
+}
+
+type RefundArgs struct {
+	OrderID string `gobellim:"required,ground"`
+	Cents   int    `gobellim:"min=1,max=5000"`
+}
+
+type RefundResult struct {
+	RefundID string
+	Status   string
+}
+
+refund := gobellim.Tool[RefundArgs, RefundResult]{
+	Name:       "orders.refund",
+	Effect:     gobellim.Write, // обязателен: zero value отклоняется
+	Permission: "orders:refund",
+	Resource: func(p gobellim.Principal, a RefundArgs) gobellim.Resource {
+		return gobellim.Resource{Type: "order", ID: a.OrderID, TenantID: p.Tenant}
+	},
+	Validate: validateRefundAgainstBusinessRules,
+	Run: func(ctx context.Context, p gobellim.Principal, a RefundArgs) (RefundResult, error) {
+		return orders.Refund(ctx, p.Tenant, a.OrderID, a.Cents)
+	},
+}
+
+engine, err := gobellim.New(
+	gobellim.WithModel(model),               // ваш адаптер; см. plugins/gigachat
+	gobellim.WithAuthorizer(existing),       // ваш RBAC/ACL
+	gobellim.WithAudit(gobellim.SlogSink{}), // или plugins/langfuse
+	gobellim.WithLimits(gobellim.Limits{
+		MaxInputBytes:  32 << 10,
+		MaxOutputBytes: 16 << 10,
+		MaxToolCalls:   3,
+	}),
+)
+if err != nil {
+	return err
+}
+
+task, err := gobellim.NewTask[TicketInput, TriageOutput](engine, gobellim.TaskConfig{
+	Name:        "ticket.triage",
+	Instruction: "Classify the ticket and propose a reply.",
+	Tools:       []gobellim.ToolDef{refund},
+})
+if err != nil {
+	return err
+}
+
+res, err := task.Run(ctx, principalFromRequest(r), in)
+if err != nil {
+	return err
+}
+if res.Status == gobellim.TaskApprovalRequired {
+	// res.Pending — остановленное действие. После реального одобрения:
+	//   out, rec, err := task.ExecuteApproved(ctx, requester, approver, res.Pending)
+}
+```
+
+`gobellim.New` использует functional options. Nil-модель или nil-authorizer —
+`ErrInvalidConfig`; разрешающего дефолта нет. Бюджеты можно уточнить на задачу
+через `TaskConfig.Limits`; нулевое поле наследует значение `Engine`.
+
+## Gate
+
+Каждый вызов инструмента от модели проходит через Gate: tenant binding,
+RBAC/ACL, grounding, бизнес-валидация, потолок эффекта.
+
+| Худшая целостность аргументов | Read  | Write    | Egress | Destructive |
+| ----------------------------- | ----- | -------- | ------ | ----------- |
+| `Trusted` / `Validated`       | allow | allow    | allow  | escalate    |
+| `Derived`                     | allow | escalate | deny   | deny        |
+| `Untrusted` / нет меток       | allow | escalate | deny   | deny        |
+
+Дополнительно:
+
+- `Effect` обязателен. Zero value — `EffectUnknown`, `NewTask` его отклоняет:
+  мутирующий инструмент не может молча стать `Read`.
+- `Resource` обязателен для `Write`, `Egress` и `Destructive`: без цели ACL
+  проверялся бы только по RBAC.
+- пустой набор меток — `Untrusted`, а не `Trusted`;
+- `Resource.TenantID` должен совпадать с `Principal.Tenant` (пустой
+  заполняется из принципала);
+- ошибка `Authorizer` — `Deny`;
+- неизвестный инструмент и невалидные аргументы — `Deny`;
+- `ground`-поле принимает только существующий handle; сырая строка — `Deny`;
+- ошибка `Validate` — `Deny`;
+- заявления модели о правах не учитываются.
+
+**Как аргумент получает `Validated`.** Handle-аргумент, бизнес-смысл которого
+подтвердил `Tool.Validate`, становится `Validated`: handle выпущен рантаймом для
+этого запуска, правило проверено приложением. Свободный текст модели остаётся
+`Derived`. Без `Validate` повышения нет — write по-прежнему требует человека.
+Это единственный путь от модельного ввода к `Write`/`Egress` без человека, и он
+всё равно требует RBAC/ACL.
+
+## Теги schema
+
+Поддерживается маленькое подмножество; неизвестный тег — ошибка на `NewTask`.
+
+| Тег                    | Смысл                                                        |
+| ---------------------- | ------------------------------------------------------------ |
+| `required`             | значение не должно быть нулевым (нельзя на `bool`)           |
+| `source=principal`     | строка должна совпадать с полем `Principal`                  |
+| `source=application`   | значение пришло из состояния приложения и получает `Trusted` |
+| `untrusted`            | явно недоверенный вход (дефолт для входного поля)            |
+| `sensitivity=pii`      | совпадения e-mail/телефона/карты заменяются на handles       |
+| `sensitivity=secret`   | всё значение заменяется одним handle                         |
+| `sensitivity=internal` | метка без маскирования                                       |
+| `oneof=a\|b`           | строковый enum                                               |
+| `min`, `max`           | числовой диапазон или количество элементов среза             |
+| `ground`               | аргумент обязан быть существующим handle                     |
+
+`source` и `ground` применимы только к `string`. `sensitivity` — к `string` и
+`[]string`. `time.Time`, `[]byte`, `map`, указатели, вложенные структуры глубже
+двух уровней и встроенные struct без явного `json`-имени отклоняются на
+`NewTask`: лучше fail на старте, чем schema, которая врёт модели.
+
+Те же `sensitivity`-теги применяются к **результату** инструмента перед тем,
+как он попадёт обратно в контекст модели: `secret` становится handle, `pii`
+маскируется. Результат — обычная Go-структура, поэтому `time.Time` и
+`json.Marshaler` передаются как есть. Неизвестный тег на результате — ошибка
+`NewTask`, а не молчаливое отключение маскирования.
+
+## Grounding — это handle
+
+`ground`-поле принимает только handle, созданный для этого запуска. Модель не
+может выдумать ID или скопировать чужое trusted-значение. Чтобы модель могла
+ссылаться на значение, пометьте входное поле `sensitivity=secret` (или
+`sensitivity=pii`). `source=application` даёт метку `Trusted`, но само по себе
+handle не создаёт.
+
+```go
+type TicketInput struct {
+	OrderID string `gobellim:"sensitivity=secret,required"`
+}
+type RefundArgs struct {
+	OrderID string `gobellim:"required,ground"`
+}
+// Модель видит {"OrderID":"<h1>"} и может передать "<h1>" в orders.refund.
+```
+
+## Human approval
+
+`flow` — линейный workflow, управляемый кодом. Он не возобновляет стек Go:
+останавливается на границе шага, запечатывает минимальное состояние в токен и
+продолжает со следующего шага после проверок из `DESIGN.md` §8.6.
+
+```go
+sealer, err := flow.NewSealer("v1", key) // AES-GCM; ключ — секрет приложения
+store, err := sqlstore.New(db)          // опционально: replay между репликами
+if err != nil {
+	return err
+}
+wf, err := flow.New[RefundCase]("refund",
+	flow.WithAuthorizer(authz),
+	flow.WithSealer(sealer), // обязателен
+	flow.WithStore(store),
+	flow.WithTTL(24*time.Hour),
+)
+if err != nil {
+	return err
+}
+
+wf.Step("propose", proposeRefund).
+	ApprovePending("manager", func(s RefundCase) *gobellim.PendingAction {
+		return &s.Pending
+	}, flow.ApproveConfig[RefundCase]{
+		Permission:       "refund:approve",
+		ActionPermission: "orders:refund",
+		FourEyes:         true,
+		Resource:         refundResource,
+	}).
+	Step("execute", func(ctx context.Context, p gobellim.Principal, s *RefundCase) error {
+		// p — requester: после Resume шаги идут от его имени.
+		approver, ok := flow.ApproverFrom(ctx)
+		if !ok {
+			return errors.New("no approver in the context")
+		}
+		_, _, err := task.ExecuteApproved(ctx, p, approver, &s.Pending)
+		return err
+	})
+
+res, err := wf.Run(ctx, requester, state)          // res.Status == flow.Suspended
+out, err := wf.Resume(ctx, approver, token, flow.Approve)
+```
+
+`Resume` проверяет AEAD, tenant, expiry, версию flow, id шага, право апрувера,
+Four-Eyes, право requester'а, digest действия и атомарный claim nonce. Размер
+входного токена ограничен `WithMaxTokenBytes` до декодирования.
+`DecisionUnknown` (нулевое значение) никогда не считается одобрением. Без
+`WithStore` flow использует process-local `MemStore`: повторный resume в том же
+процессе невозможен, между репликами нужен общий `Store`. SQL-адаптер также
+умеет `Prune` просроченных nonce и принимает `ConflictClause` для MySQL.
+
+`Task.ExecuteApproved` исполняет `PendingAction` после реального одобрения.
+Gate заново проверяет tenant, RBAC/ACL, `Validate`, tool/effect и digest ровно
+тех аргументов, которые видел человек; апрувер пишется в audit как
+`approval.granted`. Nonce фиксируется до запуска handler'а: второй вызов —
+`ErrApprovalReplay`, а падение в этом окне теряет одобрение, а не рискует
+двойным исполнением.
+
+## Observability
+
+```go
+sink, err := langfuse.New(langfuse.Config{
+	Host:      "https://cloud.langfuse.com",
+	PublicKey: os.Getenv("LANGFUSE_PUBLIC_KEY"),
+	SecretKey: os.Getenv("LANGFUSE_SECRET_KEY"),
+	OnDrop:    func(e gobellim.Event) { metrics.Inc("audit_dropped", string(e.Kind)) },
+})
+if err != nil {
+	return err
+}
+defer sink.Close(ctx)
+
+engine, err := gobellim.New(
+	gobellim.WithModel(model),
+	gobellim.WithAuthorizer(authz),
+	gobellim.WithAudit(sink),
+)
+```
+
+Sink батчами отправляет `trace-create`, `generation-create` и `span-create`.
+Уходят только labels, digest, decision, latency и токены; prompt text, сырые
+аргументы и секреты — нет. Для локального просмотра:
+`langfuse.Config{DryRun: true, Writer: os.Stdout}`.
+
+Адаптеры моделей — в отдельных пакетах. `plugins/gigachat` реализует freemium
+OAuth и маппинг `functions`/`function_call`. Запускаемые сценарии — в notebook'ах.
+
+## Гарантии и non-goals
+
+Гарантируется при корректной интеграции:
+
+- вызов инструмента от модели не доходит до handler без Gate;
+- unknown tool, невалидные аргументы, ошибка authorizer и чужой tenant не
+  становятся `Allow`;
+- пустой набор аргументов не считается доверенным;
+- `ground`-аргумент нельзя удовлетворить сырой строкой модели;
+- свободный текст модели не становится trusted из-за JSON schema;
+- approval привязан к инструменту и аргументам, которые видел человек,
+  `ExecuteApproved` прогоняет Gate заново, а одобрение одноразово;
+- `sensitivity` на результате инструмента не пускает секрет в контекст модели;
+- audit содержит labels и digest, а не prompt text и секреты;
+- незавершённый запуск аудируется как `task.failed`, никогда как
+  `task.completed`.
+
+Не гарантируется:
+
+- exactly-once для внешнего side effect: общий `Store` даёт одноразовый claim,
+  идемпотентность — на стороне провайдера;
+- редактирование внутри `map` или self-marshalling типа в результате;
+- отсутствие вредного или ложного текста модели;
+- точный data-flow внутри модели;
+- одноразовость Resume между репликами без общего `Store`;
+- durable recovery произвольной Go-функции;
+- retrieval/RAG и data ACL — это ответственность приложения;
+- `ReaderSet` / per-reader ACL не реализованы.
 
 ## Документация
 
-`docs/` — обычный Markdown, он читается прямо на GitHub. `site/` рендерит те же
+`docs/` — обычный Markdown, читается прямо на GitHub. `site/` рендерит те же
 файлы через Next.js и Fumadocs:
 
 ```sh
 cd site && npm install && npm run dev
 ```
 
-Начните с [docs/README.md](./docs/README.md).
-
-## Быстрый старт
-
-```go
-app, err := gobellim.New(ctx, gobellim.Config{
-	ES:      es,     // опционально: ваш клиент store.ES (поиск, память, трейсы)
-	LLM:     llm,    // vLLM, Ollama, OpenAI-совместимый API или GigaChat
-	Policy:  policy, // authz.Load("policy.yaml")
-	GuardL2: guard.L1Only(), // путь для оценки; продакшен: guard/gliner (-tags ort)
-})
-if err != nil {
-	return err
-}
-if err := app.Setup(ctx); err != nil { // один раз создаёт индексы; без ES — no-op
-	return err
-}
-
-// Инструмент — типизированная Go-функция: схема и валидация берутся из типа.
-if _, err := gobellim.Tool(app, "get_weather", getWeather, gobellim.Desc("Текущая погода в городе.")); err != nil {
-	return err
-}
-
-// У каждого вызова есть личность вызывающего.
-ctx = gobellim.WithPrincipal(ctx, gobellim.Principal{UserID: "u-1", Roles: []string{"user"}, Tenant: "acme"})
-
-res, err := app.Chat(ctx, gobellim.ChatRequest{
-	System:   "Ты ассистент поддержки. Отвечай кратко.",
-	Messages: []model.Message{{Role: model.RoleUser, Content: "Какая погода в Москве?"}},
-})
-```
-
-`GuardL2: guard.L1Only()` — явный путь для оценки: `New` пишет warning, а `Health()`
-показывает `GuardL1Only: true`. В продакшене задайте `GuardL2` поставляемым
-ML-детектором, собранным с `-tags ort`; `nil` в `GuardL2` — это
-`ErrInvalidConfig` (D80).
-
-`ES` опционален: без него работают chat, инструменты и `Generate`, а для поиска,
-ingest, памяти и сохранения трейсов нужен Elasticsearch (или `trace.Sink` для
-трейсов).
-
-## Policy на одном экране
-
-Запрещено всё, затем разрешаем ровно то, что нужно роли:
-
-```yaml
-version: 1
-default: deny
-
-roles:
-  user:
-    permissions: [chat, search, "tool:kb_search"]
-```
-
-Две готовые отправные точки:
-
-```yaml
-# Read-only поддержка: только поиск и память, без генерации.
-version: 1
-default: deny
-roles:
-  support:
-    permissions: [search, memory]
-```
-
-```yaml
-# Админ: wildcard даёт все права и все инструменты.
-version: 1
-default: deny
-roles:
-  admin:
-    permissions: ["*"]
-```
-
-`tool:<name>` — право на конкретный инструмент; инструмент, который вызывающему
-недоступен, вообще не попадает в схему модели.
-
-## Операции
-
-| Операция      | Право         | Заметки                                               |
-| ------------- | ------------- | ----------------------------------------------------- |
-| `Chat`        | `chat`        | ограниченный цикл инструментов; права на каждый вызов |
-| `ChatStream`  | `chat`        | guard'нутый поток по скользящему окну                 |
-| `CallTool`    | `tool:<name>` | один инструмент тем же путём                          |
-| Память        | `memory`      | история, recall и working                             |
-| `Generate[T]` | `generate`    | типизированный вывод, проверка по схеме               |
-| `Ingest`      | `ingest`      | чанкинг, эмбеддинги, индексация                       |
-| `Search`      | `search`      | BM25 + kNN под ACL вызывающего                        |
-| `Delete`      | `delete`      | удалить документ                                      |
-| `Prune`       | `prune`       | ретенция по возрасту                                  |
-| `Score`       | `trace`       | оценка трейса                                         |
-
-`Ingest`, `Search` и `Delete` требуют непустого `Tenant`: операция не может
-расшириться на другие тенанты.
-
-## Guardrails
-
-<!-- derived: BR-26 -->
-
-Guard проходит вход, результаты инструментов и выход. L1 — детерминированные
-правила (российские персональные данные и prompt injection) — в ядре и работает
-всегда.
-
-L2 — ML-слой, и он обязателен: `Config.GuardL2` должен быть задан, иначе `New`
-возвращает `ErrInvalidConfig` (D80).
-
-- **Оценка / первый запуск.** Передайте `guard.L1Only()`: состав ровно `L1`, `New`
-  пишет warning, а `Health()` отдаёт `GuardLayers: ["L1"]` и
-  `GuardL1Only: true`. Это видимый, явный выбор, а не молчаливое значение по
-  умолчанию.
-- **Продакшен.** Передайте поставляемый детектор `guard/gliner`, собранный с
-  `-tags ort`. Это базовый сценарий проекта; внутренний security review или
-  сертификация обычно требуют ML-слой.
-
-Удалённый guard-сервис не реализован (D76).
-
-## Eval
-
-`eval` гоняет детерминированные проверки по записанным трейсам и считает
-качество на размеченных данных. Поставляемый корпус L1-guard (457 кейсов: 223
-размеченных, 205 доброкачественных контролей, 29 отложены до L2) проходит с
-recall 1.000, precision 1.000 и FPR 0.024 при порогах 0.90 / 0.90 / 0.05. Это
-числа L1 на публичном корпусе, а не утверждение об обобщаемости; паритет L2
-проверяется ночью.
-
-```go
-m := eval.ScoreRetrieval(hitIDs, relevantIDs, 10) // precision@K, recall@K, MRR
-g, err := eval.ScoreBinary(expected, actual)      // TP/FP/FN/TN, precision, recall, F1, FPR
-```
-
-Запустить поставляемый guard-eval: `go -C scripts run ./guardqual`.
-
-## Что дальше
-
-- [Документация →](./docs)
-- [Руководства →](./docs/README.md)
-- [Запускаемый пример →](./lite-demo)
+- [`DESIGN.md`](./DESIGN.md) — спецификация.
+- [`docs/README.md`](./docs/README.md) — how-to.
+- [`examples/notebooks`](./examples/notebooks/README.md) — запускаемые сценарии,
+  моки и реальный GigaChat free tier.
+- [`plugins/langfuse`](./plugins/langfuse) — audit sink.
+- [`plugins/gigachat`](./plugins/gigachat) — model adapter.
 
 ## Участие
 
 Gobellim принимает issues, форки и pull requests. Начните с
-[CONTRIBUTING.ru.md](.github/CONTRIBUTING.ru.md). Об уязвимостях сообщайте через
-[SECURITY.ru.md](SECURITY.ru.md), а не в публичный трекер.
+[CONTRIBUTING.md](.github/CONTRIBUTING.md). Отчёты об уязвимостях — через
+[SECURITY.md](SECURITY.md), не в публичный трекер.
 
 ## Лицензия
 
