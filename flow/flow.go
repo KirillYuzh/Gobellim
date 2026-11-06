@@ -178,6 +178,12 @@ type Flow[S any] struct {
 }
 
 // New starts a flow. Configuration errors are returned immediately.
+//
+// New is the standalone constructor: the claim store and the approval key it
+// creates are private to this process. That is fine for a flow that never calls
+// a Task, and a trap for one that does -- the Task then approves with a
+// different authorizer than the flow used. Use FromEngine when the flow runs a
+// Task.
 func New[S any](name string, opts ...Option) (*Flow[S], error) {
 	cfg := config{
 		version:     1,
