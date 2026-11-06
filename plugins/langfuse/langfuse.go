@@ -365,8 +365,8 @@ func (s *Sink) metadata(e gobellim.Event) map[string]any {
 	add("policy_version", e.PolicyVersion)
 	add("args_digest", e.ArgsDigest)
 	add("error", e.Error)
-	if e.Access != gobellim.AccessUnknown {
-		m["access"] = e.Access.String()
+	if e.Operation != gobellim.OperationUnknown {
+		m["operation"] = e.Operation.String()
 	}
 	if len(e.RuleIDs) > 0 || e.Decision != gobellim.Deny {
 		m["decision"] = e.Decision.String()

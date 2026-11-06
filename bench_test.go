@@ -31,7 +31,7 @@ func benchHandles() *handleSet {
 // BenchmarkToolPrepare is the per-tool-call cost of decoding, resolving handles,
 // validating and labelling the arguments.
 func BenchmarkToolPrepare(b *testing.B) {
-	tool := Tool[benchArgs, benchResult]{Name: "orders.read", Access: AccessRead}
+	tool := Tool[benchArgs, benchResult]{Name: "orders.read", Operation: OperationRead}
 	raw := []byte(`{"OrderID":"<h1>","Note":"hello"}`)
 	hs := benchHandles()
 	p := Principal{UserID: "u-1", Tenant: "acme"}
@@ -47,7 +47,13 @@ func BenchmarkToolPrepare(b *testing.B) {
 // BenchmarkGateDecide measures the decision itself, with the arguments already
 // prepared.
 func BenchmarkGateDecide(b *testing.B) {
-	tool := Tool[benchArgs, benchResult]{Name: "orders.read", Access: AccessRead}
+	tool := Tool[benchArgs, benchResult]{
+		Name:      "orders.read",
+		Operation: OperationRead,
+		Target: func(p Principal, a benchArgs) Resource {
+			return Resource{Type: "order", ID: a.OrderID, TenantID: p.Tenant}
+		},
+	}
 	prep, err := tool.prepare(context.Background(), Principal{UserID: "u-1", Tenant: "acme"},
 		[]byte(`{"OrderID":"<h1>","Note":"hello"}`), benchHandles(), 8<<10)
 	if err != nil {

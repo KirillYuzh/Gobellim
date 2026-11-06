@@ -43,14 +43,15 @@ export LANGFUSE_HOST='https://cloud.langfuse.com'
 
 ## Сценарии
 
-| Ноутбук | Что показывает | Сеть |
-| --- | --- | --- |
-| `01_task_mock` | один use-case: typed input/output, PII → handles, write → approval card | нет |
-| `02_gate_mock` | unknown tool, raw ID, handle, empty-args write, чужой tenant | нет |
-| `03_flow_mock` | линейный flow, approval card, Four-Eyes, replay | нет |
-| `04_langfuse_mock` | Langfuse sink в dry-run: trace / generation / span | нет |
-| `05_gigachat_task` | реальный GigaChat free tier: вопрос → JSON-ответ, audit | GigaChat |
-| `06_gigachat_approval` | GigaChat предлагает refund, Gate эскалирует, tool не выполняется | GigaChat |
+| Ноутбук                 | Что показывает                                                                | Сеть     |
+| ----------------------- | ----------------------------------------------------------------------------- | -------- |
+| `01_task_mock`          | один use-case: typed input/output, PII → handles, write → approval card       | нет      |
+| `02_gate_mock`          | unknown tool, raw ID, handle, empty-args write, чужой tenant                  | нет      |
+| `03_flow_mock`          | линейный flow, approval card, Four-Eyes, replay                               | нет      |
+| `04_langfuse_mock`      | Langfuse sink в dry-run: trace / generation / span                            | нет      |
+| `05_gigachat_task`      | реальный GigaChat free tier: вопрос → JSON-ответ, audit                       | GigaChat |
+| `06_gigachat_approval`  | GigaChat предлагает refund, Gate эскалирует, tool не выполняется              | GigaChat |
+| `07_task_flow_approval` | Task эскалирует внутри flow: Suspension, одобрение, `ExecuteApproved`, replay | нет      |
 
 ## Как читать вывод
 

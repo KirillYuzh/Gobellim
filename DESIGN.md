@@ -91,7 +91,7 @@ Workflow и разрешённые действия определены код�
 
 ### 3.2. Каждый внешний эффект проходит через Gate
 
-Ни один tool handler, зарегистрированный в `gobellim`, не вызывается напрямую из ответа модели. Gate валидирует типы и ограничения, проверяет полномочия, effect, provenance, grounding и необходимость HITL. Ошибка проверки приводит к отказу.
+Ни один tool handler, зарегистрированный в `gobellim`, не вызывается напрямую из ответа модели. Gate валидирует типы и ограничения, проверяет полномочия, operation, provenance, grounding и необходимость HITL. Ошибка проверки приводит к отказу.
 
 ### 3.3. Метки не повышаются автоматически
 
@@ -120,7 +120,7 @@ gobellim/
   principal.go          # principal из приложения; без собственной аутентификации
   labels.go             # provenance, integrity, sensitivity, readers
   gate.go               # единственная точка исполнения tool calls
-  policy.go             # Authorizer, Decision, Effect
+  policy.go             # Authorizer, Decision, Operation
   schema.go             # поддерживаемое подмножество тегов/валидации
   audit.go              # события и интерфейс Sink
   errors.go
@@ -158,7 +158,7 @@ Request + authenticated Principal
 4. Decode + validate schema + attach conservative provenance
         |
         v
-5. Gate: effect + RBAC/ACL + grounding + data-flow policy
+5. Gate: operation + RBAC/ACL + grounding + data-flow policy
        / | \
    Deny Allow Escalate
     |    |      |
@@ -245,9 +245,9 @@ type RefundResult struct {
 
 refundTool := gobellim.Tool[RefundArgs, RefundResult]{
     Name:       "orders.refund",
-    Effect:     gobellim.Write,
+    Operation:     gobellim.Write,
     Permission: "orders:refund",
-    Resource: func(p gobellim.Principal, a RefundArgs) gobellim.Resource {
+    Target: func(p gobellim.Principal, a RefundArgs) gobellim.Resource {
         return gobellim.Resource{Type: "order", ID: a.OrderID, TenantID: p.Tenant}
     },
     Validate: validateRefundAgainstBusinessRules,
@@ -258,13 +258,13 @@ refundTool := gobellim.Tool[RefundArgs, RefundResult]{
 }
 ```
 
-Инструмент декларативно описывает эффект, permission, ресурс, дополнительные бизнес-ограничения и обработчик. Для `Write`, `Egress` и `Destructive` `Resource` обязателен: `NewTask` отклоняет инструмент без цели, иначе ACL молча выродился бы в RBAC. Регистрация не даёт модели права вызвать функцию напрямую: модель возвращает только имя и JSON-аргументы, а runtime находит инструмент в закрытом реестре и вызывает Gate.
+Инструмент декларативно описывает, что он делает, permission, цель, дополнительные бизнес-ограничения и обработчик. Для `Write`, `Send` и `Delete` `Target` обязателен: `NewTask` отклоняет инструмент без цели, иначе ACL молча выродился бы в RBAC. `Target` обязан вернуть непустые `Type`, `ID` и `TenantID`; Gate не подставляет tenant принципала, потому что такая подстановка делает проверку tenant истинной по построению. Регистрация не даёт модели права вызвать функцию напрямую: модель возвращает только имя и JSON-аргументы, а runtime находит инструмент в закрытом реестре и вызывает Gate.
 
 ### 5.3. Ограничения schema-by-tags
 
 Теги нужны, чтобы не дублировать простые ограничения в нескольких местах. Встроенная генерация схемы поддерживает только документированное подмножество типов/тегов и должна отказывать на неизвестном или неоднозначном ограничении. Важные бизнес-правила остаются обычными валидаторами Go. Схема для модели никогда не заменяет повторную runtime-валидацию аргументов.
 
-Поддерживаемое подмножество: `string`, `bool`, целые и дробные числа, срезы скаляров и вложенные структуры глубиной до двух уровней. Теги: `required`, `untrusted`, `source=principal|application`, `sensitivity=public|internal|pii|secret`, `oneof=a|b`, `min`, `max`, `ground`. `sensitivity=pii` маскирует совпадения, `sensitivity=secret` заменяет всё значение одним handle. `source` и `ground` применимы только к `string`, `sensitivity` — к `string` и `[]string`. Неизвестный тег, `map`, указатель, интерфейс, срез структур, `time.Time`, `[]byte`, встроенная struct без явного `json`-имени и вложенность глубже двух уровней отклоняются на этапе `NewTask`. `required` на `bool` запрещён: ноль неотличим от отсутствия. `required` на строке и числе означает ненулевое значение. `ground`-поле принимает только существующий handle, созданный для этого запуска; сырая строка от модели не grounds аргумент.
+Поддерживаемое подмножество: `string`, `bool`, целые и дробные числа, срезы скаляров и вложенные структуры глубиной до двух уровней. Теги: `required`, `source=principal|application`, `sensitivity=public|internal|pii|secret`, `oneof=a|b`, `min`, `max`, `ground` (или `ground=ПолеВхода`, `ground=any`). `source` допустим только в схеме входа задачи, `ground` только в схеме аргументов инструмента: тег не с той стороны — `ErrInvalidConfig` на `NewTask`, а не молчаливый no-op. `sensitivity=pii` маскирует совпадения, `sensitivity=secret` заменяет всё значение одним handle. `source` и `ground` применимы только к `string`, `sensitivity` — к `string` и `[]string`. Неизвестный тег, `map`, указатель, интерфейс, срез структур, `time.Time`, `[]byte`, встроенная struct без явного `json`-имени и вложенность глубже двух уровней отклоняются на этапе `NewTask`. `required` на `bool` запрещён: ноль неотличим от отсутствия. `required` на строке и числе означает ненулевое значение. `ground`-поле принимает только существующий handle, созданный для этого запуска; сырая строка от модели не grounds аргумент.
 
 `encoding/json`-путь должен ограничивать размер, отклонять неизвестные поля там, где это возможно, проверять обязательные значения и не принимать неограниченную вложенность/массивы без лимитов.
 
@@ -279,28 +279,29 @@ type Integrity uint8
 const (
     Untrusted Integrity = iota
     Derived
-    Validated
     Trusted
 )
+```
 
 type Sensitivity uint8
 const (
-    Public Sensitivity = iota
-    Internal
-    PII
-    Secret
+Public Sensitivity = iota
+Internal
+PII
+Secret
 )
 
 type Label struct {
-    Integrity   Integrity
-    Sources     []SourceRef
-    Sensitivity Sensitivity
+Integrity Integrity
+Sources []SourceRef
+Sensitivity Sensitivity
 }
-```
+
+````
 
 `Integrity` описывает, насколько можно полагаться на значение как на основание для действия. `Sensitivity` задаёт ограничения раскрытия. `Readers`/per-reader ACL в текущей реализации **не реализованы**: библиотека не фильтрует данные по читателям, это делает приложение до передачи контекста в `Task`.
 
-Метки могут автоматически только ухудшаться: `Trusted → Derived/Untrusted`, либо становиться более чувствительными. Повышение до `Validated` возможно ровно в одном случае: аргумент пришёл через handle этого запуска и `Tool.Validate` вернул `nil`. Это узкая, явная операция: runtime подтвердил происхождение, приложение подтвердило бизнес-смысл. Свободный текст модели остаётся `Derived`, инструмент без `Validate` повышения не получает. Решение человека конкретного действия (`ExecuteApproved`) не меняет метку: оно заменяет только потолок эффекта и отражается в аудите отдельным `rule_id`.
+Метки могут автоматически только ухудшаться: `Trusted → Derived/Untrusted`, либо становиться более чувствительными. Повышения метки внутри Gate нет: `Tool.Validate` подтверждает бизнес-смысл, но не происхождение, поэтому его успех не делает аргумент доверенным. Доверие приходит только снаружи модели: поле входа с `source=principal` или `source=application` получает `Trusted`, и handle, выпущенный для такого поля, наследует эту метку. Свободный текст модели и всё, что она собрала сама, остаётся `Derived`. Решение человека по конкретному действию (`ExecuteApproved`) метку не меняет: оно заменяет только потолок доступа и отражается в аудите отдельным `rule_id`.
 
 ### 6.2. Не обещать точный data-flow tracking внутри LLM
 
@@ -325,7 +326,7 @@ Handles — не замена ACL и не способ полностью скр
 - lookup в allowlisted directory, который ограничен текущим Principal/tenant и возвращает разрешённый ресурс;
 - валидатором, который проверяет бизнес-смысл, не только синтаксис.
 
-В коде реализованы два первых механизма. Валидатор подключён третьим: `Tool.Validate` выполняется после authz и до потолка эффекта, а его успешный результат повышает handle-аргумент до `Validated`. Lookup в directory — это и есть `Validate` приложения; библиотека не ходит в чужие данные сама.
+В коде реализован первый механизм: существующий handle этого запуска. Lookup в directory — это `Tool.Validate` приложения: он выполняется после authz и до потолка доступа, но метку не повышает, поэтому один `Validate` не открывает необслуживаемый `Write`. Второй механизм, доверенное поле состояния приложения, работает через `source=application` на поле входа: значение получает `Trusted`, а его handle передаёт метку аргументу.
 
 Совпадение строки с фрагментом недоверенного документа **не** делает её доверенной. Даже существование такого order ID в directory не даёт права действовать с ним: ACL и business policy всё равно обязательны.
 
@@ -337,7 +338,7 @@ Handles — не замена ACL и не способ полностью скр
 type Authorizer interface {
     Allowed(ctx context.Context, p Principal, permission string, resource Resource) (bool, error)
 }
-```
+````
 
 Этот интерфейс адаптируется к существующей системе ролей/политик приложения. Для локального демо может быть простая in-memory RBAC-политика, но библиотека не требует переносить users/roles/ACL в новое хранилище. `Authorizer` обязателен: `New` без него — `ErrInvalidConfig`.
 
@@ -370,39 +371,40 @@ Decide(principal, tool, canonicalArgs, labels, currentPolicy)
 
 Решение учитывает пересечение:
 
-`RBAC ∩ ACL(resource) ∩ effect ceiling(integrity) ∩ grounding(args) ∩ business limits`.
+`RBAC ∩ ACL(resource) ∩ operation ceiling(integrity) ∩ grounding(args) ∩ business limits`.
 
 Решение — детерминированный код. Модель не может ответом «я проверил права» переопределить его.
 
-### 7.3. Эффекты и базовая policy-матрица
+### 7.3. Класс операции и базовая policy-матрица
 
-Каждый инструмент объявляет эффект:
+Каждый инструмент объявляет, что он делает с миром:
 
 - `Read` — чтение данных;
 - `Write` — изменение состояния;
-- `Egress` — передача данных внешнему получателю;
-- `Destructive` — необратимое/высокорисковое действие.
+- `Send` — передача данных внешнему получателю;
+- `Delete` — необратимое или высокорисковое действие;
+- `Compute` — чистая работа без данных приложения и без внешнего эффекта.
 
-`Effect` не имеет разрешающего zero value: `EffectUnknown` отклоняется на `NewTask`, поэтому забыть эффект нельзя. Gate также требует, чтобы `Resource.TenantID` (пустой заполняется из `Principal.Tenant`) совпадал с tenant принципала, и проверяет это до `Authorizer`.
+`Operation` не имеет разрешающего zero value: `OperationUnknown` отклоняется на `NewTask`, поэтому забыть объявление нельзя. Для всего, кроме `Compute`, `Target` обязателен и должен вернуть непустые `Type`, `ID` и `TenantID`: пустой tenant — это `Deny` с `target-unbound`, а не подстановка из принципала, иначе проверка «объект принадлежит tenant» проходила бы по построению.
 
-Порядок проверок: tenant binding → grounding → `Authorizer` → `Tool.Validate` → потолок эффекта. Grounding идёт раньше ACL, чтобы id ресурса, придуманный моделью, не дошёл до `Authorizer` (и не попал в его аудит), а авторизация — раньше `Validate`, чтобы бизнес-правило не запускалось для вызывающего, который всё равно не смог бы выполнить действие. Каждая проверка fail-closed.
+Порядок проверок: tenant binding → grounding → `Authorizer` → `Tool.Validate` → потолок доступа. Grounding идёт раньше ACL, чтобы id ресурса, придуманный моделью, не дошёл до `Authorizer` (и не попал в его аудит), а авторизация — раньше `Validate`, чтобы бизнес-правило не запускалось для вызывающего, который всё равно не смог бы выполнить действие. Каждая проверка fail-closed.
 
 Стартовая матрица — conservative defaults, затем её можно ужесточить policy приложения:
 
-| Контекст / действие                               | Read                                    | Write                                      | Egress                                                       | Destructive                                    |
-| ------------------------------------------------- | --------------------------------------- | ------------------------------------------ | ------------------------------------------------------------ | ---------------------------------------------- |
-| Аргументы `Trusted`/`Validated`, policy разрешает | Allow                                   | Allow только при RBAC/ACL и бизнес-лимитах | Allow только если получатель и передаваемые данные разрешены | По умолчанию Escalate                          |
-| Аргументы получены из untrusted/derived текста    | Allow при ACL; результат получает label | Escalate либо Deny по риску                | Deny, если раскрытие не доказано допустимым                  | Deny либо Escalate только через строгую policy |
-| Неизвестный tool / невалидные аргументы           | Deny                                    | Deny                                       | Deny                                                         | Deny                                           |
-| Authz недоступен/ошибка                           | Deny                                    | Deny                                       | Deny                                                         | Deny                                           |
+| Контекст / действие                        | Read, Compute | Write                                      | Send  | Delete   |
+| ------------------------------------------ | ------------- | ------------------------------------------ | ----- | -------- |
+| Аргументы `Trusted`, policy разрешает      | Allow         | Allow только при RBAC/ACL и бизнес-лимитах | Allow | Escalate |
+| Аргументы `Derived` или пустой набор меток | Allow при ACL | Escalate                                   | Deny  | Deny     |
+| Неизвестный tool / невалидные аргументы    | Deny          | Deny                                       | Deny  | Deny     |
+| Authz недоступен или ошибка                | Deny          | Deny                                       | Deny  | Deny     |
 
-`Validated` достижим только через «handle этого запуска + успешный `Tool.Validate`»: модель не может получить его, добавив свободный текст. `worst` считается по всем аргументам, поэтому один model-derived аргумент в write-вызове всё равно приводит к `Escalate`.
+`worst` считается по всем аргументам, поэтому один model-derived аргумент в write-вызове всё равно приводит к `Escalate`. `Trusted` недостижим через валидатор: метку даёт только `source=principal` или `source=application` на поле входа и handle, выпущенный для такого поля.
 
-`Escalate` не значит «апрувер может разрешить всё». Это переход к проверке конкретного действия человеком; базовые ACL, лимиты, schema и законность действия остаются обязательными. `Task.ExecuteApproved(ctx, requester, approver, pending)` после одобрения перепроверяет tenant, RBAC/ACL, `Validate`, tool/effect и digest аргументов, а потолок эффекта заменяет решением человека; `approver` попадает в audit как `approval.granted`. Одобрение одноразовое: `nonce` из `PendingAction` уходит в `ClaimStore` (процессный по умолчанию, общий через `WithClaimStore` или `store/sql`), второй вызов даёт `ErrApprovalReplay`.
+`Escalate` не значит «апрувер может разрешить всё». Это переход к проверке конкретного действия человеком; базовые ACL, лимиты, schema и законность действия остаются обязательными. `Task.ExecuteApproved(ctx, requester, approver, pending)` после одобрения перепроверяет tenant, RBAC/ACL, `Validate`, tool/operation и digest аргументов, а потолок доступа заменяет решением человека; `approver` попадает в audit как `approval.granted`. Одобрение одноразовое: `nonce` из `PendingAction` уходит в `ClaimStore` (процессный по умолчанию, общий через `WithClaimStore` или `store/sql`), второй вызов даёт `ErrApprovalReplay`.
 
-### 7.4. Egress и data ACL
+### 7.4. Send и data ACL
 
-Любая передача данных наружу — отдельный эффект. Текущая реализация проверяет только effect ceiling по целостности аргументов: `Egress` разрешён при `Validated`/`Trusted`, иначе `Deny`. Allowlist получателей, тип данных и `Readers`/data ACL библиотека не реализует — это ответственность приложения. Allowlist URL/доменов и удаление внешних markdown-images — полезные дополнительные меры, но не защита от всех текстовых каналов эксфильтрации.
+Любая передача данных наружу — отдельный класс. Текущая реализация проверяет только потолок доступа по целостности аргументов: `Send` разрешён при `Trusted`, иначе `Deny`. Allowlist получателей, тип данных и `Readers`/data ACL библиотека не реализует — это ответственность приложения. Allowlist URL/доменов и удаление внешних markdown-images — полезные дополнительные меры, но не защита от всех текстовых каналов эксфильтрации.
 
 Для RAG и поиска фильтрация прав выполняется приложением до построения контекста. Библиотека не реализует `Readers`/data ACL и не сохраняет reader restrictions после retrieval: если приложение передало документ в `Task`, оно отвечает за то, кому этот документ можно показать.
 
@@ -413,10 +415,9 @@ Workflow рассчитан на типовые use-cases с последова�
 ### 8.1. Модель
 
 ```go
-wf, err := flow.New[RefundCase]("refund",
+wf, err := flow.FromEngine[RefundCase](engine, "refund",
     flow.Version(1),
-    flow.WithAuthorizer(authz),
-    flow.WithSealer(sealer),
+    flow.WithTTL(24 * time.Hour),
 )
 if err != nil {
     return err
@@ -434,6 +435,8 @@ wf.Step("prepare", prepareRefund).
 ```
 
 Пример концептуальный. Состояние workflow `S` должно быть явно сериализуемым и ограниченным по размеру. Пользовательский код не должен хранить в нём открытые секреты без необходимости.
+
+`flow.FromEngine` берёт authorizer, audit sink, claim store, часы и ключ подписи у `Engine` (`Engine.Deps`). Два разных authorizer в одном use-case означали бы, что Gate проверяет вызывающего по одному ACL, а одобрение — по другому. `flow.New` остаётся для flow без Task вокруг него.
 
 ### 8.2. Состояния
 
@@ -469,7 +472,7 @@ Go не умеет безопасно сериализовать стек про
 
 Вместо этого `Task` возвращает явный typed outcome: `Completed`, `ApprovalRequired` или `Failed`. При `ApprovalRequired` runtime возвращает `PendingAction` — сериализуемое описание ровно того действия, которое было остановлено: задача, tool, уже разрезолвленные аргументы, digest, tenant, expiry, карточку и HMAC-подпись engine. Tool handler не вызывается.
 
-После реального одобрения приложение вызывает `task.ExecuteApproved(ctx, requester, approver, pending)`. Метод проверяет HMAC, которым engine подписал выданный `PendingAction` (поэтому объект, собранный клиентом или другим процессом без общего `WithApprovalKey`, — `ErrApprovalDrift`), заново прогоняет tenant binding, RBAC/ACL и `Tool.Validate`, сверяет tool/effect и digest аргументов с карточкой, фиксирует `approval.granted` с id апрувера и только потом вызывает handler. Потолок эффекта — единственная проверка, которую заменяет решение человека. `PendingAction` — обычный JSON (включая `nonce` и `proof`), поэтому `flow` запечатывает его в continuation token и передаёт в шаг после `Approve`; `flow.ApproverFrom(ctx)` отдаёт апрувера этому шагу. Повторный `ExecuteApproved` с тем же `PendingAction` возвращает `ErrApprovalReplay`.
+После реального одобрения приложение вызывает `task.ExecuteApproved(ctx, requester, approver, pending)`. Метод проверяет HMAC, которым engine подписал выданный `PendingAction` (поэтому объект, собранный клиентом или другим процессом без общего `WithApprovalKey`, — `ErrApprovalDrift`), заново прогоняет tenant binding, RBAC/ACL и `Tool.Validate`, сверяет tool/operation и digest аргументов с карточкой, фиксирует `approval.granted` с id апрувера и только потом вызывает handler. Потолок эффекта — единственная проверка, которую заменяет решение человека. `PendingAction` — обычный JSON (включая `nonce` и `proof`), поэтому `flow` запечатывает его в continuation token и передаёт в шаг после `Approve`; `flow.ApproverFrom(ctx)` отдаёт апрувера этому шагу. Повторный `ExecuteApproved` с тем же `PendingAction` возвращает `ErrApprovalReplay`.
 
 Уже завершённые шаги не перевычисляются: `flow` продолжает с шага после `Approve`. `Task` не восстанавливает стек и не продолжает модельный цикл после одобрения — новый ход начинается новым `Run`.
 
@@ -482,7 +485,8 @@ Go не умеет безопасно сериализовать стек про
   "run_id": "r_123",
   "flow": "refund",
   "step": "execute",
-  "action": { "tool": "orders.refund", "effect": "write" },
+  "tool": "orders.refund",
+  "operation": "write",
   "args": { "order_id": "A-1042", "cents": 4900 },
   "reason": "order_id получен из untrusted ticket body",
   "provenance": [
@@ -498,19 +502,15 @@ Go не умеет безопасно сериализовать стек про
 
 Поддерживаемые решения: `Approve`, `Reject`. `Reject` необратим: он тоже забирает nonce из `Store`, поэтому тот же continuation нельзя позже возобновить как `Approve`; повторное решение требует нового `Run`. `Edit` аргументов — P2 и в текущей реализации отсутствует.
 
-### 8.5. Sealed continuation
+### 8.5. Suspension: состояние остаётся у приложения
 
-По умолчанию состояние существует только в памяти до приостановки; при паузе оно помещается в защищённый continuation token. Если токен слишком большой, библиотека требует Store для spill либо завершает приостановку безопасной ошибкой.
+`flow` не выпускает continuation token и не шифрует состояние. `Run` возвращает `Suspension` (nonce, карточка, expiry, requester) и `State`; приложение хранит оба у себя и передаёт обратно в `Resume`. Запечатанный токен требовал бы собственного формата, ключа, ротации и миграции, то есть второго хранилища рядом с обычным серверным. В текущей версии его нет.
 
-Continuation должен содержать как минимум: format version, run/flow ID, workflow version, tenant binding, requester ID, step/checkpoint ID, expiry, nonce, минимальное состояние, labels/handles и `PendingAction` с digest canonical args. В нём может быть чувствительное содержимое, поэтому применяется **authenticated encryption**, а не просто Base64 или подпись.
-
-Рекомендуемая реализация стандартной библиотеки — AES-GCM (`crypto/aes`, `crypto/cipher`) с уникальным случайным nonce, отдельным key ID для ротации ключей и AAD, связанной с ожидаемыми tenant и flow. Версия workflow находится внутри аутентифицированного payload и проверяется отдельно, чтобы расхождение версии давало `ErrFlowDrift`, а не выглядело как подделка. При открытии ожидаемый tenant/flow берётся из контекста вызова и сверяется с токеном, а не просто копируется из самого токена. Токены нельзя писать в логи; они передаются в теле запроса, не в URL.
-
-Токен — не bearer approval: возобновление всё равно требует аутентифицированного Principal и отдельного permission. Размер, TTL и schema state ограничены. Ключи — секрет приложения с ротацией и процедурой восстановления; потеря ключа означает потерю возможности открыть старые continuation.
+Следствия, которые нужно знать при интеграции. `Suspension` подписан тем же ключом, что и `PendingAction` (`gobellim.Sealer`), поэтому объект, который выпустивший flow не подписывал, — `ErrFlowDrift`; всё равно загружать его следует только из собственного хранилища. Подпись покрывает nonce, карточку, expiry и requester: порча любого поля отклоняется до `Authorizer`. `Resume` заново вычисляет цель и digest действия из `State`, так что подмена карточки не даёт выполнить другое действие. Ключ подписи случайный, если не задан `WithApprovalKey`: тогда одобрение, эскалированное на одной реплике, не исполнится на другой.
 
 ### 8.6. Resume: обязательные проверки
 
-1. Проверить формат, AEAD и binding ожидаемым tenant/flow.
+1. Проверить формат и HMAC-подпись suspension, binding к ожидаемым tenant/flow.
 2. Проверить expiry и форматную версию.
 3. Проверить совместимость workflow version; при отсутствии явной миграции отказать с `ErrFlowDrift`.
 4. Аутентифицировать approver средствами сервиса и проверить право `approve:<flow>.<step>`.
@@ -587,7 +587,7 @@ type Classifier interface {
 
 ### 9.4. Выходная безопасность
 
-Выход проходит schema/size validation, правила раскрытия чувствительных данных и безопасное представление. HTML/Markdown рендерится приложением в собственном безопасном режиме. Санитайзер URL или удаление внешних картинок могут помочь, но не заменяют контроля доступа к данным, переданным модели, и политики `Egress`.
+Выход проходит schema и size validation. Handles в `Out` не резолвятся: если ответ показывается пользователю, приложение должно само заменить или убрать `<hN>`. Это известный разрыв (§15), а не гарантия. HTML/Markdown рендерится приложением в собственном безопасном режиме. Санитайзер URL или удаление внешних картинок могут помочь, но не заменяют контроля доступа к данным, переданным модели, и политики `Send`.
 
 ## 10. Наблюдаемость и аудит
 
@@ -599,7 +599,7 @@ Core публикует события через `slog` и интерфейс `
 
 - `run_id`, `task`/`flow`, `step`, `request_id`;
 - анонимизированный или внутренний `principal_id`, tenant reference;
-- tool name, effect, decision, rule IDs, policy version;
+- tool name, operation, decision, rule IDs, policy version;
 - digest canonical arguments, source labels, latency, model/tool call counts;
 - model name, prompt/completion/total tokens для `model.completed`;
 - suspension/approval state, nonce reference, error class.
@@ -659,16 +659,16 @@ func TestUntrustedInputCannotExecuteWriteWithoutGate(t *testing.T) {
 
 ## 12. Зависимости и deployment footprint
 
-| Компонент                       | Зависимости                                                                     | Обязателен                                  |
-| ------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------- |
-| Core, Gate, labels, Task        | Go stdlib                                                                       | Да                                          |
-| Continuation seal               | `crypto/aes`, `crypto/cipher`, `crypto/rand` или согласованный стандартный AEAD | Только при HITL continuation                |
-| SQL Store                       | `database/sql`; драйвер уже принадлежит сервису                                 | Нет                                         |
-| HTTP approval handlers          | `net/http`                                                                      | Нет                                         |
-| Model adapters                  | `net/http` или SDK в отдельном module                                           | Нет; приложение может передать свой `Model` |
-| Unicode normalizer / classifier | отдельный optional module / сервис                                              | Нет                                         |
-| OpenTelemetry                   | отдельный module                                                                | Нет                                         |
-| Redis store                     | optional adapter для уже существующего Redis                                    | Нет                                         |
+| Компонент                       | Зависимости                                                 | Обязателен                                  |
+| ------------------------------- | ----------------------------------------------------------- | ------------------------------------------- |
+| Core, Gate, labels, Task        | Go stdlib                                                   | Да                                          |
+| Continuation seal               | не реализовано: `Suspension` подписан HMAC, но не шифруется | —                                           |
+| SQL Store                       | `database/sql`; драйвер уже принадлежит сервису             | Нет                                         |
+| HTTP approval handlers          | `net/http`                                                  | Нет                                         |
+| Model adapters                  | `net/http` или SDK в отдельном module                       | Нет; приложение может передать свой `Model` |
+| Unicode normalizer / classifier | отдельный optional module / сервис                          | Нет                                         |
+| OpenTelemetry                   | отдельный module                                            | Нет                                         |
+| Redis store                     | optional adapter для уже существующего Redis                | Нет                                         |
 
 Цель ядра — `go.mod` без обязательного `require`. В качестве минимального контракта `Model`, `Authorizer`, `AuditSink`, `Classifier` и `Store` используются интерфейсы. Не нужно изобретать собственный сервер только для одного use-case.
 
@@ -705,17 +705,17 @@ func TestUntrustedInputCannotExecuteWriteWithoutGate(t *testing.T) {
 
 ### MVP / хакатон
 
-| Приоритет | Что входит                                                                                                                | Критерий приёмки                                                                                                     |
-| --------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| P0        | `Task[In,Out]`, `Model`, типизированные tools, schema validation, Gate, `Authorizer`, effect policy, limits, audit events | Один сценарий запускается в существующем сервисе без отдельной инфраструктуры; запрещённый tool call не исполняется. |
-| P0        | Labels и handles для выбранных чувствительных полей, базовый provenance                                                   | У свободного ответа модели нет автоматического trust promotion; несуществующий handle отклоняется.                   |
-| P0        | `FakeModel`, malicious testkit, ≥30 целевых сценариев                                                                     | CI покрывает невалидные аргументы, RBAC/ACL, untrusted-to-write, egress и лимиты.                                    |
-| P1        | Линейный workflow, approval card, sealed continuation L0, expiry/version check, policy re-check                           | Resume отвергает tampered/expired/other-tenant token; approval не выполняет операцию при отозванном permission.      |
-| P1        | SQL `Store` L1 поверх `database/sql`                                                                                      | Параллельный Resume использует атомарный claim; replay на другой реплике отклоняется.                                |
-| P2        | Replay/diff, policy migrations, Four-Eyes/quorum, compensation                                                            | Regression suite показывает decision diff и тестирует отказ при policy drift.                                        |
-| P2        | Model/HTTP adapters, OTel                                                                                                 | Подключаются отдельно и не попадают в обязательные зависимости core.                                                 |
+| Приоритет | Что входит                                                                                                                   | Критерий приёмки                                                                                                             |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| P0        | `Task[In,Out]`, `Model`, типизированные tools, schema validation, Gate, `Authorizer`, operation policy, limits, audit events | Один сценарий запускается в существующем сервисе без отдельной инфраструктуры; запрещённый tool call не исполняется.         |
+| P0        | Labels и handles для выбранных чувствительных полей, базовый provenance                                                      | У свободного ответа модели нет автоматического trust promotion; несуществующий handle отклоняется.                           |
+| P0        | `FakeModel`, malicious testkit, ≥30 целевых сценариев                                                                        | CI покрывает невалидные аргументы, RBAC/ACL, untrusted-to-write, send и лимиты.                                              |
+| P1        | Линейный workflow, approval card, suspension + состояние на стороне приложения, expiry/version check, policy re-check        | Resume отвергает подменённую/просроченную карточку и чужой tenant; approval не выполняет операцию при отозванном permission. |
+| P1        | SQL `Store` L1 поверх `database/sql`                                                                                         | Параллельный Resume использует атомарный claim; replay на другой реплике отклоняется.                                        |
+| P2        | Sealed continuation, replay/diff, policy migrations, quorum, compensation                                                    | Regression suite показывает decision diff и тестирует отказ при policy drift.                                                |
+| P2        | Model/HTTP adapters, OTel                                                                                                    | Подключаются отдельно и не попадают в обязательные зависимости core.                                                         |
 
-P0 и P1 реализованы. В `flow` также реализован Four-Eyes. Реализованы `plugins/gigachat` (model adapter) и `plugins/langfuse` (audit sink). P2 (replay/diff, policy migrations, quorum, compensation, `detect`, `httpapproval`, `otel`, `Edit` аргументов) — нет.
+P0 и P1 реализованы, кроме sealed continuation: токена нет, `Suspension` и `State` хранит приложение (§8.5). В `flow` также реализован Four-Eyes. Реализованы `plugins/gigachat` (model adapter) и `plugins/langfuse` (audit sink). P2 (sealed continuation, replay/diff, policy migrations, quorum, compensation, `detect`, `httpapproval`, `otel`, `Edit` аргументов) — нет.
 
 ### Демо
 
@@ -743,6 +743,7 @@ P0 и P1 реализованы. В `flow` также реализован Four-
 5. Какие дефолтные лимиты размеров, tool calls, TTL и continuation выбирать после нагрузочных и attack-тестов?
 6. Какие изменения policy должны требовать немедленного отказа, а какие допускают явную миграцию старого workflow state?
 7. Как проверять не только unauthorized actions, но и сохранение полезности легитимных сценариев без зависимости от случайности провайдера?
+8. Резолвить ли handles в `Out` или только вычищать неизвестные `<hN>`? Сейчас не делается ни то ни другое, поэтому хэндл может попасть в ответ пользователю.
 
 ## 16. Источники и prior art
 

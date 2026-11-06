@@ -52,7 +52,7 @@ source=principal требует, чтобы TenantID совпадал с Princip
 	var executed int
 	refund := gobellim.Tool[RefundArgs, RefundResult]{
 		Name:       "orders.refund",
-		Access:     gobellim.Write,
+		Operation:  gobellim.Write,
 		Permission: "orders:refund",
 		Target: func(p gobellim.Principal, a RefundArgs) gobellim.Resource {
 			return gobellim.Resource{Type: "order", ID: a.OrderID, TenantID: p.Tenant}
@@ -99,7 +99,7 @@ source=principal требует, чтобы TenantID совпадал с Princip
 		notebook.Cell("2. Gate остановил write", `
 Аргумент OrderID пришёл из untrusted-поля, поэтому Write не разрешён молча.
 Возвращается approval card; tool handler не вызывался.`)
-		notebook.Result("tool: %s, access: %s", res.Pending.Card.Tool, res.Pending.Card.Access)
+		notebook.Result("tool: %s, operation: %s", res.Pending.Card.Tool, res.Pending.Card.Operation)
 		notebook.Result("args (resolved for the approver): %s", string(res.Pending.Card.Args))
 		notebook.Result("digest: %s", res.Pending.Card.Digest)
 		for _, p := range res.Pending.Card.Provenance {

@@ -56,7 +56,7 @@ type Event struct {
 	PrincipalID      string
 	Tenant           string
 	Tool             string
-	Access           Access
+	Operation        Operation
 	Decision         DecisionKind
 	RuleIDs          []string
 	PolicyVersion    string
@@ -104,8 +104,8 @@ func (s SlogSink) Emit(ctx context.Context, e Event) {
 	add("principal", e.PrincipalID)
 	add("tenant", e.Tenant)
 	add("tool", e.Tool)
-	if e.Access != AccessUnknown {
-		add("access", e.Access.String())
+	if e.Operation != OperationUnknown {
+		add("operation", e.Operation.String())
 	}
 	if len(e.RuleIDs) > 0 || e.Decision != Deny {
 		add("decision", e.Decision.String())

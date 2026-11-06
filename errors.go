@@ -29,6 +29,6 @@ var (
 	// for production volumes.
 	ErrClaimStoreFull = errors.New("gobellim: claim store is full")
 	// ErrApprovalDrift signals a pending action that changed since approval, or
-	// a tool whose access or identity changed under the same arguments.
+	// a tool whose operation or identity changed under the same arguments.
 	ErrApprovalDrift = errors.New("gobellim: approved action changed")
 )

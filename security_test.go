@@ -25,9 +25,9 @@ type nonGroundArgs struct {
 func TestHandleIsRejectedOutsideGroundField(t *testing.T) {
 	var executed int
 	tool := gobellim.Tool[nonGroundArgs, secOut]{
-		Name:   "kb.search",
-		Access: gobellim.Read,
-		Target: testResource[nonGroundArgs],
+		Name:      "kb.search",
+		Operation: gobellim.Read,
+		Target:    testResource[nonGroundArgs],
 		Run: func(context.Context, gobellim.Principal, nonGroundArgs) (secOut, error) {
 			executed++
 			return secOut{OK: true}, nil
@@ -66,9 +66,9 @@ type sourceArgs struct {
 func TestGroundRejectsHandleFromAnotherField(t *testing.T) {
 	var executed int
 	tool := gobellim.Tool[sourceArgs, secOut]{
-		Name:   "orders.apply",
-		Access: gobellim.Write,
-		Target: testResource[sourceArgs],
+		Name:      "orders.apply",
+		Operation: gobellim.Write,
+		Target:    testResource[sourceArgs],
 		Run: func(context.Context, gobellim.Principal, sourceArgs) (secOut, error) {
 			executed++
 			return secOut{OK: true}, nil
@@ -108,9 +108,9 @@ type targetArgs struct {
 func TestWriteWithEmptyTargetIsDenied(t *testing.T) {
 	var executed int
 	tool := gobellim.Tool[targetArgs, secOut]{
-		Name:   "orders.apply",
-		Access: gobellim.Write,
-		Target: func(gobellim.Principal, targetArgs) gobellim.Resource { return gobellim.Resource{} },
+		Name:      "orders.apply",
+		Operation: gobellim.Write,
+		Target:    func(gobellim.Principal, targetArgs) gobellim.Resource { return gobellim.Resource{} },
 		Run: func(context.Context, gobellim.Principal, targetArgs) (secOut, error) {
 			executed++
 			return secOut{OK: true}, nil
@@ -149,9 +149,9 @@ type redactFields struct {
 
 func TestResultRedactionCoversMapBytesAndString(t *testing.T) {
 	tool := gobellim.Tool[redactArgs, redactFields]{
-		Name:   "customer.read",
-		Access: gobellim.Read,
-		Target: testResource[redactArgs],
+		Name:      "customer.read",
+		Operation: gobellim.Read,
+		Target:    testResource[redactArgs],
 		Run: func(context.Context, gobellim.Principal, redactArgs) (redactFields, error) {
 			return redactFields{
 				M: map[string]string{"key": "MAP-SECRET"},
@@ -188,9 +188,9 @@ type badSecretResult struct {
 
 func TestSensitivityOnScalarResultIsRejected(t *testing.T) {
 	tool := gobellim.Tool[redactArgs, badSecretResult]{
-		Name:   "customer.read",
-		Access: gobellim.Read,
-		Target: testResource[redactArgs],
+		Name:      "customer.read",
+		Operation: gobellim.Read,
+		Target:    testResource[redactArgs],
 		Run: func(context.Context, gobellim.Principal, redactArgs) (badSecretResult, error) {
 			return badSecretResult{N: 42}, nil
 		},
@@ -214,9 +214,9 @@ type cancelArgs struct {
 func TestCanceledApprovalDoesNotConsumeTheNonce(t *testing.T) {
 	var executed int
 	tool := gobellim.Tool[cancelArgs, secOut]{
-		Name:   "orders.refund",
-		Access: gobellim.Write,
-		Target: testResource[cancelArgs],
+		Name:      "orders.refund",
+		Operation: gobellim.Write,
+		Target:    testResource[cancelArgs],
 		Run: func(ctx context.Context, _ gobellim.Principal, _ cancelArgs) (secOut, error) {
 			if err := ctx.Err(); err != nil {
 				return secOut{}, err
@@ -273,8 +273,8 @@ func TestRequestCarriesBoundedMaxTokens(t *testing.T) {
 
 func TestReadWithoutTargetIsAConfigError(t *testing.T) {
 	tool := gobellim.Tool[readArgs, readResult]{
-		Name:   "kb.search",
-		Access: gobellim.Read,
+		Name:      "kb.search",
+		Operation: gobellim.Read,
 		Run: func(context.Context, gobellim.Principal, readArgs) (readResult, error) {
 			return readResult{}, nil
 		},
@@ -349,5 +349,89 @@ func TestTaskRunIsConcurrentSafe(t *testing.T) {
 	}
 	if len(seen) != n {
 		t.Fatalf("got %d run ids, want %d", len(seen), n)
+	}
+}
+
+// A source tag on a tool argument declares trust the Gate cannot honour: the
+// runtime labels every model-supplied argument Derived. Accepting it silently
+// would let a reader believe an unattended write was declared safe.
+type argSourceArgs struct {
+	OrderID string `gobellim:"required,ground"`
+	Note    string `gobellim:"source=application"`
+}
+
+func TestToolArgumentRejectsSourceTag(t *testing.T) {
+	tool := gobellim.Tool[argSourceArgs, secOut]{
+		Name:      "orders.apply",
+		Operation: gobellim.Write,
+		Target:    testResource[argSourceArgs],
+		Run: func(context.Context, gobellim.Principal, argSourceArgs) (secOut, error) {
+			return secOut{OK: true}, nil
+		},
+	}
+	_, err := gobellim.NewTask[targetIn, secOut](
+		newEngine(t, testkit.NewFakeModel(), testkit.AllowAll, nil),
+		gobellim.TaskConfig{Name: "p", Instruction: "x", Tools: []gobellim.ToolDef{tool}},
+	)
+	if !errors.Is(err, gobellim.ErrInvalidConfig) {
+		t.Fatalf("err = %v, want ErrInvalidConfig", err)
+	}
+}
+
+// ground on a task input field is the mirror image: only an argument is
+// grounded, so the tag would be a no-op protection.
+type groundInput struct {
+	Body string `gobellim:"required,ground"`
+}
+
+func TestInputFieldRejectsGroundTag(t *testing.T) {
+	_, err := gobellim.NewTask[groundInput, secOut](
+		newEngine(t, testkit.NewFakeModel(), testkit.AllowAll, nil),
+		gobellim.TaskConfig{Name: "p", Instruction: "x"},
+	)
+	if !errors.Is(err, gobellim.ErrInvalidConfig) {
+		t.Fatalf("err = %v, want ErrInvalidConfig", err)
+	}
+}
+
+// A target without a tenant cannot be checked against the caller's tenant. It
+// must be denied before the operation ceiling, even when the arguments are trusted
+// enough for an unattended write.
+type tenantlessArgs struct {
+	OrderID string `gobellim:"required,ground"`
+}
+
+func TestTargetWithoutTenantIsDenied(t *testing.T) {
+	var executed int
+	tool := gobellim.Tool[tenantlessArgs, secOut]{
+		Name:      "orders.apply",
+		Operation: gobellim.Write,
+		Target: func(gobellim.Principal, tenantlessArgs) gobellim.Resource {
+			return gobellim.Resource{Type: "order", ID: "A-1"}
+		},
+		Run: func(context.Context, gobellim.Principal, tenantlessArgs) (secOut, error) {
+			executed++
+			return secOut{OK: true}, nil
+		},
+	}
+	model := testkit.NewFakeModel(
+		testkit.Call("orders.apply", map[string]any{"OrderID": "<h1>"}),
+		testkit.Reply(`{"OK":true}`),
+	)
+	task, err := gobellim.NewTask[targetIn, secOut](newEngine(t, model, testkit.AllowAll, nil), gobellim.TaskConfig{
+		Name: "p", Instruction: "x", Tools: []gobellim.ToolDef{tool},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := task.Run(context.Background(), principal(), targetIn{OrderID: "A-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executed != 0 {
+		t.Fatal("a write with an unbound target executed")
+	}
+	if got := res.ToolCalls[0].Decision; got.Kind != gobellim.Deny || got.RuleIDs[0] != "target-unbound" {
+		t.Fatalf("decision = %+v, want Deny target-unbound", got)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	gobellim "github.com/KirillYuzh/Gobellim"
@@ -76,13 +77,18 @@ const (
 )
 
 // Suspension describes the approval a flow is waiting for. The application
-// stores Nonce, Card and State server-side and returns only an opaque id to the
-// client. There is no sealed bearer token.
+// stores it server-side and returns only an opaque id to the client. There is no
+// sealed bearer token, and the structure is not encrypted: Proof binds it to the
+// flow that issued it, nothing more.
+//
+// Proof is an HMAC over every field, so a Resume cannot accept a suspension this
+// process did not issue. Losing it, or editing any other field, is ErrFlowDrift.
 type Suspension struct {
 	Nonce     string
 	Card      gobellim.ApprovalCard
 	ExpiresAt time.Time
 	Requester gobellim.Principal
+	Proof     []byte
 }
 
 // Result is the outcome of Run or Resume. An error is returned separately, not
@@ -99,6 +105,7 @@ type config struct {
 	authz         gobellim.Authorizer
 	audit         gobellim.Sink
 	store         gobellim.ClaimStore
+	sealer        *gobellim.Sealer
 	ttl           time.Duration
 	maxWallTime   time.Duration
 	now           func() time.Time
@@ -124,6 +131,11 @@ func WithAudit(s gobellim.Sink) Option { return func(c *config) { c.audit = s } 
 // a bounded in-process store; use store/sql for cross-replica deployments.
 func WithStore(s gobellim.ClaimStore) Option { return func(c *config) { c.store = s } }
 
+// WithSealer signs the Suspension. A nil value generates a random per-process
+// key, so a suspension escalated on one replica cannot be resumed on another.
+// flow.FromEngine reuses the Engine's sealer, which is the intended wiring.
+func WithSealer(s *gobellim.Sealer) Option { return func(c *config) { c.sealer = s } }
+
 // WithTTL sets the default approval lifetime. The default is 1 hour.
 func WithTTL(d time.Duration) Option { return func(c *config) { c.ttl = d } }
 
@@ -147,6 +159,9 @@ type approve[S any] struct {
 	ttl              time.Duration
 	card             func(ctx context.Context, p gobellim.Principal, s S) (gobellim.ApprovalCard, error)
 	target           func(ctx context.Context, p gobellim.Principal, s S) (gobellim.Resource, error)
+	// hasTarget separates "this approval is about an object" from "this
+	// approval is about proceeding". Only the first form must bind a tenant.
+	hasTarget bool
 }
 
 // Flow is a linear, typed workflow. Steps run in order. An approval step stops
@@ -190,7 +205,36 @@ func New[S any](name string, opts ...Option) (*Flow[S], error) {
 		store.Now = cfg.now
 		cfg.store = store
 	}
+	if cfg.sealer == nil {
+		key := make([]byte, 32)
+		_, _ = rand.Read(key)
+		sealer, err := gobellim.NewSealer(key)
+		if err != nil {
+			return nil, err
+		}
+		cfg.sealer = sealer
+	}
 	return &Flow[S]{name: name, cfg: cfg, ids: make(map[string]struct{})}, nil
+}
+
+// FromEngine builds a Flow that shares the Engine's authorizer, audit sink,
+// claim store, clock and approval key. Use it whenever the flow executes a Task:
+// a flow that authorizes an approver with a different adapter than the Task it
+// resumes is a security gap, not a style choice. Explicit options still win.
+func FromEngine[S any](e *gobellim.Engine, name string, opts ...Option) (*Flow[S], error) {
+	if e == nil {
+		return nil, fmt.Errorf("%w: engine is required", gobellim.ErrInvalidConfig)
+	}
+	d := e.Deps()
+	base := []Option{
+		WithAuthorizer(d.Authorizer),
+		WithAudit(d.Audit),
+		WithStore(d.Claims),
+		WithSealer(d.Sealer),
+		WithClock(d.Now),
+		WithTTL(d.ApprovalTTL),
+	}
+	return New[S](name, append(base, opts...)...)
 }
 
 func (f *Flow[S]) fail(err error) {
@@ -278,6 +322,7 @@ func (f *Flow[S]) Approve(id string, cfg ApproveConfig[S]) *Flow[S] {
 		ttl:              cfg.TTL,
 		card:             cfg.Card,
 		target:           noTarget[S],
+		hasTarget:        cfg.Target != nil,
 	}
 	if cfg.Target != nil {
 		a.target = cfg.Target
@@ -352,6 +397,7 @@ func (f *Flow[S]) runFrom(ctx context.Context, p gobellim.Principal, s S, from i
 			ExpiresAt: card.ExpiresAt,
 			Requester: p,
 		}
+		suspension.Proof = f.sign(suspension)
 
 		f.emit(ctx, gobellim.Event{
 			Kind: gobellim.EventWorkflowSuspended, RunID: card.RunID, Flow: f.name, Step: st.id,
@@ -394,6 +440,12 @@ func (f *Flow[S]) Resume(
 	if nonce == "" {
 		return zero, fmt.Errorf("%w: nonce is required", ErrFlowDrift)
 	}
+	if !f.signedByUs(&susp) {
+		// A suspension this flow did not issue is not an approval. Without this
+		// check the struct is a bearer token: the nonce inside it decides
+		// single-use, so a caller able to supply one could replay an approval.
+		return zero, fmt.Errorf("%w: suspension was not issued by this flow", ErrFlowDrift)
+	}
 	if requester.Tenant != approver.Tenant {
 		return zero, fmt.Errorf("%w: approver tenant does not match requester", ErrUnauthorized)
 	}
@@ -427,8 +479,14 @@ func (f *Flow[S]) Resume(
 		return Result[S]{Status: Failed, State: state}, err
 	}
 	// A target bound to another tenant would let the approver authorize a
-	// foreign object. The Gate makes this check for Tool; flow repeats it
-	// because Target here is application code, not a Tool declaration.
+	// foreign object. flow repeats this check because Target here is
+	// application code, not a Tool declaration. A declared target must name its
+	// tenant: filling it from the requester would make the check true by
+	// construction.
+	if a.hasTarget && target.TenantID == "" {
+		return Result[S]{Status: Failed, State: state},
+			fmt.Errorf("%w: approval target is not bound to a tenant", ErrFlowDrift)
+	}
 	if target.TenantID == "" {
 		target.TenantID = requester.Tenant
 	}
@@ -552,6 +610,51 @@ func (f *Flow[S]) emit(ctx context.Context, e gobellim.Event) {
 	e.Time = f.cfg.now()
 	e.PolicyVersion = f.cfg.policyVersion
 	f.cfg.audit.Emit(ctx, e)
+}
+
+// suspensionMessage is the canonical byte string a Suspension is signed over.
+// Every field is included, because the card is what the approver decided on and
+// the nonce is what makes the decision single-use. Strings are length-prefixed
+// so no two different field values produce the same message.
+func suspensionMessage(s *Suspension) []byte {
+	b := make([]byte, 0, 512)
+	add := func(v string) {
+		b = strconv.AppendInt(b, int64(len(v)), 10)
+		b = append(b, ':')
+		b = append(b, v...)
+		b = append(b, 0)
+	}
+	add(s.Nonce)
+	add(s.Requester.UserID)
+	add(s.Requester.Tenant)
+	for _, r := range s.Requester.Roles {
+		add(r)
+	}
+	c := s.Card
+	for _, v := range []string{
+		c.RunID, c.Flow, c.Step, c.Tool, c.Operation.String(), string(c.Args),
+		c.Digest, c.Reason, c.RequiredPermission,
+	} {
+		add(v)
+	}
+	b = strconv.AppendBool(b, c.FourEyes)
+	b = append(b, 0)
+	b = strconv.AppendInt(b, c.ExpiresAt.UnixNano(), 10)
+	b = append(b, 0)
+	for _, p := range c.Provenance {
+		add(p.Arg)
+		add(p.Source)
+		add(p.Integrity.String())
+	}
+	return strconv.AppendInt(b, s.ExpiresAt.UnixNano(), 10)
+}
+
+func (f *Flow[S]) sign(s *Suspension) []byte {
+	return f.cfg.sealer.Sign(suspensionMessage(s))
+}
+
+func (f *Flow[S]) signedByUs(s *Suspension) bool {
+	return f.cfg.sealer.Verify(suspensionMessage(s), s.Proof)
 }
 
 func newID(prefix string) string {
