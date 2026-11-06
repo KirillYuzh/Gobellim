@@ -94,6 +94,7 @@ Sealed-токена нет. `flow.VerdictReject` тоже забирает nonce
 | `source=principal`     | строка должна совпадать с полем `Principal`                  |
 | `source=application`   | значение пришло из состояния приложения и получает `Trusted` |
 | `ref`                  | выпустить handle, оставив значение публичным                 |
+| `resolve`              | (только выход) handle в строке снова становится значением    |
 | `sensitivity=patterns` | совпадения e-mail/телефона/карты заменяются на handles       |
 | `sensitivity=secret`   | всё значение заменяется одним handle                         |
 | `sensitivity=internal` | метка без маскирования                                       |

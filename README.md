@@ -242,6 +242,7 @@ from.
 | `source=principal`     | the value must equal the matching field of `Principal`    |
 | `source=application`   | the value is application state and becomes trusted        |
 | `ref`                  | mint a handle, keep the value public                      |
+| `resolve`              | (output only) a handle token becomes its value again      |
 | `sensitivity=patterns` | replace checked email/phone/card matches with handles     |
 | `sensitivity=secret`   | replace the whole value with one handle                   |
 | `sensitivity=internal` | label only; no masking                                    |
