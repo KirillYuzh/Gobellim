@@ -5,6 +5,10 @@
 // Operation, and both times every test passed: nothing imports a README. A
 // rename that misses a page is only visible to a reader, so it is checked here
 // instead.
+//
+// The tag vocabulary a page may write is checked by TestDocumentedTagsParse in
+// the root package: parsing a tag needs the unexported parser, and exporting it
+// only to test the docs would put a name in the public API for no caller.
 package docscheck
 
 import (
