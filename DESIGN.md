@@ -400,7 +400,7 @@ Decide(principal, tool, canonicalArgs, labels, currentPolicy)
 
 `worst` считается по всем аргументам, поэтому один model-derived аргумент в write-вызове всё равно приводит к `Escalate`. `Trusted` недостижим через валидатор: метку даёт только `source=principal` или `source=application` на поле входа и handle, выпущенный для такого поля.
 
-`Escalate` не значит «апрувер может разрешить всё». Это переход к проверке конкретного действия человеком; базовые ACL, лимиты, schema и законность действия остаются обязательными. `Task.ExecuteApproved(ctx, requester, approver, pending)` после одобрения перепроверяет tenant, RBAC/ACL, `Validate`, tool/operation и digest аргументов, а потолок доступа заменяет решением человека; `approver` попадает в audit как `approval.granted`. Одобрение одноразовое: `nonce` из `PendingAction` уходит в `ClaimStore` (процессный по умолчанию, общий через `WithClaimStore` или `store/sql`), второй вызов даёт `ErrApprovalReplay`.
+`Escalate` не значит «апрувер может разрешить всё». Это переход к проверке конкретного действия вне модели (человеком или бизнес-логикой); базовые ACL, лимиты, schema и законность действия остаются обязательными. `Task.ExecuteApproved(ctx, requester, approver, pending)` после одобрения перепроверяет tenant, RBAC/ACL, `Validate`, tool/operation и digest аргументов, а потолок доступа заменяет решением человека; `approver` попадает в audit как `approval.granted`. Одобрение одноразовое: `nonce` из `PendingAction` уходит в `ClaimStore` (процессный по умолчанию, общий через `WithClaimStore` или `store/sql`), второй вызов даёт `ErrApprovalReplay`.
 
 ### 7.4. Send и data ACL
 
@@ -410,7 +410,7 @@ Decide(principal, tool, canonicalArgs, labels, currentPolicy)
 
 ## 8. Workflow и HITL
 
-Workflow рассчитан на типовые use-cases с последовательными шагами, ветвлениями и подтверждением человеком — не на произвольный durable execution engine. В первой версии не поддерживаются параллельные ветви, циклы и динамически генерируемые шаги.
+Workflow рассчитан на типовые use-cases с последовательными шагами, ветвлениями и подтверждением вне модели — не на произвольный durable execution engine. В первой версии не поддерживаются параллельные ветви, циклы и динамически генерируемые шаги.
 
 ### 8.1. Модель
 
@@ -682,7 +682,7 @@ func TestUntrustedInputCannotExecuteWriteWithoutGate(t *testing.T) {
 - Библиотека не управляет retrieval: если приложение передаёт документы в `Task`, оно само применяет data ACL до сборки контекста.
 - Свободный вывод модели не становится trusted только за счёт JSON schema или перефразирования.
 - Approval относится к конкретному действию и аргументам; после их изменения policy и validation запускаются снова.
-- `Task.ExecuteApproved` повторно проверяет tenant, RBAC/ACL, `Tool.Validate` и digest; потолок эффекта — единственное, что заменяет одобрение человека.
+- `Task.ExecuteApproved` повторно проверяет tenant, RBAC/ACL, `Tool.Validate` и digest; потолок операции — единственное, что заменяет решение апрувера.
 - `sensitivity`-теги на результате инструмента не дают секрету вернуться в контекст модели; лучший-effort: map и self-marshalling типы не инспектируются.
 - Завершившийся без явного outcome `Run` (включая панику handler'а) аудируется как `task.failed`, а не `task.completed`.
 - В режиме `Enforce` действие, принятое Gate как `Deny` или `Escalate`, не выполняется без установленного процесса одобрения.

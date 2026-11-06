@@ -85,7 +85,7 @@ flowchart LR
     A --> X["ваш tool handler"]
     X --> R["отредактированный результат<br/>обратно в модель"]
     E --> C["PendingAction<br/>digest · nonce · expiry"]
-    C -->|"человек одобрил"| EA["ExecuteApproved<br/>Gate прогоняется снова"]
+    C -->|"апрувер одобрил"| EA["ExecuteApproved<br/>Gate прогоняется снова"]
     EA --> X
     G --> AU["audit: labels и digest"]
 ```
@@ -197,7 +197,7 @@ if err != nil {
 	return err
 }
 if res.Status == gobellim.TaskApprovalRequired {
-	// res.Pending — остановленное действие. После реального одобрения:
+	// res.Pending — остановленное действие. После решения апрувера:
 	//   out, rec, err := task.ExecuteApproved(ctx, requester, approver, res.Pending)
 }
 ```
@@ -294,6 +294,10 @@ Write с аргументами из модели не выполняется. `
 `TaskApprovalRequired` и `PendingAction` с разрезолвленными аргументами, их
 digest, nonce, expiry и HMAC от выпустившего engine. Храните объект на сервере;
 endpoint одобрения не должен принимать эти поля от клиента.
+
+Решение приходит вне модели: от человека или от вашей же бизнес-логики,
+действующей как аутентифицированный `Principal`. Gate проверяет одно и то же
+действие в обоих случаях.
 
 Карточка, которую видит апрувер, маскирована: secret-аргумент — это handle,
 pii-аргумент замаскирован, а `Provenance` говорит, что где. Настоящие значения

@@ -69,7 +69,8 @@ write-действие, но оно **не выполнено**. В `res.Pending
 
 Храните `PendingAction` на сервере: если endpoint одобрения декодирует его из
 тела запроса, клиент сам выбирает аргументы и digest, и engine отвергнет такой
-объект как `ErrApprovalDrift`. После реального одобрения приложение вызывает
+объект как `ErrApprovalDrift`. Решение принимает кто-то вне модели: человек или
+ваша же бизнес-логика, действующая как аутентифицированный `Principal`. После реального одобрения приложение вызывает
 `task.ExecuteApproved(ctx, requester, approver, res.Pending)`: Gate заново
 проверяет tenant, RBAC/ACL, `Validate`, tool/operation и digest, а `approver`
 попадает в audit как `approval.granted`. Одобрение одноразовое: nonce уходит в

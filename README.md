@@ -84,17 +84,17 @@ flowchart LR
     A --> X["your tool handler"]
     X --> R["redacted result<br/>back to the model"]
     E --> C["PendingAction<br/>digest · nonce · expiry"]
-    C -->|"human approves"| EA["ExecuteApproved<br/>Gate re-runs"]
+    C -->|"approver accepts"| EA["ExecuteApproved<br/>Gate re-runs"]
     EA --> X
     G --> AU["audit: labels and digests"]
 ```
 
-| Gate          | Responsibility                                                                                                                                                                                                                                                           |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Principal     | who calls: user, tenant, roles. It comes from your auth layer, never from model text.                                                                                                                                                                                    |
-| Gate          | one function that turns a proposed action into `Allow`, `Deny` or `Escalate`. Unknown tool, invalid arguments, an authorizer error or a tenant mismatch are never `Allow`.                                                                                               |
-| PendingAction | a serializable escalation: resolved arguments, digest, nonce, expiry, and an HMAC that ties it to the engine that issued it. It is the only way to execute what a human approved, it is single-use, and an approval endpoint must never accept its fields from a client. |
-| Audit         | labels, digests, decisions and counters. No prompt text, no raw arguments, no secrets.                                                                                                                                                                                   |
+| Gate          | Responsibility                                                                                                                                                                                                                                                                      |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Principal     | who calls: user, tenant, roles. It comes from your auth layer, never from model text.                                                                                                                                                                                               |
+| Gate          | one function that turns a proposed action into `Allow`, `Deny` or `Escalate`. Unknown tool, invalid arguments, an authorizer error or a tenant mismatch are never `Allow`.                                                                                                          |
+| PendingAction | a serializable escalation: resolved arguments, digest, nonce, expiry, and an HMAC that ties it to the engine that issued it. It is the only way to execute what a trusted approver accepted, it is single-use, and an approval endpoint must never accept its fields from a client. |
+| Audit         | labels, digests, decisions and counters. No prompt text, no raw arguments, no secrets.                                                                                                                                                                                              |
 
 Each is a gate on the call path, not a hook you can forget.
 
@@ -196,7 +196,7 @@ if err != nil {
 	return err
 }
 if res.Status == gobellim.TaskApprovalRequired {
-	// res.Pending is the escalated action. After a human approves it:
+	// res.Pending is the escalated action. After an approver accepts it:
 	//   out, rec, err := task.ExecuteApproved(ctx, requester, approver, res.Pending)
 }
 ```
@@ -290,6 +290,10 @@ A write with model-derived arguments is not executed. `Task.Run` returns
 `TaskApprovalRequired` and a `PendingAction` with the resolved arguments, their
 digest, a nonce, an expiry and an HMAC from the issuing engine. Keep it on the
 server; an approval endpoint must never accept these fields from a client.
+
+The decision comes from outside the model: a person, or your own business logic
+acting as an authenticated `Principal`. The Gate checks the same action either
+way.
 
 The card the approver sees is masked: a secret argument is a handle, a PII
 argument is masked, and `Provenance` says which field is which. The real values
