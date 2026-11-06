@@ -47,7 +47,7 @@ func WithPolicyVersion(v string) Option { return func(c *Config) { c.PolicyVersi
 func WithClaimStore(s ClaimStore) Option { return func(c *Config) { c.Claims = s } }
 
 // WithApprovalTTL sets how long a PendingAction stays executable. The default
-// is 24 hours.
+// is 1 hour; an approval that sits unused for a day is a stale decision.
 func WithApprovalTTL(d time.Duration) Option { return func(c *Config) { c.ApprovalTTL = d } }
 
 // WithApprovalKey sets the HMAC key that authenticates a PendingAction. It must
@@ -72,7 +72,7 @@ type Engine struct {
 	now           func() time.Time
 }
 
-const defaultApprovalTTL = 24 * time.Hour
+const defaultApprovalTTL = time.Hour
 
 // New validates the configuration and builds an Engine.
 func New(opts ...Option) (*Engine, error) {

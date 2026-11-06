@@ -52,9 +52,9 @@ source=principal требует, чтобы TenantID совпадал с Princip
 	var executed int
 	refund := gobellim.Tool[RefundArgs, RefundResult]{
 		Name:       "orders.refund",
-		Effect:     gobellim.Write,
+		Access:     gobellim.Write,
 		Permission: "orders:refund",
-		Resource: func(p gobellim.Principal, a RefundArgs) gobellim.Resource {
+		Target: func(p gobellim.Principal, a RefundArgs) gobellim.Resource {
 			return gobellim.Resource{Type: "order", ID: a.OrderID, TenantID: p.Tenant}
 		},
 		Run: func(context.Context, gobellim.Principal, RefundArgs) (RefundResult, error) {
@@ -99,7 +99,7 @@ source=principal требует, чтобы TenantID совпадал с Princip
 		notebook.Cell("2. Gate остановил write", `
 Аргумент OrderID пришёл из untrusted-поля, поэтому Write не разрешён молча.
 Возвращается approval card; tool handler не вызывался.`)
-		notebook.Result("tool: %s, effect: %s", res.Pending.Card.Tool, res.Pending.Card.Effect)
+		notebook.Result("tool: %s, access: %s", res.Pending.Card.Tool, res.Pending.Card.Access)
 		notebook.Result("args (resolved for the approver): %s", string(res.Pending.Card.Args))
 		notebook.Result("digest: %s", res.Pending.Card.Digest)
 		for _, p := range res.Pending.Card.Provenance {
@@ -110,7 +110,7 @@ source=principal требует, чтобы TenantID совпадал с Princip
 	notebook.Cell("3. Что произошло", `
 Модель не получила ни e-mail, ни номер заказа в открытом виде.
 Даже если она подставит handle в write-инструмент, Gate не выполнит действие
-без одобрения человека. После одобрения приложение вызывает
+без одобрения из доверенного источника. После одобрения приложение вызывает
 Task.ExecuteApproved с той же карточкой: Gate перепроверит tenant, ACL,
 бизнес-валидацию и digest. Следующий notebook показывает остальные отказы.`)
 	fmt.Println()

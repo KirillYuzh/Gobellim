@@ -1,4 +1,4 @@
-// Notebook 06: GigaChat proposes a write; the Gate escalates to a human.
+// Notebook 06: GigaChat proposes a write; the Gate escalates to a trusted approver.
 // Run:
 //
 //	export GIGACHAT_AUTH_KEY='<Authorization key from GigaChat Studio>'
@@ -74,9 +74,9 @@ func main() {
 	var executed int
 	refund := gobellim.Tool[refundArgs, refundResult]{
 		Name:       "orders.refund",
-		Effect:     gobellim.Write,
+		Access:     gobellim.Write,
 		Permission: "orders:refund",
-		Resource: func(p gobellim.Principal, a refundArgs) gobellim.Resource {
+		Target: func(p gobellim.Principal, a refundArgs) gobellim.Resource {
 			return gobellim.Resource{Type: "order", ID: a.OrderID, TenantID: p.Tenant}
 		},
 		Run: func(context.Context, gobellim.Principal, refundArgs) (refundResult, error) {
@@ -135,14 +135,14 @@ runtime ищет инструмент в закрытом реестре и от
 Write с аргументом из untrusted-поля не выполняется. Карточка содержит
 резолвнутые аргументы для апрувера, digest действия и provenance.
 В реальном сервисе карточка уходит в UI; приложение применяет ACL апрувера.`)
-		notebook.Result("tool: %s, effect: %s", res.Pending.Card.Tool, res.Pending.Card.Effect)
+		notebook.Result("tool: %s, access: %s", res.Pending.Card.Tool, res.Pending.Card.Access)
 		notebook.Result("args: %s", string(res.Pending.Card.Args))
 		notebook.Result("digest: %s", res.Pending.Card.Digest)
 		for _, p := range res.Pending.Card.Provenance {
 			notebook.Result("provenance: %s ← %s (%s)", p.Arg, p.Source, p.Integrity)
 		}
 
-		notebook.Cell("4. Человек одобрил", `
+		notebook.Cell("4. Доверенный источник одобрил", `
 Приложение вызывает ExecuteApproved только после реального одобрения и
 передаёт Principal запросившего, а не апрувера. Gate заново проверяет tenant,
 RBAC/ACL и бизнес-валидацию; аргументы должны совпасть с digest карточки.`)

@@ -6,9 +6,10 @@ import (
 	"sort"
 )
 
-// check runs the checks that every action needs, whether or not a human
-// approved it: tenant binding, grounding, RBAC/ACL and business validation.
-// A nil result means the checks passed. Every check is fail-closed.
+// check runs the checks that every action needs, whether or not an approval
+// outside the model accepted it: tenant binding, grounding, RBAC/ACL and
+// business validation. A nil result means the checks passed. Every check is
+// fail-closed.
 //
 // The order is deliberate. Grounding is local and cheap, and it rejects an
 // argument the model invented before that argument's resource reaches the
@@ -17,28 +18,31 @@ import (
 // rule never runs for a caller who could not perform the action anyway.
 //
 // requireGrounding is false only for an approved action: its arguments were
-// already resolved and are bound to the digest the human saw, so there is no
+// already resolved and are bound to the digest the approver saw, so there is no
 // handle left to check.
 func (e *Engine) check(ctx context.Context, p Principal, c prepared, requireGrounding bool) *Decision {
-	resource := c.resource
+	resource := c.target
 	if resource.TenantID == "" {
 		resource.TenantID = p.Tenant
 	}
 	if resource.TenantID != p.Tenant {
-		return &Decision{Kind: Deny, RuleIDs: []string{"tenant-mismatch"}, Reason: "resource is bound to another tenant"}
+		return &Decision{Kind: Deny, RuleIDs: []string{RuleTenantMismatch}, Reason: "resource is bound to another tenant"}
+	}
+	if c.spec.access != AccessCompute && (resource.Type == "" || resource.ID == "") {
+		return &Decision{Kind: Deny, RuleIDs: []string{RuleTargetUnbound}, Reason: "action has no target"}
 	}
 	if requireGrounding && !c.grounded {
-		return &Decision{Kind: Deny, RuleIDs: []string{"ungrounded"}, Reason: "argument has no trusted origin"}
+		return &Decision{Kind: Deny, RuleIDs: []string{RuleUngrounded}, Reason: "argument has no trusted origin"}
 	}
 	ok, err := e.authz.Allowed(ctx, p, c.spec.permission, resource)
 	switch {
 	case err != nil:
-		return &Decision{Kind: Deny, RuleIDs: []string{"authz-error"}, Reason: "authorizer failed"}
+		return &Decision{Kind: Deny, RuleIDs: []string{RuleAuthzError}, Reason: "authorizer failed"}
 	case !ok:
-		return &Decision{Kind: Deny, RuleIDs: []string{"rbac-acl"}, Reason: "permission denied"}
+		return &Decision{Kind: Deny, RuleIDs: []string{RuleRBACACL}, Reason: "permission denied"}
 	}
 	if err := c.tool.validate(ctx, p, c.args); err != nil {
-		return &Decision{Kind: Deny, RuleIDs: []string{"business-validate"}, Reason: "business validation failed"}
+		return &Decision{Kind: Deny, RuleIDs: []string{RuleBusinessValidate}, Reason: "business validation failed"}
 	}
 	return nil
 }
@@ -49,42 +53,40 @@ func (e *Engine) decide(ctx context.Context, p Principal, c *prepared) Decision 
 	if d := e.check(ctx, p, *c, true); d != nil {
 		return *d
 	}
-	// The business validator passed, so a handle-backed argument is now
-	// promoted to Validated: its origin was minted by the runtime and the
-	// application confirmed the business meaning.
-	c.worst = c.effectiveWorst()
 
-	switch c.spec.effect {
-	case EffectRead:
-		return Decision{Kind: Allow, RuleIDs: []string{"read"}, Reason: "read allowed"}
-	case EffectWrite:
-		if c.worst >= Validated {
-			return Decision{Kind: Allow, RuleIDs: []string{"write"}, Reason: "write allowed"}
+	switch c.spec.access {
+	case AccessCompute:
+		return Decision{Kind: Allow, RuleIDs: []string{RuleCompute}, Reason: "compute allowed"}
+	case AccessRead:
+		return Decision{Kind: Allow, RuleIDs: []string{RuleRead}, Reason: "read allowed"}
+	case AccessWrite:
+		if c.worst == Trusted {
+			return Decision{Kind: Allow, RuleIDs: []string{RuleWrite}, Reason: "write arguments come from trusted state"}
 		}
-		return Decision{Kind: Escalate, RuleIDs: []string{"write-untrusted"}, Reason: "write arguments are model-derived"}
-	case EffectEgress:
-		if c.worst >= Validated {
-			return Decision{Kind: Allow, RuleIDs: []string{"egress"}, Reason: "egress allowed"}
+		return Decision{Kind: Escalate, RuleIDs: []string{RuleWriteUntrusted}, Reason: "write arguments are model-derived"}
+	case AccessSend:
+		if c.worst == Trusted {
+			return Decision{Kind: Allow, RuleIDs: []string{RuleSend}, Reason: "send arguments come from trusted state"}
 		}
-		return Decision{Kind: Deny, RuleIDs: []string{"egress-untrusted"}, Reason: "egress arguments are not validated"}
-	case EffectDestructive:
-		if c.worst >= Validated {
-			return Decision{Kind: Escalate, RuleIDs: []string{"destructive"}, Reason: "destructive action requires approval"}
+		return Decision{Kind: Deny, RuleIDs: []string{RuleSendUntrusted}, Reason: "send arguments are not trusted"}
+	case AccessDelete:
+		if c.worst == Trusted {
+			return Decision{Kind: Escalate, RuleIDs: []string{RuleDelete}, Reason: "delete action requires approval"}
 		}
-		return Decision{Kind: Deny, RuleIDs: []string{"destructive-untrusted"}, Reason: "destructive action with untrusted arguments"}
+		return Decision{Kind: Deny, RuleIDs: []string{RuleDeleteUntrusted}, Reason: "delete action with untrusted arguments"}
 	default:
-		return Decision{Kind: Deny, RuleIDs: []string{"unknown-effect"}, Reason: "unknown effect"}
+		return Decision{Kind: Deny, RuleIDs: []string{RuleUnknownAccess}, Reason: "unknown access"}
 	}
 }
 
-// decideApproved re-runs every check except the effect ceiling. A human
-// approval of this exact digest replaces the ceiling; it does not replace
-// tenant binding, RBAC/ACL, grounding or business validation.
+// decideApproved re-runs every check except the access ceiling. An approval
+// outside the model of this exact digest replaces the ceiling; it does not
+// replace tenant binding, RBAC/ACL, grounding or business validation.
 func (e *Engine) decideApproved(ctx context.Context, p Principal, c prepared) Decision {
 	if d := e.check(ctx, p, c, false); d != nil {
 		return *d
 	}
-	return Decision{Kind: Allow, RuleIDs: []string{"approved"}, Reason: "a human approved this action"}
+	return Decision{Kind: Allow, RuleIDs: []string{RuleApproved}, Reason: "a trusted approver approved this action"}
 }
 
 func (e *Engine) execute(ctx context.Context, p Principal, c prepared) (any, error) {
@@ -120,7 +122,7 @@ func (e *Engine) card(runID, task string, c prepared, d Decision, fourEyes bool)
 		Flow:               task,
 		Step:               c.spec.name,
 		Tool:               c.spec.name,
-		Effect:             c.spec.effect,
+		Access:             c.spec.access,
 		Args:               args,
 		Digest:             c.digest,
 		Reason:             d.Reason,

@@ -2,6 +2,7 @@ package gobellim
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -17,23 +18,31 @@ type ClaimStore interface {
 }
 
 // MemClaims is the default in-process ClaimStore: one approved action executes
-// once per process. Expired nonces are dropped in amortized O(1).
+// once per process. It is bounded, because an unbounded map turns a convenient
+// default into a memory leak. When the bound is reached and no entry has
+// expired, Claim returns ErrClaimStoreFull; use store/sql or another shared
+// store for production volumes.
 //
 // Now is the clock used to decide whether a stored nonce is still live. An
 // Engine and a Flow point it at their own clock, so a deterministic clock
 // cannot disagree with its expiry checks. A nil value means time.Now.
 type MemClaims struct {
-	Now     func() time.Time
+	Now        func() time.Time
+	MaxEntries int
+
 	mu      sync.Mutex
 	claimed map[string]time.Time
 	n       int
 }
 
-const claimsSweepEvery = 512
+const (
+	claimsSweepEvery = 512
+	defaultMaxClaims = 1 << 20
+)
 
 // NewMemClaims returns an empty in-process ClaimStore.
 func NewMemClaims() *MemClaims {
-	return &MemClaims{claimed: make(map[string]time.Time)}
+	return &MemClaims{claimed: make(map[string]time.Time), MaxEntries: defaultMaxClaims}
 }
 
 // Claim records nonce once and reports whether this caller won the race.
@@ -44,11 +53,19 @@ func (m *MemClaims) Claim(_ context.Context, nonce string, expiresAt time.Time) 
 	if exp, ok := m.claimed[nonce]; ok && now.Before(exp) {
 		return false, nil
 	}
-	m.claimed[nonce] = expiresAt
 	m.n++
 	if m.n%claimsSweepEvery == 0 {
 		m.forgetLocked(now)
 	}
+	if limit := m.max(); limit > 0 && len(m.claimed) >= limit {
+		m.forgetLocked(now)
+		if len(m.claimed) >= limit {
+			// A full store must fail closed. Silently evicting a live nonce
+			// would make an already-used approval executable again.
+			return false, fmt.Errorf("%w: %d live entries", ErrClaimStoreFull, len(m.claimed))
+		}
+	}
+	m.claimed[nonce] = expiresAt
 	return true, nil
 }
 
@@ -66,6 +83,16 @@ func (m *MemClaims) forgetLocked(before time.Time) {
 			delete(m.claimed, nonce)
 		}
 	}
+}
+
+func (m *MemClaims) max() int {
+	if m.MaxEntries < 0 {
+		return 0
+	}
+	if m.MaxEntries == 0 {
+		return defaultMaxClaims
+	}
+	return m.MaxEntries
 }
 
 func (m *MemClaims) now() time.Time {

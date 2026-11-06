@@ -2,6 +2,7 @@ package gobellim
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"time"
@@ -19,9 +20,9 @@ var (
 // Without this, a single read tool would put the same secrets back into the
 // prompt that the input side carefully masked.
 //
-// Redaction is best-effort by design: it understands structs, slices, arrays
-// and pointers. A type that marshals itself (time.Time, json.Marshaler) and a
-// map are left alone, because the runtime cannot inspect their fields.
+// Redaction understands structs, slices, arrays, maps and pointers. A type
+// that marshals itself (time.Time, json.Marshaler) is opaque: the runtime
+// cannot inspect its fields, so NewTask rejects a sensitivity tag on one.
 func redactResult(v any, tool string, hs *handleSet) any {
 	if hs == nil {
 		return v
@@ -75,8 +76,18 @@ func redactValue(v reflect.Value, base Label, hs *handleSet) any {
 			out[name] = redactField(fv, base, sf, hs)
 		}
 		return out
+	case reflect.Map:
+		out := make(map[string]any, v.Len())
+		iter := v.MapRange()
+		for iter.Next() {
+			out[fmt.Sprint(iter.Key().Interface())] = redactValue(iter.Value(), base, hs)
+		}
+		return out
 	case reflect.Slice, reflect.Array:
 		if v.Type().Elem().Kind() == reflect.Uint8 {
+			if base.Sensitivity == Secret || base.Sensitivity == PII {
+				return redactString(string(v.Bytes()), base, hs)
+			}
 			return v.Interface()
 		}
 		out := make([]any, 0, v.Len())
@@ -97,13 +108,22 @@ func redactField(v reflect.Value, base Label, sf reflect.StructField, hs *handle
 	if spec.hasSensitivity {
 		base.Sensitivity = spec.sensitivity
 	}
-	if v.Kind() == reflect.String {
+	switch {
+	case v.Kind() == reflect.String:
 		return redactString(v.String(), base, hs)
-	}
-	if spec.hasSensitivity && (v.Kind() == reflect.Slice || v.Kind() == reflect.Array) && v.Type().Elem().Kind() == reflect.String {
+	case spec.hasSensitivity && (v.Kind() == reflect.Slice || v.Kind() == reflect.Array) && v.Type().Elem().Kind() == reflect.String:
 		out := make([]any, 0, v.Len())
 		for i := 0; i < v.Len(); i++ {
 			out = append(out, redactString(v.Index(i).String(), base, hs))
+		}
+		return out
+	case spec.hasSensitivity && (v.Kind() == reflect.Slice || v.Kind() == reflect.Array) && v.Type().Elem().Kind() == reflect.Uint8:
+		return redactString(string(v.Bytes()), base, hs)
+	case spec.hasSensitivity && v.Kind() == reflect.Map && v.Type().Key().Kind() == reflect.String && v.Type().Elem().Kind() == reflect.String:
+		out := make(map[string]any, v.Len())
+		iter := v.MapRange()
+		for iter.Next() {
+			out[iter.Key().String()] = redactString(iter.Value().String(), base, hs)
 		}
 		return out
 	}
