@@ -536,7 +536,8 @@ func (t *Task[In, Out]) runToolCall(
 		}
 		rec.Executed = true
 		// A tool result re-enters the model context, so sensitivity tags on the
-		// result struct are honoured here: a secret becomes a handle, PII is masked.
+		// result struct are honoured here: a secret becomes a handle, a patterns
+		// field is masked.
 		body, err := marshalNoEscape(redactResult(out, ct.spec.name, hs))
 		if err != nil {
 			rec.Error = err.Error()

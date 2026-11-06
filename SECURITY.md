@@ -52,9 +52,9 @@ The full model and the invariants are in [`DESIGN.md`](./DESIGN.md) §2–§3.
   the ACL check cannot silently degrade to RBAC.
 - An approval is bound to the whole card and the canonical arguments by an
   HMAC and a digest; a changed card is `ErrApprovalDrift`.
-- The approver sees a masked card: a secret argument is a handle and a PII
-  argument is masked, while `PendingAction.Args` keeps the executable values on
-  the server.
+- The approver sees a masked card: a secret argument is a handle and a
+  `sensitivity=patterns` argument is masked, while `PendingAction.Args` keeps
+  the executable values on the server.
 - `Out` resolves handles minted in this run and removes any other `<hN>`, so an
   internal placeholder does not reach the caller.
 - A suspension is a server-side object, not a bearer token: `flow.Resume`
@@ -83,7 +83,7 @@ check fails CI instead of silently weakening the library.
 | `Out` restores issued handles and drops others      | `TestOutputRestoresIssuedHandleAndDropsUnknown`                                                              |
 | `ref` is addressable, not confidential              | `TestRefIsAddressableWithoutBeingSecret`                                                                     |
 | a `ground` binding names a declared input field     | `TestGroundSourceMustExistInTheInput`                                                                        |
-| PII detectors check their control digits            | `TestPIIChecksums`                                                                                           |
+| `patterns` detectors check their control digits     | `TestPatternsChecksums`                                                                                      |
 | a shared key needs a shared claim store             | `TestSharedApprovalKeyRequiresASharedClaimStore`, `TestWithSealerRequiresWithStore`                          |
 | result redaction is fail-closed                     | `TestResultRedactionCoversMapBytesAndString`, `TestSensitivityOnScalarResultIsRejected`, `FuzzRedactResult`  |
 | a cancelled approval keeps its nonce                | `TestCanceledApprovalDoesNotConsumeTheNonce`                                                                 |

@@ -82,7 +82,7 @@ Gobellim до 1.0. Поддерживается только последний 
 | `Out` резолвит свои handle'ы и вычищает чужие    | `TestOutputRestoresIssuedHandleAndDropsUnknown`                                                              |
 | `ref` — адресуемость, а не конфиденциальность    | `TestRefIsAddressableWithoutBeingSecret`                                                                     |
 | `ground` привязан к объявленному полю входа      | `TestGroundSourceMustExistInTheInput`                                                                        |
-| PII-детекторы проверяют контрольные цифры        | `TestPIIChecksums`                                                                                           |
+| `patterns`-детекторы проверяют контрольные цифры | `TestPatternsChecksums`                                                                                      |
 | общий ключ требует общего claim store            | `TestSharedApprovalKeyRequiresASharedClaimStore`, `TestWithSealerRequiresWithStore`                          |
 | redaction результата fail-closed                 | `TestResultRedactionCoversMapBytesAndString`, `TestSensitivityOnScalarResultIsRejected`, `FuzzRedactResult`  |
 | отменённое одобрение не сжигает nonce            | `TestCanceledApprovalDoesNotConsumeTheNonce`                                                                 |

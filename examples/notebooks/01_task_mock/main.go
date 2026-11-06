@@ -14,7 +14,7 @@ import (
 type TicketInput struct {
 	TenantID string `gobellim:"source=principal,required"`
 	TicketID string `gobellim:"source=application,required"`
-	Body     string `gobellim:"required,sensitivity=pii"`
+	Body     string `gobellim:"required,sensitivity=patterns"`
 	OrderID  string `gobellim:"sensitivity=secret"`
 }
 
@@ -38,7 +38,7 @@ func main() {
 	principal := gobellim.Principal{UserID: "u-1", Tenant: "acme"}
 
 	notebook.Cell("1. Вход — это данные, а не инструкции", `
-Body размечен как sensitivity=pii: e-mail заменяется на handle <h1>.
+Body размечен как sensitivity=patterns: e-mail заменяется на handle <h1>.
 OrderID размечен как sensitivity=secret: модель видит <h2>, а не сам номер.
 source=principal требует, чтобы TenantID совпадал с Principal.`)
 

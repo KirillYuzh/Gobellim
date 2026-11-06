@@ -15,7 +15,7 @@ import (
 type ticketIn struct {
 	TenantID       string `gobellim:"source=principal,required"`
 	TicketID       string `gobellim:"source=application,required"`
-	Body           string `gobellim:"required,sensitivity=pii"`
+	Body           string `gobellim:"required,sensitivity=patterns"`
 	RequestedOrder string `gobellim:"sensitivity=secret"`
 }
 
@@ -352,7 +352,7 @@ func TestInputPIIIsMaskedBeforeTheModel(t *testing.T) {
 	}
 	prompt := calls[0].Messages[1].Content
 	if strings.Contains(prompt, "alice@example.com") {
-		t.Fatalf("PII leaked to the model: %q", prompt)
+		t.Fatalf("Patterns leaked to the model: %q", prompt)
 	}
 	if !strings.Contains(prompt, "<h") {
 		t.Fatalf("prompt has no handle: %q", prompt)
@@ -692,7 +692,7 @@ type handleOnlyArgs struct {
 
 type secretResult struct {
 	Card  string `gobellim:"sensitivity=secret"`
-	Email string `gobellim:"sensitivity=pii"`
+	Email string `gobellim:"sensitivity=patterns"`
 	Note  string
 }
 
@@ -818,7 +818,7 @@ func TestToolResultIsRedacted(t *testing.T) {
 		t.Fatalf("a secret reached the model: %s", toolMsg.Content)
 	}
 	if strings.Contains(toolMsg.Content, "a@b.co") {
-		t.Fatalf("PII reached the model: %s", toolMsg.Content)
+		t.Fatalf("Patterns reached the model: %s", toolMsg.Content)
 	}
 	if !strings.Contains(toolMsg.Content, "<h1>") || !strings.Contains(toolMsg.Content, "ok") {
 		t.Fatalf("tool result lost its shape: %s", toolMsg.Content)
@@ -1336,7 +1336,7 @@ func TestGroundSourceMustExistInTheInput(t *testing.T) {
 
 type maskedArgs struct {
 	OrderID string `gobellim:"required,ground=RequestedOrder"`
-	Email   string `gobellim:"sensitivity=pii"`
+	Email   string `gobellim:"sensitivity=patterns"`
 }
 
 type maskedResult struct {
@@ -1387,7 +1387,7 @@ func TestApprovalCardMasksSensitiveArguments(t *testing.T) {
 	for _, p := range res.Pending.Card.Provenance {
 		seen[p.Arg] = p.Sensitivity
 	}
-	if seen["OrderID"] != gobellim.Secret || seen["Email"] != gobellim.PII {
+	if seen["OrderID"] != gobellim.Secret || seen["Email"] != gobellim.Patterns {
 		t.Fatalf("provenance = %v, want secret OrderID and pii Email", seen)
 	}
 
