@@ -37,7 +37,11 @@ type MemClaims struct {
 
 const (
 	claimsSweepEvery = 512
-	defaultMaxClaims = 1 << 20
+	// defaultMaxClaims bounds the in-process store. One hour of TTL at a few tens
+	// of bytes per entry keeps a full map in the tens of megabytes, and a store
+	// that is full fails closed instead of evicting a live nonce. A service that
+	// approves faster than this should use store/sql and a shared store anyway.
+	defaultMaxClaims = 1 << 18
 )
 
 // NewMemClaims returns an empty in-process ClaimStore.
@@ -54,7 +58,7 @@ func (m *MemClaims) Claim(_ context.Context, nonce string, expiresAt time.Time) 
 		return false, nil
 	}
 	m.n++
-	if m.n%claimsSweepEvery == 0 {
+	if m.n%m.sweepEveryLocked() == 0 {
 		m.forgetLocked(now)
 	}
 	if limit := m.max(); limit > 0 && len(m.claimed) >= limit {
@@ -83,6 +87,19 @@ func (m *MemClaims) forgetLocked(before time.Time) {
 			delete(m.claimed, nonce)
 		}
 	}
+}
+
+// sweepEveryLocked keeps the amortised cost of the sweep constant. A fixed
+// interval turns a full-map scan into O(n/interval) work per claim, so the
+// store would slow down exactly when it is busiest. Scanning once per eighth of
+// the current size keeps that at a handful of map operations, at the price of a
+// bounded pause when the map is at its cap.
+func (m *MemClaims) sweepEveryLocked() int {
+	n := len(m.claimed) / 8
+	if n < claimsSweepEvery {
+		return claimsSweepEvery
+	}
+	return n
 }
 
 func (m *MemClaims) max() int {

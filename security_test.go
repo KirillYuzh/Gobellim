@@ -435,3 +435,29 @@ func TestTargetWithoutTenantIsDenied(t *testing.T) {
 		t.Fatalf("decision = %+v, want Deny target-unbound", got)
 	}
 }
+
+// A shared signing key lets another replica accept a PendingAction. Without a
+// shared claim store the same approval would then execute once per replica, so
+// the combination is a configuration error at New, not a runtime surprise.
+func TestSharedApprovalKeyRequiresASharedClaimStore(t *testing.T) {
+	key := make([]byte, 32)
+	_, err := gobellim.New(
+		gobellim.WithModel(testkit.NewFakeModel()),
+		gobellim.WithAuthorizer(testkit.AllowAll),
+		gobellim.WithAudit(testkit.DiscardAudit()),
+		gobellim.WithApprovalKey(key),
+	)
+	if !errors.Is(err, gobellim.ErrInvalidConfig) {
+		t.Fatalf("err = %v, want ErrInvalidConfig", err)
+	}
+
+	if _, err := gobellim.New(
+		gobellim.WithModel(testkit.NewFakeModel()),
+		gobellim.WithAuthorizer(testkit.AllowAll),
+		gobellim.WithAudit(testkit.DiscardAudit()),
+		gobellim.WithApprovalKey(key),
+		gobellim.WithClaimStore(gobellim.NewMemClaims()),
+	); err != nil {
+		t.Fatalf("key with an explicit claim store: %v", err)
+	}
+}

@@ -19,8 +19,8 @@ type Config struct {
 	ApprovalTTL time.Duration
 	// ApprovalKey signs a PendingAction. A nil value generates a random
 	// per-process key, so an action escalated on one replica can be approved
-	// only on that replica; set a shared 32-byte key to move approvals between
-	// replicas.
+	// only on that replica. Set a shared 32-byte key together with a shared
+	// ClaimStore; the key alone lets one approval execute once per replica.
 	ApprovalKey []byte
 	Now         func() time.Time
 }
@@ -51,8 +51,9 @@ func WithClaimStore(s ClaimStore) Option { return func(c *Config) { c.Claims = s
 func WithApprovalTTL(d time.Duration) Option { return func(c *Config) { c.ApprovalTTL = d } }
 
 // WithApprovalKey sets the HMAC key that authenticates a PendingAction. It must
-// be 32 bytes. Use it when an action escalated on one replica may be approved
-// on another.
+// be 32 bytes. Use it together with WithClaimStore when an action escalated on
+// one replica may be approved on another; a shared key without a shared claim
+// store is ErrInvalidConfig.
 func WithApprovalKey(key []byte) Option { return func(c *Config) { c.ApprovalKey = key } }
 
 // WithClock overrides the clock. It exists for tests.
@@ -94,6 +95,12 @@ func New(opts ...Option) (*Engine, error) {
 	limits := cfg.Limits.withFallback(DefaultLimits())
 	if err := limits.validate(); err != nil {
 		return nil, err
+	}
+	if len(cfg.ApprovalKey) > 0 && cfg.Claims == nil {
+		// A shared key moves a PendingAction between replicas, but the default
+		// claim store is per-process: the same approval could then execute once
+		// on every replica. The pair belongs together.
+		return nil, fmt.Errorf("%w: WithApprovalKey needs WithClaimStore: a shared key without a shared claim store allows one approval to run on every replica", ErrInvalidConfig)
 	}
 	audit := cfg.Audit
 	ttl := cfg.ApprovalTTL

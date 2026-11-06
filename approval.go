@@ -10,15 +10,20 @@ import (
 
 // Provenance explains where one action argument came from.
 type Provenance struct {
-	Arg       string    `json:"arg"`
-	Source    string    `json:"source"`
-	Integrity Integrity `json:"integrity"`
+	Arg         string      `json:"arg"`
+	Source      string      `json:"source"`
+	Integrity   Integrity   `json:"integrity"`
+	Sensitivity Sensitivity `json:"sensitivity"`
 }
 
 // ApprovalCard is the typed payload a trusted approver decides on. The UI belongs to the
 // service; the card only carries the facts needed for a meaningful decision.
-// Args contains the resolved values the action would use, so the service must
-// apply its approver ACL before displaying the card.
+//
+// Args is the masked view: a secret argument is a handle and a PII argument is
+// masked, the same way the model saw it. The executable arguments are in
+// PendingAction.Args, which stays on the server. Digest identifies the action
+// that will run, so the card can be shown, stored and logged without carrying
+// the values it describes.
 type ApprovalCard struct {
 	RunID              string          `json:"run_id,omitempty"`
 	Flow               string          `json:"flow,omitempty"`

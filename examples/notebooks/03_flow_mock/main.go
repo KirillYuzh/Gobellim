@@ -82,7 +82,7 @@ Run проходит prepare и останавливается на границ
 	notebook.Cell("4. Resume → Done", `
 Апрувер m-1 отличается от requester u-1 (Four-Eyes), права проверены,
 действие не изменилось, nonce занят один раз.`)
-	out, err := wf.Resume(ctx, approver, *res.Suspension, res.State, flow.Approve)
+	out, err := wf.Resume(ctx, approver, *res.Suspension, res.State, flow.VerdictApprove)
 	if err != nil {
 		panic(err)
 	}
@@ -90,7 +90,7 @@ Run проходит prepare и останавливается на границ
 
 	notebook.Cell("5. Повторный Resume → ErrReplay", `
 Тот же токен второй раз не выполнит шаг: Store уже занял nonce.`)
-	_, err = wf.Resume(ctx, approver, *res.Suspension, res.State, flow.Approve)
+	_, err = wf.Resume(ctx, approver, *res.Suspension, res.State, flow.VerdictApprove)
 	notebook.Result("replay detected: %v (errors.Is(ErrReplay)=%v)", err, errors.Is(err, flow.ErrReplay))
 
 	fmt.Println()

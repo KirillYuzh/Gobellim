@@ -44,12 +44,17 @@ type toolSpec struct {
 }
 
 type prepared struct {
-	tool        ToolDef
-	spec        toolSpec
-	args        any
-	labels      map[string]Label
-	target      Resource
-	digest      string
+	tool   ToolDef
+	spec   toolSpec
+	args   any
+	labels map[string]Label
+	target Resource
+	digest string
+	// raw is the resolved argument object the handler receives; masked is the
+	// same object with secret and PII fields replaced, and it is what an
+	// approver is shown.
+	raw         json.RawMessage
+	masked      json.RawMessage
 	grounded    bool
 	worst       Integrity
 	sensitivity Sensitivity
@@ -58,6 +63,7 @@ type prepared struct {
 // ToolDef is the sealed, type-erased form of Tool[A, R].
 type ToolDef interface {
 	check() error
+	checkGroundSources(inputPaths map[string]struct{}) error
 	toolSpec() toolSpec
 	prepare(ctx context.Context, p Principal, raw json.RawMessage, hs *handleSet, maxArgBytes int) (prepared, error)
 	validate(ctx context.Context, p Principal, args any) error
@@ -87,6 +93,22 @@ func (t Tool[A, R]) check() error {
 		return fmt.Errorf("tool %s: %w", t.Name, err)
 	}
 	return checkResultTags(reflect.TypeOf((*R)(nil)).Elem())
+}
+
+// checkGroundSources rejects a ground argument that binds to an input field the
+// task does not declare. Without this, renaming an input field turns every call
+// into a runtime Deny instead of a startup error.
+func (t Tool[A, R]) checkGroundSources(inputPaths map[string]struct{}) error {
+	s, err := schemaFor[A]()
+	if err != nil {
+		return err
+	}
+	for _, b := range s.groundBindings() {
+		if _, ok := inputPaths[b.source]; !ok {
+			return fmt.Errorf("%w: tool %s: ground on %s expects input field %q, which the task input does not declare", ErrInvalidConfig, t.Name, b.arg, b.source)
+		}
+	}
+	return nil
 }
 
 func (t Tool[A, R]) toolSpec() toolSpec {
@@ -153,6 +175,8 @@ func (t Tool[A, R]) prepare(_ context.Context, p Principal, raw json.RawMessage,
 		labels:      labels,
 		target:      target,
 		digest:      actionDigest(t.Name, argsJSON),
+		raw:         argsJSON,
+		masked:      maskArgsJSON(argsJSON, labels, hs),
 		grounded:    grounded,
 		worst:       worst,
 		sensitivity: sensitivity,
@@ -225,6 +249,9 @@ func checkResultType(t reflect.Type, spec tagSpec, depth int, seen map[reflect.T
 			ts, err := parseTag(sf.Tag.Get("gobellim"))
 			if err != nil {
 				return fmt.Errorf("%w: result %s.%s", err, t.Name(), sf.Name)
+			}
+			if ts.ref || ts.ground || ts.source != "" {
+				return fmt.Errorf("%w: result %s.%s: ref, ground and source apply to a task input field", ErrInvalidConfig, t.Name(), sf.Name)
 			}
 			if err := checkResultType(sf.Type, ts, depth+1, seen); err != nil {
 				return err

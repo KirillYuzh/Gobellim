@@ -6,16 +6,12 @@ import (
 	"strings"
 )
 
-var handleRE = regexp.MustCompile(`^<h[0-9]+>$`)
-
-// piiPatterns are deliberately narrow. They catch common shapes and are not a
-// DLP system: a match becomes a handle, a miss is not a guarantee of safety.
-var piiPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`),
-	regexp.MustCompile(`\b(?:\d[ \-]?){13,16}\b`),
-	regexp.MustCompile(`\+?\d[\d ()\-]{8,}\d`),
-	regexp.MustCompile(`\b\d{4}\s?\d{6}\b`),
-}
+var (
+	handleRE = regexp.MustCompile(`^<h[0-9]+>$`)
+	// handleTokenRE finds a handle inside a longer string, which is what the
+	// output needs: the model may put one in a sentence.
+	handleTokenRE = regexp.MustCompile(`<h[0-9]+>`)
+)
 
 type handleEntry struct {
 	value string
@@ -73,15 +69,3 @@ func (h *handleSet) get(ref string) (handleEntry, bool) {
 }
 
 func isHandleRef(s string) bool { return handleRE.MatchString(s) }
-
-// maskPII replaces every match of the PII patterns with a handle. The original
-// value stays in the handle set.
-func maskPII(s string, l Label, hs *handleSet) string {
-	out := s
-	for _, re := range piiPatterns {
-		out = re.ReplaceAllStringFunc(out, func(m string) string {
-			return hs.put(m, l)
-		})
-	}
-	return out
-}

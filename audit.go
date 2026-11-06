@@ -26,6 +26,9 @@ const (
 	EventGateDenied EventKind = "gate.denied"
 	// EventGateEscalated marks an escalated action.
 	EventGateEscalated EventKind = "gate.escalated"
+	// EventModelRetried marks a reply that was not valid JSON and was asked for
+	// again. A steady rate here means the model or the schema is wrong.
+	EventModelRetried EventKind = "model.retried"
 	// EventToolCompleted marks a completed tool call.
 	EventToolCompleted EventKind = "tool.completed"
 	// EventWorkflowSuspended marks a workflow that needs approval.
@@ -73,8 +76,13 @@ type Event struct {
 	Error            string
 }
 
-// Sink receives audit events. Implementations must not block the caller for
-// long and must not log the values an event deliberately omits.
+// Sink receives audit events. Implementations must be safe for concurrent use
+// and must not perform I/O on the caller's goroutine: Emit runs on the request
+// path, once per model call and once per Gate decision. Buffer the event in
+// your own goroutine and expose a Close that flushes it.
+//
+// An event deliberately omits prompt text, raw arguments and secrets; a sink
+// must not add them back.
 type Sink interface {
 	Emit(ctx context.Context, e Event)
 }

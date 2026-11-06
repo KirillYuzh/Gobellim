@@ -44,14 +44,19 @@ The full model and the invariants are in [`DESIGN.md`](./DESIGN.md) §2–§3.
 - Unknown tool, invalid arguments, authorizer error and ungrounded arguments are
   `Deny`.
 - Labels only worsen. `Tool.Validate` is deny-only; only an approval outside the
-  model of one action can raise the ceiling, and it replaces the access ceiling,
-  not the labels.
+  model of one action can raise the ceiling, and it replaces the operation
+  ceiling, not the labels.
 - A handle that was not issued in this run, a handle in a non-`ground` field,
   and a handle from a different input field are rejected as ungrounded.
-- Every access except `AccessCompute` requires a non-empty `Target`, so the ACL
-  check cannot silently degrade to RBAC.
+- Every operation except `OperationCompute` requires a non-empty `Target`, so
+  the ACL check cannot silently degrade to RBAC.
 - An approval is bound to the whole card and the canonical arguments by an
   HMAC and a digest; a changed card is `ErrApprovalDrift`.
+- The approver sees a masked card: a secret argument is a handle and a PII
+  argument is masked, while `PendingAction.Args` keeps the executable values on
+  the server.
+- `Out` resolves handles minted in this run and removes any other `<hN>`, so an
+  internal placeholder does not reach the caller.
 - A suspension is a server-side object, not a bearer token: `flow.Resume`
   checks tenant, expiry, the current approval policy, the rebuilt action digest
   and the atomic nonce claim. There is no key to rotate.
@@ -73,7 +78,13 @@ check fails CI instead of silently weakening the library.
 | a fabricated handle is denied                       | `TestFabricatedHandleIsDenied`, `TestUngroundedArgumentIsDenied`                                             |
 | `Validate` promotes nothing                         | `TestUntrustedHandleWithValidatorStillEscalates`, `TestGroundedHandleWithoutValidatorEscalates`              |
 | `Send` needs a trusted origin                       | `TestUntrustedHandleCannotSend`                                                                              |
-| every non-`Compute` access needs a target           | `TestNonReadToolRequiresResource`, `TestReadWithoutTargetIsAConfigError`, `TestWriteWithEmptyTargetIsDenied` |
+| every non-`Compute` operation needs a target        | `TestNonReadToolRequiresResource`, `TestReadWithoutTargetIsAConfigError`, `TestWriteWithEmptyTargetIsDenied` |
+| the approval card is masked                         | `TestApprovalCardMasksSensitiveArguments`                                                                    |
+| `Out` restores issued handles and drops others      | `TestOutputRestoresIssuedHandleAndDropsUnknown`                                                              |
+| `ref` is addressable, not confidential              | `TestRefIsAddressableWithoutBeingSecret`                                                                     |
+| a `ground` binding names a declared input field     | `TestGroundSourceMustExistInTheInput`                                                                        |
+| PII detectors check their control digits            | `TestPIIChecksums`                                                                                           |
+| a shared key needs a shared claim store             | `TestSharedApprovalKeyRequiresASharedClaimStore`, `TestWithSealerRequiresWithStore`                          |
 | result redaction is fail-closed                     | `TestResultRedactionCoversMapBytesAndString`, `TestSensitivityOnScalarResultIsRejected`, `FuzzRedactResult`  |
 | a cancelled approval keeps its nonce                | `TestCanceledApprovalDoesNotConsumeTheNonce`                                                                 |
 | an approval is single-use                           | `TestExecuteApprovedIsSingleUse`, `TestParallelResume`                                                       |
@@ -90,7 +101,7 @@ check fails CI instead of silently weakening the library.
 - A compromised application process or configuration.
 - Retrieval and data ACL. The application must filter documents before it puts
   them into a `Task`.
-- Correctness of business permissions, tool access and resource bindings
+- Correctness of business permissions, tool operations and resource bindings
   declared by the application.
 - Exactly-once delivery of an external side effect.
 - Cross-replica single-use resume without a `Store`.
