@@ -22,14 +22,17 @@ import (
 // handle left to check.
 func (e *Engine) check(ctx context.Context, p Principal, c prepared, requireGrounding bool) *Decision {
 	resource := c.target
+	if c.spec.operation != OperationCompute && (resource.Type == "" || resource.ID == "" || resource.TenantID == "") {
+		// A target without a tenant cannot be checked against the caller's
+		// tenant, and filling TenantID from the principal would make that check
+		// pass by construction. An omitted tenant is a configuration error.
+		return &Decision{Kind: Deny, RuleIDs: []string{RuleTargetUnbound}, Reason: "action target is not fully bound"}
+	}
 	if resource.TenantID == "" {
 		resource.TenantID = p.Tenant
 	}
 	if resource.TenantID != p.Tenant {
 		return &Decision{Kind: Deny, RuleIDs: []string{RuleTenantMismatch}, Reason: "resource is bound to another tenant"}
-	}
-	if c.spec.access != AccessCompute && (resource.Type == "" || resource.ID == "") {
-		return &Decision{Kind: Deny, RuleIDs: []string{RuleTargetUnbound}, Reason: "action has no target"}
 	}
 	if requireGrounding && !c.grounded {
 		return &Decision{Kind: Deny, RuleIDs: []string{RuleUngrounded}, Reason: "argument has no trusted origin"}
@@ -54,32 +57,32 @@ func (e *Engine) decide(ctx context.Context, p Principal, c *prepared) Decision 
 		return *d
 	}
 
-	switch c.spec.access {
-	case AccessCompute:
+	switch c.spec.operation {
+	case OperationCompute:
 		return Decision{Kind: Allow, RuleIDs: []string{RuleCompute}, Reason: "compute allowed"}
-	case AccessRead:
+	case OperationRead:
 		return Decision{Kind: Allow, RuleIDs: []string{RuleRead}, Reason: "read allowed"}
-	case AccessWrite:
+	case OperationWrite:
 		if c.worst == Trusted {
 			return Decision{Kind: Allow, RuleIDs: []string{RuleWrite}, Reason: "write arguments come from trusted state"}
 		}
 		return Decision{Kind: Escalate, RuleIDs: []string{RuleWriteUntrusted}, Reason: "write arguments are model-derived"}
-	case AccessSend:
+	case OperationSend:
 		if c.worst == Trusted {
 			return Decision{Kind: Allow, RuleIDs: []string{RuleSend}, Reason: "send arguments come from trusted state"}
 		}
 		return Decision{Kind: Deny, RuleIDs: []string{RuleSendUntrusted}, Reason: "send arguments are not trusted"}
-	case AccessDelete:
+	case OperationDelete:
 		if c.worst == Trusted {
 			return Decision{Kind: Escalate, RuleIDs: []string{RuleDelete}, Reason: "delete action requires approval"}
 		}
 		return Decision{Kind: Deny, RuleIDs: []string{RuleDeleteUntrusted}, Reason: "delete action with untrusted arguments"}
 	default:
-		return Decision{Kind: Deny, RuleIDs: []string{RuleUnknownAccess}, Reason: "unknown access"}
+		return Decision{Kind: Deny, RuleIDs: []string{RuleUnknownOperation}, Reason: "unknown operation"}
 	}
 }
 
-// decideApproved re-runs every check except the access ceiling. An approval
+// decideApproved re-runs every check except the operation ceiling. An approval
 // outside the model of this exact digest replaces the ceiling; it does not
 // replace tenant binding, RBAC/ACL, grounding or business validation.
 func (e *Engine) decideApproved(ctx context.Context, p Principal, c prepared) Decision {
@@ -122,7 +125,7 @@ func (e *Engine) card(runID, task string, c prepared, d Decision, fourEyes bool)
 		Flow:               task,
 		Step:               c.spec.name,
 		Tool:               c.spec.name,
-		Access:             c.spec.access,
+		Operation:          c.spec.operation,
 		Args:               args,
 		Digest:             c.digest,
 		Reason:             d.Reason,

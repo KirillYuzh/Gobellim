@@ -652,6 +652,42 @@ func (s *structSchema) labels(base Label) map[string]Label {
 	return out
 }
 
+// checkInputTags rejects a tag that only makes sense on a tool argument.
+// Accepting it here would be a silent no-op on a security tag: the developer
+// declares "this value must be an existing handle" on a field the runtime never
+// grounds, and reads the result as a protection that does not exist.
+func (s *structSchema) checkInputTags() error {
+	for _, f := range s.fields {
+		if f.spec.ground {
+			return fmt.Errorf("%w: %s.%s: ground applies to a tool argument, not to a task input field", ErrInvalidConfig, s.typ, f.goName)
+		}
+		if f.nested != nil {
+			if err := f.nested.checkInputTags(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// checkArgTags rejects a tag that only makes sense on a task input field. The
+// runtime labels a tool argument from the model as Derived no matter what the
+// declaration says, so source=application on an argument is a declaration the
+// Gate would never honour.
+func (s *structSchema) checkArgTags() error {
+	for _, f := range s.fields {
+		if f.spec.source != "" {
+			return fmt.Errorf("%w: %s.%s: source applies to a task input field, not to a tool argument", ErrInvalidConfig, s.typ, f.goName)
+		}
+		if f.nested != nil {
+			if err := f.nested.checkArgTags(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // checkGrounding walks the argument schema and the handles the model used.
 // A handle may appear only in a field tagged ground. A ground field must
 // contain a handle, and that handle must come from the declared source (the

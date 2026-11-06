@@ -40,7 +40,7 @@ OrderID помечен sensitivity=secret, поэтому модель види�
 
 	readTool := gobellim.Tool[readArgs, readResult]{
 		Name:       "orders.read",
-		Access:     gobellim.Read,
+		Operation:  gobellim.Read,
 		Permission: "orders:read",
 		Target: func(p gobellim.Principal, a readArgs) gobellim.Resource {
 			return gobellim.Resource{Type: "order", ID: a.OrderID, TenantID: p.Tenant}
@@ -71,10 +71,10 @@ OrderID помечен sensitivity=secret, поэтому модель види�
 У инструмента нет полей аргументов, поэтому модель не может его «испортить».
 Но это не значит «доверено»: пустой набор меток = Untrusted, Write → Escalate.`)
 	wipe := gobellim.Tool[struct{}, readResult]{
-		Name:   "danger.wipe",
-		Access: gobellim.Write,
-		Target: func(gobellim.Principal, struct{}) gobellim.Resource {
-			return gobellim.Resource{Type: "test", ID: "t-1"}
+		Name:      "danger.wipe",
+		Operation: gobellim.Write,
+		Target: func(p gobellim.Principal, _ struct{}) gobellim.Resource {
+			return gobellim.Resource{Type: "test", ID: "t-1", TenantID: p.Tenant}
 		},
 		Run: func(context.Context, gobellim.Principal, struct{}) (readResult, error) {
 			fmt.Println("   ↳ tool Run executed")
@@ -88,7 +88,7 @@ Resource привязан к другому tenant. Gate проверяет эт
 tool handler.`)
 	foreign := gobellim.Tool[readArgs, readResult]{
 		Name:       "orders.read.foreign",
-		Access:     gobellim.Read,
+		Operation:  gobellim.Read,
 		Permission: "orders:read",
 		Target: func(gobellim.Principal, readArgs) gobellim.Resource {
 			return gobellim.Resource{Type: "order", ID: "A-1", TenantID: "other-tenant"}

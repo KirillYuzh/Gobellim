@@ -81,7 +81,7 @@ func TestWriteEscalatesAndDoesNotExecute(t *testing.T) {
 	var executed int
 	refund := gobellim.Tool[refundArgs, refundResult]{
 		Name:       "orders.refund",
-		Access:     gobellim.Write,
+		Operation:  gobellim.Write,
 		Permission: "orders:refund",
 		Target: func(p gobellim.Principal, a refundArgs) gobellim.Resource {
 			return gobellim.Resource{Type: "order", ID: a.OrderID, TenantID: p.Tenant}
@@ -123,7 +123,7 @@ func TestUngroundedArgumentIsDenied(t *testing.T) {
 	var executed int
 	refund := gobellim.Tool[refundArgs, refundResult]{
 		Name:       "orders.refund",
-		Access:     gobellim.Write,
+		Operation:  gobellim.Write,
 		Target:     testResource[refundArgs],
 		Permission: "orders:refund",
 		Run: func(context.Context, gobellim.Principal, refundArgs) (refundResult, error) {
@@ -158,7 +158,7 @@ func TestUngroundedCallDoesNotReachTheAuthorizer(t *testing.T) {
 	var authzCalls, validated, executed int
 	refund := gobellim.Tool[refundArgs, refundResult]{
 		Name:       "orders.refund",
-		Access:     gobellim.Write,
+		Operation:  gobellim.Write,
 		Target:     testResource[refundArgs],
 		Permission: "orders:refund",
 		Validate: func(context.Context, gobellim.Principal, refundArgs) error {
@@ -199,7 +199,7 @@ func TestUngroundedCallDoesNotReachTheAuthorizer(t *testing.T) {
 func TestSuspendedBatchRecordsTheRemainingCalls(t *testing.T) {
 	refund := gobellim.Tool[refundArgs, refundResult]{
 		Name:       "orders.refund",
-		Access:     gobellim.Write,
+		Operation:  gobellim.Write,
 		Target:     testResource[refundArgs],
 		Permission: "orders:refund",
 		Run: func(context.Context, gobellim.Principal, refundArgs) (refundResult, error) {
@@ -245,7 +245,7 @@ func TestRBACDenyDoesNotExecute(t *testing.T) {
 	var executed int
 	refund := gobellim.Tool[refundArgs, refundResult]{
 		Name:       "orders.refund",
-		Access:     gobellim.Write,
+		Operation:  gobellim.Write,
 		Target:     testResource[refundArgs],
 		Permission: "orders:refund",
 		Run: func(context.Context, gobellim.Principal, refundArgs) (refundResult, error) {
@@ -331,7 +331,7 @@ func TestFabricatedHandleIsDenied(t *testing.T) {
 	var executed int
 	refund := gobellim.Tool[refundArgs, refundResult]{
 		Name:       "orders.refund",
-		Access:     gobellim.Write,
+		Operation:  gobellim.Write,
 		Target:     testResource[refundArgs],
 		Permission: "orders:refund",
 		Run: func(context.Context, gobellim.Principal, refundArgs) (refundResult, error) {
@@ -376,7 +376,7 @@ func TestTrustedHandleAllowsWrite(t *testing.T) {
 	var executed int
 	apply := gobellim.Tool[trustedArgs, trustedResult]{
 		Name:       "orders.apply",
-		Access:     gobellim.Write,
+		Operation:  gobellim.Write,
 		Target:     testResource[trustedArgs],
 		Permission: "orders:apply",
 		Run: func(context.Context, gobellim.Principal, trustedArgs) (trustedResult, error) {
@@ -437,7 +437,7 @@ func TestUnknownToolIsDenied(t *testing.T) {
 func TestMaxToolCallsIsEnforced(t *testing.T) {
 	read := gobellim.Tool[readArgs, readResult]{
 		Name:       "kb.search",
-		Access:     gobellim.Read,
+		Operation:  gobellim.Read,
 		Permission: "kb:search",
 		Target:     testResource[readArgs],
 		Run: func(context.Context, gobellim.Principal, readArgs) (readResult, error) {
@@ -474,7 +474,7 @@ func TestMaxToolCallsIsEnforced(t *testing.T) {
 func TestReadToolResultFeedsTheModel(t *testing.T) {
 	read := gobellim.Tool[readArgs, readResult]{
 		Name:       "kb.search",
-		Access:     gobellim.Read,
+		Operation:  gobellim.Read,
 		Permission: "kb:search",
 		Target:     testResource[readArgs],
 		Run: func(context.Context, gobellim.Principal, readArgs) (readResult, error) {
@@ -506,7 +506,7 @@ func TestReadToolResultFeedsTheModel(t *testing.T) {
 	}
 }
 
-func TestToolRequiresExplicitAccess(t *testing.T) {
+func TestToolRequiresExplicitOperation(t *testing.T) {
 	tool := gobellim.Tool[readArgs, readResult]{
 		Name: "orders.read",
 		Run: func(context.Context, gobellim.Principal, readArgs) (readResult, error) {
@@ -540,9 +540,9 @@ func TestEmptyArgsWriteIsEscalated(t *testing.T) {
 	type noArgs struct{}
 	var executed int
 	wipe := gobellim.Tool[noArgs, refundResult]{
-		Name:   "danger.wipe",
-		Access: gobellim.Write,
-		Target: testResource[noArgs],
+		Name:      "danger.wipe",
+		Operation: gobellim.Write,
+		Target:    testResource[noArgs],
 		Run: func(context.Context, gobellim.Principal, noArgs) (refundResult, error) {
 			executed++
 			return refundResult{}, nil
@@ -577,9 +577,9 @@ func TestNestedGroundRequiresAHandle(t *testing.T) {
 	}
 	var executed int
 	tool := gobellim.Tool[outer, readResult]{
-		Name:   "orders.read",
-		Access: gobellim.Read,
-		Target: testResource[outer],
+		Name:      "orders.read",
+		Operation: gobellim.Read,
+		Target:    testResource[outer],
 		Run: func(context.Context, gobellim.Principal, outer) (readResult, error) {
 			executed++
 			return readResult{}, nil
@@ -609,7 +609,7 @@ func TestResourceTenantMismatchIsDenied(t *testing.T) {
 	var executed int
 	tool := gobellim.Tool[readArgs, readResult]{
 		Name:       "orders.read",
-		Access:     gobellim.Read,
+		Operation:  gobellim.Read,
 		Permission: "orders:read",
 		Target: func(gobellim.Principal, readArgs) gobellim.Resource {
 			return gobellim.Resource{Type: "order", ID: "A-1", TenantID: "other-tenant"}
@@ -656,10 +656,10 @@ type secretResult struct {
 func TestUntrustedHandleWithValidatorStillEscalates(t *testing.T) {
 	var executed int
 	apply := gobellim.Tool[handleOnlyArgs, refundResult]{
-		Name:     "orders.apply",
-		Access:   gobellim.Write,
-		Target:   testResource[handleOnlyArgs],
-		Validate: func(context.Context, gobellim.Principal, handleOnlyArgs) error { return nil },
+		Name:      "orders.apply",
+		Operation: gobellim.Write,
+		Target:    testResource[handleOnlyArgs],
+		Validate:  func(context.Context, gobellim.Principal, handleOnlyArgs) error { return nil },
 		Run: func(context.Context, gobellim.Principal, handleOnlyArgs) (refundResult, error) {
 			executed++
 			return refundResult{RefundID: "r-1"}, nil
@@ -691,9 +691,9 @@ func TestUntrustedHandleWithValidatorStillEscalates(t *testing.T) {
 func TestGroundedHandleWithoutValidatorEscalates(t *testing.T) {
 	var executed int
 	apply := gobellim.Tool[handleOnlyArgs, refundResult]{
-		Name:   "orders.apply",
-		Access: gobellim.Write,
-		Target: testResource[handleOnlyArgs],
+		Name:      "orders.apply",
+		Operation: gobellim.Write,
+		Target:    testResource[handleOnlyArgs],
 		Run: func(context.Context, gobellim.Principal, handleOnlyArgs) (refundResult, error) {
 			executed++
 			return refundResult{}, nil
@@ -720,10 +720,10 @@ func TestGroundedHandleWithoutValidatorEscalates(t *testing.T) {
 func TestUntrustedHandleCannotSend(t *testing.T) {
 	var executed int
 	send := gobellim.Tool[handleOnlyArgs, refundResult]{
-		Name:     "mail.send",
-		Access:   gobellim.Send,
-		Target:   testResource[handleOnlyArgs],
-		Validate: func(context.Context, gobellim.Principal, handleOnlyArgs) error { return nil },
+		Name:      "mail.send",
+		Operation: gobellim.Send,
+		Target:    testResource[handleOnlyArgs],
+		Validate:  func(context.Context, gobellim.Principal, handleOnlyArgs) error { return nil },
 		Run: func(context.Context, gobellim.Principal, handleOnlyArgs) (refundResult, error) {
 			executed++
 			return refundResult{}, nil
@@ -749,9 +749,9 @@ func TestUntrustedHandleCannotSend(t *testing.T) {
 
 func TestToolResultIsRedacted(t *testing.T) {
 	read := gobellim.Tool[readArgs, secretResult]{
-		Name:   "customer.read",
-		Access: gobellim.Read,
-		Target: testResource[readArgs],
+		Name:      "customer.read",
+		Operation: gobellim.Read,
+		Target:    testResource[readArgs],
 		Run: func(context.Context, gobellim.Principal, readArgs) (secretResult, error) {
 			return secretResult{Card: "4111 1111 1111 1111", Email: "a@b.co", Note: "ok"}, nil
 		},
@@ -782,9 +782,9 @@ func TestToolResultIsRedacted(t *testing.T) {
 func TestExecuteApprovedRunsTheAction(t *testing.T) {
 	var executed int
 	refund := gobellim.Tool[refundArgs, refundResult]{
-		Name:   "orders.refund",
-		Access: gobellim.Write,
-		Target: testResource[refundArgs],
+		Name:      "orders.refund",
+		Operation: gobellim.Write,
+		Target:    testResource[refundArgs],
 		Run: func(context.Context, gobellim.Principal, refundArgs) (refundResult, error) {
 			executed++
 			return refundResult{RefundID: "r-1"}, nil
@@ -824,9 +824,9 @@ func TestExecuteApprovedRunsTheAction(t *testing.T) {
 
 func TestExecuteApprovedRejectsADifferentAction(t *testing.T) {
 	refund := gobellim.Tool[refundArgs, refundResult]{
-		Name:   "orders.refund",
-		Access: gobellim.Write,
-		Target: testResource[refundArgs],
+		Name:      "orders.refund",
+		Operation: gobellim.Write,
+		Target:    testResource[refundArgs],
 		Run: func(context.Context, gobellim.Principal, refundArgs) (refundResult, error) {
 			t.Fatal("a tampered action was executed")
 			return refundResult{}, nil
@@ -860,9 +860,9 @@ func TestExecuteApprovedRejectsADifferentAction(t *testing.T) {
 
 func TestPanicIsAuditedAsFailure(t *testing.T) {
 	boom := gobellim.Tool[readArgs, readResult]{
-		Name:   "boom",
-		Access: gobellim.Read,
-		Target: testResource[readArgs],
+		Name:      "boom",
+		Operation: gobellim.Read,
+		Target:    testResource[readArgs],
 		Run: func(context.Context, gobellim.Principal, readArgs) (readResult, error) {
 			panic("tool blew up")
 		},
@@ -895,7 +895,7 @@ func testResource[A any](p gobellim.Principal, _ A) gobellim.Resource {
 func TestExecuteApprovedIsSingleUse(t *testing.T) {
 	refund := gobellim.Tool[refundArgs, refundResult]{
 		Name:       "orders.refund",
-		Access:     gobellim.Write,
+		Operation:  gobellim.Write,
 		Permission: "orders:refund",
 		Target:     testResource[refundArgs],
 		Run: func(context.Context, gobellim.Principal, refundArgs) (refundResult, error) {
@@ -923,14 +923,14 @@ func TestExecuteApprovedIsSingleUse(t *testing.T) {
 	}
 }
 
-func TestExecuteApprovedRejectsChangedAccess(t *testing.T) {
+func TestExecuteApprovedRejectsChangedOperation(t *testing.T) {
 	refund := gobellim.Tool[refundArgs, refundResult]{
 		Name:       "orders.refund",
-		Access:     gobellim.Write,
+		Operation:  gobellim.Write,
 		Permission: "orders:refund",
 		Target:     testResource[refundArgs],
 		Run: func(context.Context, gobellim.Principal, refundArgs) (refundResult, error) {
-			t.Fatal("an action with a changed access was executed")
+			t.Fatal("an action with a changed operation was executed")
 			return refundResult{}, nil
 		},
 	}
@@ -948,7 +948,7 @@ func TestExecuteApprovedRejectsChangedAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	changed := *res.Pending
-	changed.Card.Access = gobellim.Read
+	changed.Card.Operation = gobellim.Read
 	if _, _, err := task.ExecuteApproved(context.Background(), principal(), principal(), &changed); !errors.Is(err, gobellim.ErrApprovalDrift) {
 		t.Fatalf("err = %v, want ErrApprovalDrift", err)
 	}
@@ -957,7 +957,7 @@ func TestExecuteApprovedRejectsChangedAccess(t *testing.T) {
 func TestExecuteApprovedRejectsATamperedPendingAction(t *testing.T) {
 	refund := gobellim.Tool[refundArgs, refundResult]{
 		Name:       "orders.refund",
-		Access:     gobellim.Write,
+		Operation:  gobellim.Write,
 		Permission: "orders:refund",
 		Target:     testResource[refundArgs],
 		Run: func(context.Context, gobellim.Principal, refundArgs) (refundResult, error) {
@@ -998,7 +998,7 @@ func TestExecuteApprovedRejectsATamperedPendingAction(t *testing.T) {
 func TestExecuteApprovedRejectsAForgedPendingAction(t *testing.T) {
 	refund := gobellim.Tool[refundArgs, refundResult]{
 		Name:       "orders.refund",
-		Access:     gobellim.Write,
+		Operation:  gobellim.Write,
 		Permission: "orders:refund",
 		Target:     testResource[refundArgs],
 		Validate: func(context.Context, gobellim.Principal, refundArgs) error {
@@ -1039,7 +1039,7 @@ func TestExecuteApprovedRejectsAForgedPendingAction(t *testing.T) {
 		Digest:    digest,
 		ExpiresAt: res.Pending.ExpiresAt,
 		Card: gobellim.ApprovalCard{
-			RunID: "r_forged", Tool: "orders.refund", Access: gobellim.Write,
+			RunID: "r_forged", Tool: "orders.refund", Operation: gobellim.Write,
 			Args: args, Digest: digest, ExpiresAt: res.Pending.ExpiresAt,
 		},
 	}
@@ -1057,7 +1057,7 @@ func TestExecuteApprovedRejectsAForgedPendingAction(t *testing.T) {
 func TestExecuteApprovedRecordsTheApprover(t *testing.T) {
 	refund := gobellim.Tool[refundArgs, refundResult]{
 		Name:       "orders.refund",
-		Access:     gobellim.Write,
+		Operation:  gobellim.Write,
 		Permission: "orders:refund",
 		Target:     testResource[refundArgs],
 		Run: func(context.Context, gobellim.Principal, refundArgs) (refundResult, error) {
@@ -1096,7 +1096,7 @@ func TestFourEyesRequiresADifferentApprover(t *testing.T) {
 	var executed int
 	refund := gobellim.Tool[refundArgs, refundResult]{
 		Name:       "orders.refund",
-		Access:     gobellim.Write,
+		Operation:  gobellim.Write,
 		Permission: "orders:refund",
 		Target:     testResource[refundArgs],
 		Run: func(context.Context, gobellim.Principal, refundArgs) (refundResult, error) {
@@ -1146,7 +1146,7 @@ func TestFourEyesRequiresADifferentApprover(t *testing.T) {
 func TestExecuteApprovedExpires(t *testing.T) {
 	refund := gobellim.Tool[refundArgs, refundResult]{
 		Name:       "orders.refund",
-		Access:     gobellim.Write,
+		Operation:  gobellim.Write,
 		Permission: "orders:refund",
 		Target:     testResource[refundArgs],
 		Run: func(context.Context, gobellim.Principal, refundArgs) (refundResult, error) {
@@ -1185,9 +1185,9 @@ func TestExecuteApprovedExpires(t *testing.T) {
 
 func TestTaskLimitsOverrideTheEngine(t *testing.T) {
 	read := gobellim.Tool[readArgs, readResult]{
-		Name:   "orders.read",
-		Access: gobellim.Read,
-		Target: testResource[readArgs],
+		Name:      "orders.read",
+		Operation: gobellim.Read,
+		Target:    testResource[readArgs],
 		Run: func(context.Context, gobellim.Principal, readArgs) (readResult, error) {
 			return readResult{}, nil
 		},
@@ -1236,8 +1236,8 @@ func TestResultTagTypoIsRejected(t *testing.T) {
 		X string `gobellim:"sensitivity=secrets"`
 	}
 	tool := gobellim.Tool[readArgs, badResult]{
-		Name:   "x",
-		Access: gobellim.Read,
+		Name:      "x",
+		Operation: gobellim.Read,
 		Run: func(context.Context, gobellim.Principal, readArgs) (badResult, error) {
 			return badResult{}, nil
 		},
@@ -1252,8 +1252,8 @@ func TestResultTagTypoIsRejected(t *testing.T) {
 
 func TestNonReadToolRequiresResource(t *testing.T) {
 	tool := gobellim.Tool[handleOnlyArgs, refundResult]{
-		Name:   "orders.refund",
-		Access: gobellim.Write,
+		Name:      "orders.refund",
+		Operation: gobellim.Write,
 		Run: func(context.Context, gobellim.Principal, handleOnlyArgs) (refundResult, error) {
 			return refundResult{}, nil
 		},

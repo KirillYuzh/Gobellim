@@ -45,11 +45,11 @@ const (
 
 // ToolCallRecord is the auditable trace of one model-requested tool call.
 type ToolCallRecord struct {
-	Name     string
-	Access   Access
-	Decision Decision
-	Executed bool
-	Error    string
+	Name      string
+	Operation Operation
+	Decision  Decision
+	Executed  bool
+	Error     string
 }
 
 // TaskResult is the result of one task run.
@@ -119,6 +119,9 @@ func NewTask[In, Out any](e *Engine, cfg TaskConfig) (*Task[In, Out], error) {
 		return nil, err
 	}
 	if err := validatePrincipalSources(in); err != nil {
+		return nil, err
+	}
+	if err := in.checkInputTags(); err != nil {
 		return nil, err
 	}
 
@@ -314,7 +317,7 @@ func (t *Task[In, Out]) Run(ctx context.Context, p Principal, in In) (result Tas
 // (for example, from a flow step that runs after Resume) and pass the
 // requester's Principal, not the approver's. The Gate is re-run: tenant
 // binding, RBAC/ACL and business validation still apply, and the arguments
-// must match the digest the approver saw. The access ceiling is the only check an
+// must match the digest the approver saw. The operation ceiling is the only check an
 // approval outside the model replaces.
 //
 // approvedBy is recorded in the audit (approval.granted) and is checked against
@@ -323,7 +326,7 @@ func (t *Task[In, Out]) Run(ctx context.Context, p Principal, in In) (result Tas
 // The approval is single-use through the Engine's ClaimStore: a second call
 // with the same PendingAction returns ErrApprovalReplay. The nonce is claimed
 // before the handler runs, so a crash between the claim and the external side
-// access loses the approval instead of risking a double execution.
+// effect loses the approval instead of risking a double execution.
 func (t *Task[In, Out]) ExecuteApproved(ctx context.Context, requester, approvedBy Principal, pending *PendingAction) (any, ToolCallRecord, error) {
 	rec := ToolCallRecord{}
 	if pending == nil {
@@ -354,7 +357,7 @@ func (t *Task[In, Out]) ExecuteApproved(ctx context.Context, requester, approved
 		rec.Decision = Decision{Kind: Deny, RuleIDs: []string{RuleUnknownTool}, Reason: "unknown tool"}
 		return nil, rec, fmt.Errorf("%w: %w: unknown tool %q", ErrApprovalInvalid, ErrApprovalDrift, pending.Tool)
 	}
-	rec.Access = ct.spec.access
+	rec.Operation = ct.spec.operation
 	if pending.Task != t.cfg.Name {
 		return nil, rec, fmt.Errorf("%w: %w: action belongs to task %q", ErrApprovalInvalid, ErrApprovalDrift, pending.Task)
 	}
@@ -362,9 +365,9 @@ func (t *Task[In, Out]) ExecuteApproved(ctx context.Context, requester, approved
 		rec.Decision = Decision{Kind: Deny, RuleIDs: []string{RuleTenantMismatch}, Reason: "resource is bound to another tenant"}
 		return nil, rec, fmt.Errorf("%w: %w: tenant mismatch", ErrApprovalInvalid, ErrApprovalDrift)
 	}
-	if pending.Card.Tool != ct.spec.name || pending.Card.Access != ct.spec.access {
-		rec.Decision = Decision{Kind: Deny, RuleIDs: []string{RuleApprovalDrift}, Reason: "tool or access changed since approval"}
-		return nil, rec, fmt.Errorf("%w: %w: tool or access changed since approval", ErrApprovalInvalid, ErrApprovalDrift)
+	if pending.Card.Tool != ct.spec.name || pending.Card.Operation != ct.spec.operation {
+		rec.Decision = Decision{Kind: Deny, RuleIDs: []string{RuleApprovalDrift}, Reason: "tool or operation changed since approval"}
+		return nil, rec, fmt.Errorf("%w: %w: tool or operation changed since approval", ErrApprovalInvalid, ErrApprovalDrift)
 	}
 	if pending.Card.RunID != pending.RunID || !pending.Card.ExpiresAt.Equal(pending.ExpiresAt) {
 		rec.Decision = Decision{Kind: Deny, RuleIDs: []string{RuleApprovalDrift}, Reason: "run or expiry changed since approval"}
@@ -394,7 +397,7 @@ func (t *Task[In, Out]) ExecuteApproved(ctx context.Context, requester, approved
 		t.engine.emit(ctx, Event{
 			Kind: gateEventKind(decision.Kind), RunID: pending.RunID, Task: t.cfg.Name,
 			PrincipalID: requester.UserID, Tenant: requester.Tenant,
-			Tool: ct.spec.name, Access: ct.spec.access,
+			Tool: ct.spec.name, Operation: ct.spec.operation,
 			Decision: decision.Kind, RuleIDs: decision.RuleIDs, ArgsDigest: prep.digest,
 			Integrity: prep.worst, Sensitivity: prep.sensitivity,
 		})
@@ -417,13 +420,13 @@ func (t *Task[In, Out]) ExecuteApproved(ctx context.Context, requester, approved
 	t.engine.emit(ctx, Event{
 		Kind: EventApprovalGranted, RunID: pending.RunID, Task: t.cfg.Name, Step: ct.spec.name,
 		PrincipalID: approvedBy.UserID, Tenant: approvedBy.Tenant,
-		Tool: ct.spec.name, Access: ct.spec.access, Decision: Allow, RuleIDs: []string{RuleApproved},
+		Tool: ct.spec.name, Operation: ct.spec.operation, Decision: Allow, RuleIDs: []string{RuleApproved},
 		ArgsDigest: prep.digest,
 	})
 	t.engine.emit(ctx, Event{
 		Kind: EventGateAllowed, RunID: pending.RunID, Task: t.cfg.Name,
 		PrincipalID: requester.UserID, Tenant: requester.Tenant,
-		Tool: ct.spec.name, Access: ct.spec.access,
+		Tool: ct.spec.name, Operation: ct.spec.operation,
 		Decision: decision.Kind, RuleIDs: decision.RuleIDs, ArgsDigest: prep.digest,
 		Integrity: prep.worst, Sensitivity: prep.sensitivity,
 	})
@@ -440,7 +443,7 @@ func (t *Task[In, Out]) ExecuteApproved(ctx context.Context, requester, approved
 		t.engine.emit(runCtx, Event{
 			Kind: EventToolCompleted, RunID: pending.RunID, Task: t.cfg.Name,
 			PrincipalID: requester.UserID, Tenant: requester.Tenant, Tool: ct.spec.name,
-			Access: ct.spec.access, Latency: t.engine.now().Sub(start), Error: "tool-failed",
+			Operation: ct.spec.operation, Latency: t.engine.now().Sub(start), Error: "tool-failed",
 		})
 		return nil, rec, fmt.Errorf("gobellim: tool: %w", err)
 	}
@@ -448,7 +451,7 @@ func (t *Task[In, Out]) ExecuteApproved(ctx context.Context, requester, approved
 	t.engine.emit(runCtx, Event{
 		Kind: EventToolCompleted, RunID: pending.RunID, Task: t.cfg.Name,
 		PrincipalID: requester.UserID, Tenant: requester.Tenant, Tool: ct.spec.name,
-		Access: ct.spec.access, Latency: t.engine.now().Sub(start),
+		Operation: ct.spec.operation, Latency: t.engine.now().Sub(start),
 	})
 	return out, rec, nil
 }
@@ -467,7 +470,7 @@ func (t *Task[In, Out]) runToolCall(
 		rec.Decision = Decision{Kind: Deny, RuleIDs: []string{RuleUnknownTool}, Reason: "unknown tool"}
 		return rec, toolError("unknown tool"), nil
 	}
-	rec.Access = ct.spec.access
+	rec.Operation = ct.spec.operation
 
 	prep, err := ct.def.prepare(ctx, p, json.RawMessage(tc.Args), hs, t.limits.MaxArgBytes)
 	if err != nil {
@@ -485,7 +488,7 @@ func (t *Task[In, Out]) runToolCall(
 	t.engine.emit(ctx, Event{
 		Kind: gateEventKind(decision.Kind), RunID: runID, Task: t.cfg.Name,
 		PrincipalID: p.UserID, Tenant: p.Tenant,
-		Tool: ct.spec.name, Access: ct.spec.access,
+		Tool: ct.spec.name, Operation: ct.spec.operation,
 		Decision: decision.Kind, RuleIDs: decision.RuleIDs, ArgsDigest: prep.digest,
 		Integrity: prep.worst, Sensitivity: prep.sensitivity,
 	})
@@ -499,7 +502,7 @@ func (t *Task[In, Out]) runToolCall(
 			t.engine.emit(ctx, Event{
 				Kind: EventToolCompleted, RunID: runID, Task: t.cfg.Name,
 				PrincipalID: p.UserID, Tenant: p.Tenant, Tool: ct.spec.name,
-				Access: ct.spec.access, Latency: t.engine.elapsed(start), Error: "tool-failed",
+				Operation: ct.spec.operation, Latency: t.engine.elapsed(start), Error: "tool-failed",
 			})
 			return rec, toolError("tool failed"), nil
 		}
@@ -516,14 +519,14 @@ func (t *Task[In, Out]) runToolCall(
 			t.engine.emit(ctx, Event{
 				Kind: EventToolCompleted, RunID: runID, Task: t.cfg.Name,
 				PrincipalID: p.UserID, Tenant: p.Tenant, Tool: ct.spec.name,
-				Access: ct.spec.access, Latency: t.engine.elapsed(start), Error: "output-budget",
+				Operation: ct.spec.operation, Latency: t.engine.elapsed(start), Error: "output-budget",
 			})
 			return rec, toolError("tool result exceeds budget"), nil
 		}
 		t.engine.emit(ctx, Event{
 			Kind: EventToolCompleted, RunID: runID, Task: t.cfg.Name,
 			PrincipalID: p.UserID, Tenant: p.Tenant, Tool: ct.spec.name,
-			Access: ct.spec.access, Latency: t.engine.elapsed(start),
+			Operation: ct.spec.operation, Latency: t.engine.elapsed(start),
 		})
 		return rec, string(body), nil
 
@@ -545,13 +548,13 @@ func (t *Task[In, Out]) abandoned(ctx context.Context, runID string, p Principal
 			Decision: Decision{Kind: Deny, RuleIDs: []string{RuleBatchSuspended}, Reason: "the run suspended before this call"},
 		}
 		if ct, ok := t.tools[tc.Name]; ok {
-			rec.Access = ct.spec.access
+			rec.Operation = ct.spec.operation
 		}
 		out = append(out, rec)
 		t.engine.emit(ctx, Event{
 			Kind: EventGateDenied, RunID: runID, Task: t.cfg.Name,
 			PrincipalID: p.UserID, Tenant: p.Tenant,
-			Tool: rec.Name, Access: rec.Access, Decision: Deny, RuleIDs: rec.Decision.RuleIDs,
+			Tool: rec.Name, Operation: rec.Operation, Decision: Deny, RuleIDs: rec.Decision.RuleIDs,
 		})
 	}
 	return out

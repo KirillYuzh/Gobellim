@@ -281,21 +281,23 @@ const (
     Derived
     Trusted
 )
+```
 
 type Sensitivity uint8
 const (
-    Public Sensitivity = iota
-    Internal
-    PII
-    Secret
+Public Sensitivity = iota
+Internal
+PII
+Secret
 )
 
 type Label struct {
-    Integrity   Integrity
-    Sources     []SourceRef
-    Sensitivity Sensitivity
+Integrity Integrity
+Sources []SourceRef
+Sensitivity Sensitivity
 }
-```
+
+````
 
 `Integrity` описывает, насколько можно полагаться на значение как на основание для действия. `Sensitivity` задаёт ограничения раскрытия. `Readers`/per-reader ACL в текущей реализации **не реализованы**: библиотека не фильтрует данные по читателям, это делает приложение до передачи контекста в `Task`.
 
@@ -337,7 +339,7 @@ Handle в непомеченном `ground` поле — `ErrUngrounded`, даж
 type Authorizer interface {
     Allowed(ctx context.Context, p Principal, permission string, resource Resource) (bool, error)
 }
-```
+````
 
 Этот интерфейс адаптируется к существующей системе ролей/политик приложения. Для локального демо может быть простая in-memory RBAC-политика, но библиотека не требует переносить users/roles/ACL в новое хранилище. `Authorizer` обязателен: `New` без него — `ErrInvalidConfig`.
 
@@ -413,7 +415,7 @@ Workflow рассчитан на типовые use-cases с последова�
 ### 8.1. Модель
 
 ```go
-wf, err := flow.New[RefundCase]("refund",
+wf, err := flow.FromEngine[RefundCase](engine, "refund",
     flow.Version(1),
     flow.WithAuthorizer(authz),
     flow.WithAudit(auditSink),
@@ -435,6 +437,8 @@ wf.Step("prepare", prepareRefund).
 ```
 
 Состояние workflow `S` должно быть явно сериализуемым и ограниченным по размеру. Пользовательский код не должен хранить в нём открытые секреты без необходимости.
+
+`flow.FromEngine` берёт authorizer, audit sink, claim store, часы и ключ подписи у `Engine` (`Engine.Deps`). Два разных authorizer в одном use-case означали бы, что Gate проверяет вызывающего по одному ACL, а одобрение — по другому. `flow.New` остаётся для flow без Task вокруг него.
 
 ### 8.2. Состояния
 
@@ -716,7 +720,7 @@ func TestUntrustedInputCannotExecuteWriteWithoutGate(t *testing.T) {
 | P2        | Replay/diff, policy migrations, Four-Eyes/quorum, compensation                                                            | Regression suite показывает decision diff и тестирует отказ при policy drift.                                                |
 | P2        | Model/HTTP adapters, OTel                                                                                                 | Подключаются отдельно и не попадают в обязательные зависимости core.                                                         |
 
-P0 и P1 реализованы. В `flow` также реализован Four-Eyes. Реализованы `plugins/gigachat` (model adapter) и `plugins/langfuse` (audit sink). P2 (replay/diff, policy migrations, quorum, compensation, `detect`, `httpapproval`, `otel`, `Edit` аргументов) — нет.
+P0 и P1 реализованы, кроме sealed continuation: токена нет, `Suspension` и `State` хранит приложение (§8.5). В `flow` также реализован Four-Eyes. Реализованы `plugins/gigachat` (model adapter) и `plugins/langfuse` (audit sink). P2 (sealed continuation, replay/diff, policy migrations, quorum, compensation, `detect`, `httpapproval`, `otel`, `Edit` аргументов) — нет.
 
 ### Демо
 
@@ -744,6 +748,7 @@ P0 и P1 реализованы. В `flow` также реализован Four-
 5. Какие дефолтные лимиты размеров, tool calls, TTL приостановки выбирать после нагрузочных и attack-тестов?
 6. Какие изменения policy должны требовать немедленного отказа, а какие допускают явную миграцию старого workflow state?
 7. Как проверять не только unauthorized actions, но и сохранение полезности легитимных сценариев без зависимости от случайности провайдера?
+8. Резолвить ли handles в `Out` или только вычищать неизвестные `<hN>`? Сейчас не делается ни то ни другое, поэтому хэндл может попасть в ответ пользователю.
 
 ## 16. Источники и prior art
 

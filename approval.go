@@ -1,7 +1,6 @@
 package gobellim
 
 import (
-	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -25,7 +24,7 @@ type ApprovalCard struct {
 	Flow               string          `json:"flow,omitempty"`
 	Step               string          `json:"step,omitempty"`
 	Tool               string          `json:"tool"`
-	Access             Access          `json:"access"`
+	Operation          Operation       `json:"operation"`
 	Args               json.RawMessage `json:"args,omitempty"`
 	Digest             string          `json:"digest"`
 	Reason             string          `json:"reason,omitempty"`
@@ -74,7 +73,7 @@ func proofMessage(p *PendingAction) []byte {
 	}
 	for _, s := range []string{
 		p.Card.RunID, p.Card.Flow, p.Card.Step, p.Card.Tool,
-		p.Card.Access.String(), string(p.Card.Args), p.Card.Digest,
+		p.Card.Operation.String(), string(p.Card.Args), p.Card.Digest,
 		p.Card.Reason, p.Card.RequiredPermission,
 	} {
 		add(s)
@@ -95,11 +94,9 @@ func proofMessage(p *PendingAction) []byte {
 // token: an approval endpoint that decodes one from a request body would let a
 // client choose its own arguments, digest and nonce.
 func (e *Engine) sign(p *PendingAction) []byte {
-	m := hmac.New(sha256.New, e.approvalKey)
-	m.Write(proofMessage(p))
-	return m.Sum(nil)
+	return e.sealer.Sign(proofMessage(p))
 }
 
 func (e *Engine) signedByUs(p *PendingAction) bool {
-	return len(p.Proof) > 0 && hmac.Equal(p.Proof, e.sign(p))
+	return e.sealer.Verify(proofMessage(p), p.Proof)
 }

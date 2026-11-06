@@ -61,7 +61,10 @@ layer and must match the current code; if code and `DESIGN.md` disagree, fix bot
 - `Readers` / per-reader ACL is not implemented. Do not claim it exists. The
   application owns its data ACL.
 - `Resource.TenantID` must match `Principal.Tenant`; the Gate enforces this
-  before the `Authorizer`.
+  before the `Authorizer`. An empty `TenantID` on a non-`Compute` target is
+  `Deny` with `target-unbound`; `flow.Resume` applies the same rule to an
+  approval step that declares `Target`. Do not fill it from the principal: that
+  makes the tenant check pass by construction.
 - The core `go.mod` has no required dependencies. Do not add one without an ADR
   and a benchmark; put optional code in its own package or module.
 - `flow`, `store/sql`, `testkit`, `plugins/*` and `examples/*` are optional
@@ -69,6 +72,13 @@ layer and must match the current code; if code and `DESIGN.md` disagree, fix bot
   `internal/importrules` enforces this.
 - `flow.Store` has one method: `Claim`. Do not reintroduce `Commit`; `Claim`
   already consumes the nonce.
+- `flow.FromEngine` is the intended wiring when a flow resumes a `Task`: it shares
+  the `Engine`'s authorizer, audit sink, claim store, clock and sealer. Do not
+  build a second authorizer for the approval path; the Gate and the approval
+  must check the same ACL.
+- A `Suspension` is signed with the same `Sealer` as a `PendingAction`, and
+  `Resume` rejects an object the flow did not issue with `ErrFlowDrift`. Do not
+  drop the proof to make a round-trip through a client work.
 - Tests use the standard library only. Validate with
   `go build ./... && go vet ./... && go test ./... -race -shuffle=on`.
   `testkit.DiscardAudit()` is the explicit sink for a test that ignores audit.
@@ -76,9 +86,12 @@ layer and must match the current code; if code and `DESIGN.md` disagree, fix bot
   Audit events carry digests and labels, not values.
 - The `gobellim:"..."` tag subset is documented in `DESIGN.md` §5.3 and
   `README.md`. Rejecting an unknown tag is intentional.
-- `source` and `ground` apply to strings only. `sensitivity` applies to strings
-  and `[]string`. `time.Time`, `[]byte`, maps, pointers and embedded structs
-  without an explicit `json` name are rejected at `NewTask`.
+- `source` and `ground` apply to strings only, on opposite sides of the
+  boundary: `source` on a task input field, `ground` on a tool argument. A tag
+  on the wrong side is `ErrInvalidConfig` at `NewTask`, never a silent no-op.
+  `sensitivity` applies to strings and `[]string`. `time.Time`, `[]byte`, maps,
+  pointers and embedded structs without an explicit `json` name are rejected at
+  `NewTask`.
 - `DESIGN.md` lists P2 work (replay/diff, detectors, HTTP approval handlers,
   OpenTelemetry, quorum, compensation, editing approved arguments) that is not
   implemented. Do not claim it exists.

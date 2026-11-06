@@ -68,7 +68,7 @@ type Engine struct {
 	policyVersion string
 	claims        ClaimStore
 	approvalTTL   time.Duration
-	approvalKey   []byte
+	sealer        *Sealer
 	now           func() time.Time
 }
 
@@ -112,9 +112,13 @@ func New(opts ...Option) (*Engine, error) {
 	}
 	key := cfg.ApprovalKey
 	if len(key) == 0 {
-		key = []byte(randomHex(32))
-	} else if len(key) != 32 {
-		return nil, fmt.Errorf("%w: approval key must be 32 bytes", ErrInvalidConfig)
+		// randomHex(16) is 32 bytes of ASCII, which is the length NewSealer
+		// requires: a default key and an explicit one behave the same way.
+		key = []byte(randomHex(16))
+	}
+	sealer, err := NewSealer(key)
+	if err != nil {
+		return nil, err
 	}
 	return &Engine{
 		model:         cfg.Model,
@@ -124,9 +128,38 @@ func New(opts ...Option) (*Engine, error) {
 		policyVersion: cfg.PolicyVersion,
 		claims:        claims,
 		approvalTTL:   ttl,
-		approvalKey:   key,
+		sealer:        sealer,
 		now:           now,
 	}, nil
+}
+
+// Deps is a snapshot of the Engine's collaborators. An optional package such as
+// flow uses it to share one authorizer, one audit sink, one claim store, one
+// clock and one approval key with the Engine, instead of asking the application
+// to configure a second set that can silently disagree.
+//
+// Two authorizers for one use case is a security gap rather than a preference:
+// the Gate would check a caller against one ACL and the approval against
+// another.
+type Deps struct {
+	Authorizer  Authorizer
+	Audit       Sink
+	Claims      ClaimStore
+	Now         func() time.Time
+	ApprovalTTL time.Duration
+	Sealer      *Sealer
+}
+
+// Deps returns the Engine's collaborators.
+func (e *Engine) Deps() Deps {
+	return Deps{
+		Authorizer:  e.authz,
+		Audit:       e.audit,
+		Claims:      e.claims,
+		Now:         e.now,
+		ApprovalTTL: e.approvalTTL,
+		Sealer:      e.sealer,
+	}
 }
 
 // Limits returns the effective budgets.

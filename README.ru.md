@@ -235,6 +235,11 @@ audit-следа тоже. В тесте, где audit не проверяетс
 `sensitivity=pii`). `source=application` даёт метку `Trusted`, но само по себе
 handle не создаёт.
 
+Голый `ground` привязан к пути самого аргумента, поэтому входное поле и аргумент
+должны называться одинаково. Если имена разные, укажите источник:
+`ground=TicketID`. `ground=any` принимает handle из любого входного поля и
+является явным отказом от привязки.
+
 ```go
 type TicketInput struct {
 	OrderID string `gobellim:"sensitivity=secret,required"`

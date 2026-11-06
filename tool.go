@@ -16,15 +16,17 @@ import (
 type Tool[Args, Result any] struct {
 	Name        string
 	Description string
-	// Access is what the tool does: read, write, send, delete or compute.
+	// Operation is what the tool does: read, write, send, delete or compute.
 	// The zero value is rejected by NewTask.
-	Access Access
+	Operation Operation
 	// Permission is the RBAC permission checked by the Authorizer. An empty
 	// value defaults to "tool:<Name>".
 	Permission string
 	// Target binds the action to an object and tenant. It is required for
 	// Read, Write, Send and Delete, because the authorizer needs the object to
-	// check the ACL. Compute may leave it nil.
+	// check the ACL. Compute may leave it nil. A returned Resource must carry a
+	// non-empty Type, ID and TenantID: the Gate denies an unbound target instead
+	// of filling TenantID from the principal.
 	Target func(p Principal, a Args) Resource
 	// Validate is the application's business check. An error becomes Deny. A
 	// nil result does not raise trust: it only means the rule did not object.
@@ -36,7 +38,7 @@ type Tool[Args, Result any] struct {
 type toolSpec struct {
 	name        string
 	description string
-	access      Access
+	operation   Operation
 	permission  string
 	schema      json.RawMessage
 }
@@ -69,16 +71,20 @@ func (t Tool[A, R]) check() error {
 	if t.Run == nil {
 		return fmt.Errorf("%w: tool %s: run is required", ErrInvalidConfig, t.Name)
 	}
-	if t.Access == AccessUnknown || t.Access > AccessCompute {
+	if t.Operation == OperationUnknown || t.Operation > OperationCompute {
 		return fmt.Errorf("%w: tool %s: declare read, write, send, delete or compute", ErrInvalidConfig, t.Name)
 	}
-	if t.Access != AccessCompute && t.Target == nil {
-		// A data access without a target cannot be checked against the
+	if t.Operation != OperationCompute && t.Target == nil {
+		// A data operation without a target cannot be checked against the
 		// application's ACL, so it would silently fall back to RBAC only.
-		return fmt.Errorf("%w: tool %s: Target is required for a %s access", ErrInvalidConfig, t.Name, t.Access)
+		return fmt.Errorf("%w: tool %s: Target is required for a %s operation", ErrInvalidConfig, t.Name, t.Operation)
 	}
-	if _, err := schemaFor[A](); err != nil {
+	s, err := schemaFor[A]()
+	if err != nil {
 		return err
+	}
+	if err := s.checkArgTags(); err != nil {
+		return fmt.Errorf("tool %s: %w", t.Name, err)
 	}
 	return checkResultTags(reflect.TypeOf((*R)(nil)).Elem())
 }
@@ -91,7 +97,7 @@ func (t Tool[A, R]) toolSpec() toolSpec {
 	return toolSpec{
 		name:        t.Name,
 		description: t.Description,
-		access:      t.Access,
+		operation:   t.Operation,
 		permission:  t.Permission,
 		schema:      raw,
 	}

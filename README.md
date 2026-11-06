@@ -233,6 +233,11 @@ come from the declared source. A bare `ground` uses the argument path, so
 `OrderID` accepts a handle from an input field named `OrderID`. If the input
 field has another name, write it explicitly: `ground=RequestedOrder`.
 
+A bare `ground` binds to the argument's own JSON path, so the input field and the
+argument must share a name. When they do not, name the source: `ground=TicketID`.
+`ground=any` accepts a handle from any input field and is the explicit opt-out of
+the binding.
+
 ```go
 type TicketInput struct {
 	OrderID string `gobellim:"sensitivity=secret,required"`
@@ -318,10 +323,15 @@ Guaranteed when the application integrates correctly:
   keeps that value out of the model context; a tag on another type is a
   configuration error;
 - audit events carry labels and digests, not prompt text or secrets;
-- an unfinished run is audited as `task.failed`, never as `task.completed`.
+- an unfinished run is audited as `task.failed`, never as `task.completed`;
+- a tool handler that panics is not converted to `Deny`: the panic unwinds
+  through the runtime, the run is audited as failed, and your server's
+  `recover` decides what happens next.
 
 Not guaranteed:
 
+- handles are resolved or stripped in `Out`: a `<hN>` the model echoed reaches
+  the caller as text;
 - exactly-once for an external side effect: a shared `Store` gives a single-use
   claim, idempotency belongs to the provider;
 - redaction inside a `time.Time` or a self-marshalling type in a tool result;

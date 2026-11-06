@@ -180,6 +180,10 @@ type RefundArgs struct {
 `FourEyes` — опциональная проверка разделения обязанностей: апрувер обязан быть
 другим `Principal`, чем requester.
 
+Для одного действия хватает `task.Run` → `res.Pending` → `ExecuteApproved`:
+храните `PendingAction` на сервере, после одобрения передайте его обратно.
+`flow` — для нескольких шагов и границ одобрения.
+
 ```go
 store, err := sqlstore.New(db) // опционально: одноразовость между репликами
 if err != nil {
