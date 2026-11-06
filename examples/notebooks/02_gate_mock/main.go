@@ -40,9 +40,9 @@ OrderID помечен sensitivity=secret, поэтому модель види�
 
 	readTool := gobellim.Tool[readArgs, readResult]{
 		Name:       "orders.read",
-		Effect:     gobellim.Read,
+		Access:     gobellim.Read,
 		Permission: "orders:read",
-		Resource: func(p gobellim.Principal, a readArgs) gobellim.Resource {
+		Target: func(p gobellim.Principal, a readArgs) gobellim.Resource {
 			return gobellim.Resource{Type: "order", ID: a.OrderID, TenantID: p.Tenant}
 		},
 		Run: func(context.Context, gobellim.Principal, readArgs) (readResult, error) {
@@ -72,8 +72,8 @@ OrderID помечен sensitivity=secret, поэтому модель види�
 Но это не значит «доверено»: пустой набор меток = Untrusted, Write → Escalate.`)
 	wipe := gobellim.Tool[struct{}, readResult]{
 		Name:   "danger.wipe",
-		Effect: gobellim.Write,
-		Resource: func(gobellim.Principal, struct{}) gobellim.Resource {
+		Access: gobellim.Write,
+		Target: func(gobellim.Principal, struct{}) gobellim.Resource {
 			return gobellim.Resource{Type: "test", ID: "t-1"}
 		},
 		Run: func(context.Context, gobellim.Principal, struct{}) (readResult, error) {
@@ -88,9 +88,9 @@ Resource привязан к другому tenant. Gate проверяет эт
 tool handler.`)
 	foreign := gobellim.Tool[readArgs, readResult]{
 		Name:       "orders.read.foreign",
-		Effect:     gobellim.Read,
+		Access:     gobellim.Read,
 		Permission: "orders:read",
-		Resource: func(gobellim.Principal, readArgs) gobellim.Resource {
+		Target: func(gobellim.Principal, readArgs) gobellim.Resource {
 			return gobellim.Resource{Type: "order", ID: "A-1", TenantID: "other-tenant"}
 		},
 		Run: func(context.Context, gobellim.Principal, readArgs) (readResult, error) {
@@ -102,8 +102,8 @@ tool handler.`)
 		map[string]any{"OrderID": "<h1>"})
 
 	notebook.Cell("Итог", `
-Deny и Escalate — это разные вещи. Deny не выполняет действие и не даёт
-человеку его одобрить. Escalate останавливает Task и отдаёт карточку.`)
+Deny и Escalate — это разные вещи. Deny не выполняет действие и не отдаёт его
+на одобрение. Escalate останавливает Task и отдаёт карточку.`)
 	fmt.Println()
 }
 

@@ -20,14 +20,18 @@ type benchResult struct {
 
 func benchHandles() *handleSet {
 	hs := newHandleSet()
-	hs.put("A-1042", Label{Integrity: Untrusted, Sensitivity: Secret})
+	hs.put("A-1042", Label{
+		Integrity:   Untrusted,
+		Sensitivity: Secret,
+		Sources:     []SourceRef{{Kind: "input", ID: "OrderID"}},
+	})
 	return hs
 }
 
 // BenchmarkToolPrepare is the per-tool-call cost of decoding, resolving handles,
 // validating and labelling the arguments.
 func BenchmarkToolPrepare(b *testing.B) {
-	tool := Tool[benchArgs, benchResult]{Name: "orders.read", Effect: EffectRead}
+	tool := Tool[benchArgs, benchResult]{Name: "orders.read", Access: AccessRead}
 	raw := []byte(`{"OrderID":"<h1>","Note":"hello"}`)
 	hs := benchHandles()
 	p := Principal{UserID: "u-1", Tenant: "acme"}
@@ -43,7 +47,7 @@ func BenchmarkToolPrepare(b *testing.B) {
 // BenchmarkGateDecide measures the decision itself, with the arguments already
 // prepared.
 func BenchmarkGateDecide(b *testing.B) {
-	tool := Tool[benchArgs, benchResult]{Name: "orders.read", Effect: EffectRead}
+	tool := Tool[benchArgs, benchResult]{Name: "orders.read", Access: AccessRead}
 	prep, err := tool.prepare(context.Background(), Principal{UserID: "u-1", Tenant: "acme"},
 		[]byte(`{"OrderID":"<h1>","Note":"hello"}`), benchHandles(), 8<<10)
 	if err != nil {

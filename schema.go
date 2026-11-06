@@ -22,7 +22,6 @@ const (
 // tagSpec is the parsed content of a `gobellim:"..."` struct tag.
 type tagSpec struct {
 	required       bool
-	untrusted      bool
 	source         string
 	oneof          []string
 	min            *float64
@@ -30,6 +29,9 @@ type tagSpec struct {
 	sensitivity    Sensitivity
 	hasSensitivity bool
 	ground         bool
+	// groundSource names the input field a grounded handle must come from.
+	// Empty means "the argument path itself"; "any" disables the check.
+	groundSource string
 }
 
 func badTag(key string) error {
@@ -53,11 +55,6 @@ func parseTag(raw string) (tagSpec, error) {
 				return s, badTag(key)
 			}
 			s.required = true
-		case "untrusted":
-			if hasVal {
-				return s, badTag(key)
-			}
-			s.untrusted = true
 		case "source":
 			if !hasVal || (val != "principal" && val != "application") {
 				return s, badTag(key)
@@ -107,15 +104,15 @@ func parseTag(raw string) (tagSpec, error) {
 			s.hasSensitivity = true
 		case "ground":
 			if hasVal {
-				return s, badTag(key)
+				if val == "" {
+					return s, badTag(key)
+				}
+				s.groundSource = val
 			}
 			s.ground = true
 		default:
 			return s, badTag(key)
 		}
-	}
-	if s.source != "" && s.untrusted {
-		return s, fmt.Errorf("%w: source and untrusted are mutually exclusive", ErrInvalidConfig)
 	}
 	if s.min != nil && s.max != nil && *s.min > *s.max {
 		return s, fmt.Errorf("%w: min is greater than max", ErrInvalidConfig)
@@ -239,6 +236,16 @@ func buildStruct(t reflect.Type, depth int) (*structSchema, error) {
 		jsonName, skip := jsonFieldName(sf)
 		if skip {
 			continue
+		}
+		if opts := strings.Split(sf.Tag.Get("json"), ","); len(opts) > 1 {
+			for _, o := range opts[1:] {
+				if o == "string" {
+					// The generated schema says number or boolean, so the model sends an
+					// unquoted value and decodeStrict would reject it. Differing here
+					// would surface as a runtime argument error on every call.
+					return nil, fmt.Errorf("%w: %s.%s uses json \",string\", which conflicts with the generated schema", ErrUnsupportedType, t, sf.Name)
+				}
+			}
 		}
 		if sf.Anonymous && !hasExplicitJSONName(sf) {
 			return nil, fmt.Errorf("%w: %s embeds %s; declare an explicit field", ErrUnsupportedType, t, sf.Type)
@@ -645,6 +652,88 @@ func (s *structSchema) labels(base Label) map[string]Label {
 	return out
 }
 
+// checkGrounding walks the argument schema and the handles the model used.
+// A handle may appear only in a field tagged ground. A ground field must
+// contain a handle, and that handle must come from the declared source (the
+// argument path by default). A raw string never grounds an argument.
+func (s *structSchema) checkGrounding(handleLabels map[string]Label) (bool, error) {
+	for path, l := range handleLabels {
+		f, ok := s.fieldByPath(path)
+		if !ok || !f.spec.ground {
+			return false, fmt.Errorf("%w: handle used in non-handle field %s", ErrUngrounded, path)
+		}
+		if err := groundSource(f, path, l); err != nil {
+			return false, err
+		}
+	}
+	grounded := true
+	var walk func(*structSchema, string)
+	walk = func(sc *structSchema, prefix string) {
+		for _, f := range sc.fields {
+			path := joinPath(prefix, f.jsonName)
+			if f.spec.ground {
+				if _, ok := handleLabels[path]; !ok {
+					grounded = false
+				}
+			}
+			if f.nested != nil {
+				walk(f.nested, path)
+			}
+		}
+	}
+	walk(s, "")
+	return grounded, nil
+}
+
+func (s *structSchema) fieldByPath(path string) (*fieldSchema, bool) {
+	if path == "" {
+		return nil, false
+	}
+	parts := strings.Split(path, ".")
+	cur := s
+	for i, part := range parts {
+		var next *fieldSchema
+		for _, f := range cur.fields {
+			if f.jsonName == part {
+				next = f
+				break
+			}
+		}
+		if next == nil {
+			return nil, false
+		}
+		if i == len(parts)-1 {
+			return next, true
+		}
+		if next.nested == nil {
+			return nil, false
+		}
+		cur = next.nested
+	}
+	return nil, false
+}
+
+func groundSource(f *fieldSchema, path string, l Label) error {
+	if f.spec.groundSource == "any" {
+		return nil
+	}
+	want := f.spec.groundSource
+	if want == "" {
+		want = path
+	}
+	if len(l.Sources) == 0 || l.Sources[0].ID != want {
+		return fmt.Errorf("%w: handle for %s came from %q, want %q", ErrUngrounded, path, sourceID(l), want)
+	}
+	return nil
+}
+
+func sourceID(l Label) string {
+	if len(l.Sources) == 0 {
+		return ""
+	}
+	return l.Sources[0].ID
+}
+
 // marshalNoEscape encodes JSON without HTML escaping so a handle stays
 // readable as <h1> in the prompt instead of \u003ch1\u003e.
 func marshalNoEscape(v any) ([]byte, error) {
@@ -716,13 +805,13 @@ func (f *fieldSchema) prepareValue(fv reflect.Value, path string, p Principal, h
 			}
 			l = Label{
 				Integrity:   Trusted,
-				Sources:     []SourceRef{{Kind: "principal", ID: f.goName}},
+				Sources:     []SourceRef{{Kind: "principal", ID: path}},
 				Sensitivity: f.sensitivity(),
 			}
 		case "application":
 			l = Label{
 				Integrity:   Trusted,
-				Sources:     []SourceRef{{Kind: "application", ID: f.goName}},
+				Sources:     []SourceRef{{Kind: "application", ID: path}},
 				Sensitivity: f.sensitivity(),
 			}
 		default:

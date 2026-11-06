@@ -228,6 +228,53 @@ func FuzzResolveHandles(f *testing.F) {
 	})
 }
 
+func FuzzParseTag(f *testing.F) {
+	f.Add("required,sensitivity=secret,ground=OrderID")
+	f.Add("oneof=a|b,min=1,max=2")
+	f.Add("untrusted")
+	f.Add("")
+	f.Fuzz(func(t *testing.T, raw string) {
+		_, _ = parseTag(raw)
+	})
+}
+
+// FuzzRedactResult asserts the one guarantee the redactor sells: a value tagged
+// secret never reaches the model in clear, whatever bytes it contains.
+func FuzzRedactResult(f *testing.F) {
+	f.Add("TOP-SECRET")
+	f.Add("")
+	f.Add("\u0000\u0001")
+	f.Fuzz(func(t *testing.T, s string) {
+		type res struct {
+			S string            `gobellim:"sensitivity=secret"`
+			M map[string]string `gobellim:"sensitivity=secret"`
+			B []byte            `gobellim:"sensitivity=secret"`
+		}
+		hs := newHandleSet()
+		body, err := marshalNoEscape(redactResult(res{S: s, M: map[string]string{"k": s}, B: []byte(s)}, "t", hs))
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if s == "" {
+			return // empty values stay empty; there is nothing to leak
+		}
+		var out map[string]any
+		if err := json.Unmarshal(body, &out); err != nil {
+			t.Fatalf("unmarshal %s: %v", body, err)
+		}
+		if v, ok := out["S"].(string); !ok || !isHandleRef(v) {
+			t.Fatalf("S = %v, want a handle; body %s", out["S"], body)
+		}
+		m, _ := out["M"].(map[string]any)
+		if v, ok := m["k"].(string); !ok || !isHandleRef(v) {
+			t.Fatalf("M[k] = %v, want a handle; body %s", m["k"], body)
+		}
+		if v, ok := out["B"].(string); !ok || !isHandleRef(v) {
+			t.Fatalf("B = %v, want a handle; body %s", out["B"], body)
+		}
+	})
+}
+
 func TestSchemaRejectsUnsupportedCommonTypes(t *testing.T) {
 	type withTime struct {
 		When time.Time

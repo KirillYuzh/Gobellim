@@ -1,4 +1,4 @@
-// Notebook 03: a sequential flow with a human approval boundary.
+// Notebook 03: a sequential flow with a foreign approval boundary.
 // Run: go run ./examples/notebooks/03_flow_mock
 package main
 
@@ -26,16 +26,12 @@ func main() {
 	requester := gobellim.Principal{UserID: "u-1", Tenant: "acme"}
 	approver := gobellim.Principal{UserID: "m-1", Tenant: "acme"}
 
-	notebook.Cell("1. Sealer и Store", `
-Sealer шифрует continuation token (AES-GCM). Store делает Resume одноразовым:
-nonce занимается атомарно. Без Store одноразовость работает только в процессе.`)
-	sealer, err := flow.NewSealer("demo-key", []byte("0123456789abcdef0123456789abcdef"))
-	if err != nil {
-		panic(err)
-	}
+	notebook.Cell("1. Store и состояние", `
+Store делает Resume одноразовым: nonce занимается атомарно. Suspension и state
+хранит приложение; никакого bearer-токена нет. Без Store одноразовость
+работает только в процессе.`)
 	wf, err := flow.New[refundCase]("refund",
 		flow.WithAuthorizer(testkit.AllowAll),
-		flow.WithSealer(sealer),
 		flow.WithStore(flow.NewMemStore()),
 		flow.WithAudit(testkit.DiscardAudit()),
 		flow.WithTTL(time.Hour),
@@ -62,9 +58,9 @@ flow и выпускает карточку. execute запускается то
 			if err != nil {
 				return gobellim.ApprovalCard{}, err
 			}
-			return gobellim.ApprovalCard{Tool: "orders.refund", Effect: gobellim.Write, Args: args}, nil
+			return gobellim.ApprovalCard{Tool: "orders.refund", Access: gobellim.Write, Args: args}, nil
 		},
-		Resource: func(_ context.Context, p gobellim.Principal, s refundCase) (gobellim.Resource, error) {
+		Target: func(_ context.Context, p gobellim.Principal, s refundCase) (gobellim.Resource, error) {
 			return gobellim.Resource{Type: "order", ID: s.OrderID, TenantID: p.Tenant}, nil
 		},
 	})
@@ -81,12 +77,12 @@ Run проходит prepare и останавливается на границ
 	}
 	notebook.Result("status: %v", res.Status)
 	notebook.Result("executed before approval: %v", res.State.Executed)
-	notebook.Result("card: %s / %s / digest=%s", res.Suspension.Card.Tool, res.Suspension.Card.Effect, res.Suspension.Card.Digest)
+	notebook.Result("card: %s / %s / digest=%s", res.Suspension.Card.Tool, res.Suspension.Card.Access, res.Suspension.Card.Digest)
 
 	notebook.Cell("4. Resume → Done", `
 Апрувер m-1 отличается от requester u-1 (Four-Eyes), права проверены,
 действие не изменилось, nonce занят один раз.`)
-	out, err := wf.Resume(ctx, approver, res.Suspension.Token, flow.Approve)
+	out, err := wf.Resume(ctx, approver, *res.Suspension, res.State, flow.Approve)
 	if err != nil {
 		panic(err)
 	}
@@ -94,7 +90,7 @@ Run проходит prepare и останавливается на границ
 
 	notebook.Cell("5. Повторный Resume → ErrReplay", `
 Тот же токен второй раз не выполнит шаг: Store уже занял nonce.`)
-	_, err = wf.Resume(ctx, approver, res.Suspension.Token, flow.Approve)
+	_, err = wf.Resume(ctx, approver, *res.Suspension, res.State, flow.Approve)
 	notebook.Result("replay detected: %v (errors.Is(ErrReplay)=%v)", err, errors.Is(err, flow.ErrReplay))
 
 	fmt.Println()

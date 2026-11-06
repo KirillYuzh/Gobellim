@@ -16,7 +16,7 @@ type Provenance struct {
 	Integrity Integrity `json:"integrity"`
 }
 
-// ApprovalCard is the typed payload a human decides on. The UI belongs to the
+// ApprovalCard is the typed payload a trusted approver decides on. The UI belongs to the
 // service; the card only carries the facts needed for a meaningful decision.
 // Args contains the resolved values the action would use, so the service must
 // apply its approver ACL before displaying the card.
@@ -25,7 +25,7 @@ type ApprovalCard struct {
 	Flow               string          `json:"flow,omitempty"`
 	Step               string          `json:"step,omitempty"`
 	Tool               string          `json:"tool"`
-	Effect             Effect          `json:"effect"`
+	Access             Access          `json:"access"`
 	Args               json.RawMessage `json:"args,omitempty"`
 	Digest             string          `json:"digest"`
 	Reason             string          `json:"reason,omitempty"`
@@ -57,21 +57,38 @@ func (c ApprovalCard) normalize() ApprovalCard {
 }
 
 // proofMessage is the canonical byte string an issued PendingAction is signed
-// over. Times are encoded as Unix nanoseconds so a JSON round trip through any
-// time zone produces the same message. FourEyes is included because it is a
-// policy bit: without it an application could drop a separation-of-duties
-// requirement from an action the engine signed.
+// over. Every field of the card is included, because the card is the evidence a
+// approver decided on: a party that can rewrite the reason, provenance or required
+// permission must not keep a valid action digest. Strings are length-prefixed so
+// no two different field values produce the same message.
 func proofMessage(p *PendingAction) []byte {
-	b := make([]byte, 0, 256)
-	for _, s := range []string{p.RunID, p.Task, p.Tenant, p.Tool, p.Nonce, p.Digest} {
+	b := make([]byte, 0, 512)
+	add := func(s string) {
+		b = strconv.AppendInt(b, int64(len(s)), 10)
+		b = append(b, ':')
 		b = append(b, s...)
 		b = append(b, 0)
 	}
+	for _, s := range []string{p.RunID, p.Task, p.Tenant, p.Tool, p.Nonce, p.Digest} {
+		add(s)
+	}
+	for _, s := range []string{
+		p.Card.RunID, p.Card.Flow, p.Card.Step, p.Card.Tool,
+		p.Card.Access.String(), string(p.Card.Args), p.Card.Digest,
+		p.Card.Reason, p.Card.RequiredPermission,
+	} {
+		add(s)
+	}
 	b = strconv.AppendBool(b, p.Card.FourEyes)
 	b = append(b, 0)
-	b = strconv.AppendInt(b, p.ExpiresAt.UnixNano(), 10)
+	b = strconv.AppendInt(b, p.Card.ExpiresAt.UnixNano(), 10)
 	b = append(b, 0)
-	return strconv.AppendInt(b, p.Card.ExpiresAt.UnixNano(), 10)
+	for _, pr := range p.Card.Provenance {
+		add(pr.Arg)
+		add(pr.Source)
+		add(pr.Integrity.String())
+	}
+	return strconv.AppendInt(b, p.ExpiresAt.UnixNano(), 10)
 }
 
 // sign binds a pending action to this engine. Without it the struct is a bearer

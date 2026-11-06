@@ -14,7 +14,7 @@ const (
 	EventTaskStarted EventKind = "task.started"
 	// EventTaskCompleted marks a task that produced a valid output.
 	EventTaskCompleted EventKind = "task.completed"
-	// EventTaskSuspended marks a task that stopped for human approval.
+	// EventTaskSuspended marks a task that stopped for an approval outside the model.
 	EventTaskSuspended EventKind = "task.suspended"
 	// EventTaskFailed marks a task that returned an error.
 	EventTaskFailed EventKind = "task.failed"
@@ -30,7 +30,7 @@ const (
 	EventToolCompleted EventKind = "tool.completed"
 	// EventWorkflowSuspended marks a workflow that needs approval.
 	EventWorkflowSuspended EventKind = "workflow.suspended"
-	// EventApprovalRequested marks an approval card issued to a human.
+	// EventApprovalRequested marks an approval card issued to a trusted approver.
 	EventApprovalRequested EventKind = "approval.requested"
 	// EventApprovalGranted marks an approved action.
 	EventApprovalGranted EventKind = "approval.granted"
@@ -45,7 +45,7 @@ const (
 )
 
 // Event is one audit record. It never carries prompt text, raw arguments,
-// secrets or continuation tokens.
+// secrets or approval cards.
 type Event struct {
 	Kind             EventKind
 	Time             time.Time
@@ -56,7 +56,7 @@ type Event struct {
 	PrincipalID      string
 	Tenant           string
 	Tool             string
-	Effect           Effect
+	Access           Access
 	Decision         DecisionKind
 	RuleIDs          []string
 	PolicyVersion    string
@@ -104,8 +104,8 @@ func (s SlogSink) Emit(ctx context.Context, e Event) {
 	add("principal", e.PrincipalID)
 	add("tenant", e.Tenant)
 	add("tool", e.Tool)
-	if e.Effect != EffectUnknown {
-		add("effect", e.Effect.String())
+	if e.Access != AccessUnknown {
+		add("access", e.Access.String())
 	}
 	if len(e.RuleIDs) > 0 || e.Decision != Deny {
 		add("decision", e.Decision.String())

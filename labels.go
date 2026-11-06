@@ -14,9 +14,8 @@ const (
 	Untrusted Integrity = iota
 	// Derived marks model output: a schema limits its shape, not its truth.
 	Derived
-	// Validated marks a value promoted by an explicit validator.
-	Validated
-	// Trusted marks application or principal state.
+	// Trusted marks application or principal state. It is the only integrity
+	// level that can reach an unattended Write or Send.
 	Trusted
 )
 
@@ -27,8 +26,6 @@ func (i Integrity) String() string {
 		return "untrusted"
 	case Derived:
 		return "derived"
-	case Validated:
-		return "validated"
 	case Trusted:
 		return "trusted"
 	default:
@@ -59,8 +56,6 @@ func parseIntegrity(s string) (Integrity, bool) {
 		return Untrusted, true
 	case "derived":
 		return Derived, true
-	case "validated":
-		return Validated, true
 	case "trusted":
 		return Trusted, true
 	default:
