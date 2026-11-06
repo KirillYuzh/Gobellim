@@ -15,7 +15,7 @@ import (
 type TicketInput struct {
 	TenantID string `gobellim:"source=principal,required"`
 	TicketID string `gobellim:"source=application,required"`
-	Body     string `gobellim:"required,sensitivity=pii"`
+	Body     string `gobellim:"required,sensitivity=patterns"`
 	OrderID  string `gobellim:"sensitivity=secret"`
 }
 

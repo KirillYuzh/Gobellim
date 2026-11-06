@@ -13,7 +13,7 @@ import (
 
 type gateIn struct {
 	TenantID string `gobellim:"source=principal,required"`
-	Body     string `gobellim:"required,sensitivity=pii"`
+	Body     string `gobellim:"required,sensitivity=patterns"`
 	OrderID  string `gobellim:"sensitivity=secret"`
 }
 

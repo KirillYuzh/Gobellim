@@ -15,7 +15,7 @@ var (
 )
 
 // redactResult prepares a tool result for the model context. A field tagged
-// sensitivity=secret becomes a handle, a field tagged sensitivity=pii is
+// sensitivity=secret becomes a handle, a field tagged sensitivity=patterns is
 // masked, and every other value is passed through unchanged.
 //
 // Without this, a single read tool would put the same secrets back into the
@@ -86,7 +86,7 @@ func redactValue(v reflect.Value, base Label, hs *handleSet) any {
 		return out
 	case reflect.Slice, reflect.Array:
 		if v.Type().Elem().Kind() == reflect.Uint8 {
-			if base.Sensitivity == Secret || base.Sensitivity == PII {
+			if base.Sensitivity == Secret || base.Sensitivity == Patterns {
 				return redactString(string(v.Bytes()), base, hs)
 			}
 			return v.Interface()
@@ -138,8 +138,8 @@ func redactString(s string, l Label, hs *handleSet) string {
 	switch l.Sensitivity {
 	case Secret:
 		return hs.put(s, l)
-	case PII:
-		return maskPII(s, l, hs)
+	case Patterns:
+		return maskPatterns(s, l, hs)
 	default:
 		return s
 	}
@@ -195,7 +195,7 @@ func restoreString(s string, hs *handleSet) string {
 	})
 }
 
-// maskArgsJSON returns the argument object with PII and secret values replaced
+// maskArgsJSON returns the argument object with patterns and secret values replaced
 // the same way the model saw them. An approver reads this copy; the executable
 // arguments stay in PendingAction.Args on the server.
 //
@@ -245,7 +245,7 @@ func maskJSONValue(v any, path string, labels map[string]Label, hs *handleSet) (
 		return x, changed
 	case string:
 		l, ok := labels[path]
-		if !ok || l.Sensitivity < PII || x == "" {
+		if !ok || l.Sensitivity < Patterns || x == "" {
 			return x, false
 		}
 		m := redactString(x, l, hs)

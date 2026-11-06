@@ -12,7 +12,7 @@ type benchArgs struct {
 
 type benchResult struct {
 	Card  string   `gobellim:"sensitivity=secret"`
-	Email string   `gobellim:"sensitivity=pii"`
+	Email string   `gobellim:"sensitivity=patterns"`
 	Note  string   `gobellim:"sensitivity=secret"`
 	Items []string `gobellim:"sensitivity=secret"`
 	Plain []string
