@@ -176,7 +176,9 @@ func (m *Model) decode(resp *http.Response) (gobellim.Response, error) {
 		return gobellim.Response{}, fmt.Errorf("gigachat: read response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return gobellim.Response{}, fmt.Errorf("gigachat: chat returned %s: %s", resp.Status, truncate(data))
+		// The body may echo the prompt; the status is enough to classify the
+		// failure, and the core runtime already keeps provider text out of audit.
+		return gobellim.Response{}, fmt.Errorf("gigachat: chat returned %s", resp.Status)
 	}
 	var cr chatResponse
 	if err := json.Unmarshal(data, &cr); err != nil {
@@ -236,7 +238,7 @@ func (m *Model) accessToken(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("gigachat: read oauth response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("gigachat: oauth returned %s: %s", resp.Status, truncate(data))
+		return "", fmt.Errorf("gigachat: oauth returned %s", resp.Status)
 	}
 	var tr tokenResponse
 	if err := json.Unmarshal(data, &tr); err != nil {
@@ -393,14 +395,6 @@ func mapFinish(reason string) gobellim.FinishReason {
 	default:
 		return gobellim.FinishOther
 	}
-}
-
-func truncate(b []byte) string {
-	s := strings.ReplaceAll(string(b), "\n", " ")
-	if len(s) > 256 {
-		return s[:256] + "..."
-	}
-	return s
 }
 
 // stripFences removes a markdown code fence around a JSON answer. GigaChat

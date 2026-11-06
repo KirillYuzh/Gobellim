@@ -207,3 +207,38 @@ func TestUnauthorizedRetry(t *testing.T) {
 		t.Fatalf("oauth=%d chat=%d, want 2/2", env.oauthHits.Load(), chatHits.Load())
 	}
 }
+
+// A provider error body can echo the prompt. The status classifies the failure;
+// the body stays in the adapter.
+func TestProviderBodyStaysOutOfErrors(t *testing.T) {
+	env := &testEnv{mux: http.NewServeMux()}
+	env.mux.HandleFunc("/oauth", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token": "tok",
+			"expires_at":   time.Now().Add(time.Hour).UnixMilli(),
+		})
+	})
+	env.mux.HandleFunc("/api/v1/chat/completions", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"message":"prompt echo: secret-order-42"}`))
+	})
+	server := httptest.NewServer(env.mux)
+	defer server.Close()
+
+	m, err := New(Config{AuthKey: "key", BaseURL: server.URL + "/api/v1", OAuthURL: server.URL + "/oauth"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = m.Chat(context.Background(), gobellim.Request{
+		Messages: []gobellim.Message{{Role: gobellim.RoleUser, Content: "hi"}},
+	})
+	if err == nil {
+		t.Fatal("want an error for a 400 response")
+	}
+	if strings.Contains(err.Error(), "secret-order-42") {
+		t.Fatalf("error carries the provider body: %v", err)
+	}
+	if !strings.Contains(err.Error(), "400") {
+		t.Fatalf("error = %v, want the HTTP status", err)
+	}
+}
