@@ -904,7 +904,7 @@ func TestExecuteApprovedRejectsADifferentAction(t *testing.T) {
 	}
 }
 
-func TestPanicIsAuditedAsFailure(t *testing.T) {
+func TestPanicIsAuditedAsPanic(t *testing.T) {
 	boom := gobellim.Tool[readArgs, readResult]{
 		Name:      "boom",
 		Operation: gobellim.Read,
@@ -931,6 +931,11 @@ func TestPanicIsAuditedAsFailure(t *testing.T) {
 	}
 	if rec.Count(gobellim.EventTaskFailed) != 1 {
 		t.Fatalf("events = %+v", rec.Events())
+	}
+	for _, ev := range rec.Events() {
+		if ev.Kind == gobellim.EventTaskFailed && ev.Error != "panic" {
+			t.Fatalf("Error = %q, want %q", ev.Error, "panic")
+		}
 	}
 }
 
