@@ -39,7 +39,10 @@ layer and must match the current code; if code and `DESIGN.md` disagree, fix bot
   argument, and a handle in a non-`ground` field is `ErrUngrounded`. A bare
   `ground` binds to the argument path; `ground=SourceField` binds to another
   input field; `ground=any` is the explicit opt-out. To let the model reference a
-  value, mark the input field `sensitivity=secret` or `sensitivity=pii`.
+  value, mark the input field `ref` (public but addressable) or
+  `sensitivity=secret` (confidential). `NewTask` rejects a `ground` argument that
+  binds to an input field the task does not declare: a renamed input field must
+  fail at startup, not as a runtime `Deny`.
 - Labels only worsen. Do not add a path that promotes `Untrusted`/`Derived` to
   `Trusted`. There is no promotion inside the Gate: `Tool.Validate` confirms the
   business meaning, not the origin, so its success raises nothing. `Trusted`
@@ -50,6 +53,15 @@ layer and must match the current code; if code and `DESIGN.md` disagree, fix bot
   struct is honoured before the result is marshalled (`redact.go`). Do not add a
   path that puts a raw `secret` field into a tool message. An unknown tag on a
   result is a configuration error.
+- `ApprovalCard.Args` is the masked view, never the executable arguments; the
+  real values stay in `PendingAction.Args` on the server. Do not put raw values
+  back into the card: an approver endpoint stores, renders and logs it.
+- `Out` is restored from the run's handles: a handle this run minted becomes its
+  value, and any other `<hN>` is removed. Do not pass an unresolved handle to the
+  caller and do not restore a handle the run did not mint.
+- `WithApprovalKey` requires `WithClaimStore` (and `flow.WithSealer` requires
+  `flow.WithStore`): a shared signing key with a per-process claim store lets one
+  approval execute once per replica. Both `New`s reject that combination.
 - `Target` is required for every operation except `OperationCompute`: without a
   non-empty `Resource` the ACL check silently degrades to RBAC only. An empty
   target is `Deny` with rule `target-unbound`.
@@ -59,7 +71,7 @@ layer and must match the current code; if code and `DESIGN.md` disagree, fix bot
   approval instead of double-executing it. A `PendingAction` also carries an HMAC
   from the issuing `Engine`; an object the engine did not issue is
   `ErrApprovalDrift`, so an approval endpoint must never decode one from a
-  client. `flow.Reject` claims the nonce too, so a rejection is final.
+  client. `flow.VerdictReject` claims the nonce too, so a rejection is final.
 - `Readers` / per-reader ACL is not implemented. Do not claim it exists. The
   application owns its data ACL.
 - `Resource.TenantID` must match `Principal.Tenant`; the Gate enforces this
@@ -88,9 +100,11 @@ layer and must match the current code; if code and `DESIGN.md` disagree, fix bot
   Audit events carry digests and labels, not values.
 - The `gobellim:"..."` tag subset is documented in `DESIGN.md` §5.3 and
   `README.md`. Rejecting an unknown tag is intentional.
-- `source` and `ground` apply to strings only, on opposite sides of the
-  boundary: `source` on a task input field, `ground` on a tool argument. A tag
-  on the wrong side is `ErrInvalidConfig` at `NewTask`, never a silent no-op.
+- `source`, `ref` and `ground` apply to strings only, on opposite sides of the
+  boundary: `source` and `ref` on a task input field, `ground` on a tool
+  argument. A tag on the wrong side is `ErrInvalidConfig` at `NewTask`, never a
+  silent no-op. `ref` and `sensitivity` are mutually exclusive: one makes a value
+  addressable, the other limits disclosure.
   `sensitivity` applies to strings and `[]string`. `time.Time`, `[]byte`, maps,
   pointers and embedded structs without an explicit `json` name are rejected at
   `NewTask`.

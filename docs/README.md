@@ -61,19 +61,27 @@ res, err := task.Run(ctx, principalFromRequest(r), in)
 
 `res.Status == gobellim.TaskApprovalRequired` означает, что модель предложила
 write-действие, но оно **не выполнено**. В `res.Pending` лежит сериализуемое
-описание действия: карточка с аргументами, digest, provenance, expiry, nonce и
-HMAC-подпись engine. Храните его на сервере: если endpoint одобрения декодирует
-`PendingAction` из тела запроса, клиент сам выбирает аргументы и digest, и
-engine отвергнет такой объект как `ErrApprovalDrift`. После реального одобрения
-приложение вызывает `task.ExecuteApproved(ctx, requester, approver,
-res.Pending)`: Gate заново проверяет tenant, RBAC/ACL, `Validate`, tool/operation и
-digest, а `approver` попадает в audit как `approval.granted`. Одобрение
-одноразовое: nonce уходит в `ClaimStore` (по умолчанию — процессный,
-`gobellim.WithClaimStore` — общий). Для многошагового workflow с TTL и
-four-eyes используйте `flow`: он останавливается на границе шага и отдаёт вам
-`Suspension` и состояние для хранения (шаг после `Approve`, approver берётся из
-`flow.ApproverFrom(ctx)`). Sealed-токена нет. `flow.Reject` тоже забирает
-nonce: отклонённое действие нельзя позже провести как одобренное.
+описание действия: digest, provenance, expiry, nonce, HMAC-подпись engine и
+карточка `res.Pending.Card`. `Card.Args` — маскированное представление: `secret`
+уже заменён handle, `pii` замаскирован, а `Provenance` несёт `Sensitivity`
+каждого поля. Исполняемые значения лежат в `PendingAction.Args` и остаются на
+сервере.
+
+Храните `PendingAction` на сервере: если endpoint одобрения декодирует его из
+тела запроса, клиент сам выбирает аргументы и digest, и engine отвергнет такой
+объект как `ErrApprovalDrift`. После реального одобрения приложение вызывает
+`task.ExecuteApproved(ctx, requester, approver, res.Pending)`: Gate заново
+проверяет tenant, RBAC/ACL, `Validate`, tool/operation и digest, а `approver`
+попадает в audit как `approval.granted`. Одобрение одноразовое: nonce уходит в
+`ClaimStore` (по умолчанию — процессный, `gobellim.WithClaimStore` — общий).
+`WithApprovalKey` без `WithClaimStore` — `ErrInvalidConfig`: общий ключ с
+процессным claim store дал бы одно исполнение на каждую реплику.
+
+Для многошагового workflow с TTL и four-eyes используйте `flow`: он
+останавливается на границе шага и отдаёт вам `Suspension` и состояние для
+хранения (шаг после `Approve`, approver берётся из `flow.ApproverFrom(ctx)`).
+Sealed-токена нет. `flow.VerdictReject` тоже забирает nonce: отклонённое действие
+нельзя позже провести как одобренное.
 
 ## Теги schema
 
@@ -84,6 +92,7 @@ nonce: отклонённое действие нельзя позже пров�
 | `required`             | значение не должно быть нулевым (нельзя на `bool`)           |
 | `source=principal`     | строка должна совпадать с полем `Principal`                  |
 | `source=application`   | значение пришло из состояния приложения и получает `Trusted` |
+| `ref`                  | выпустить handle, оставив значение публичным                 |
 | `sensitivity=pii`      | совпадения e-mail/телефона/карты заменяются на handles       |
 | `sensitivity=secret`   | всё значение заменяется одним handle                         |
 | `sensitivity=internal` | метка без маскирования                                       |
@@ -97,7 +106,7 @@ nonce: отклонённое действие нельзя позже пров�
 **аргументе** инструмента. Тег не с той стороны — `ErrInvalidConfig` на
 `NewTask`, а не молчаливый no-op.
 
-`source` и `ground` применимы только к `string`. `sensitivity` — к `string` и
+`source`, `ref` и `ground` применимы только к `string`. `sensitivity` — к `string` и
 `[]string`. `time.Time`, `[]byte`, `map`, указатели, вложенные структуры глубже
 двух уровней и встроенные struct без явного `json`-имени отклоняются на
 `NewTask`: лучше fail на старте, чем schema, которая врёт модели.
@@ -144,13 +153,14 @@ tenant — `Deny`, никогда `Allow`.
 ## Grounding — это handles
 
 Модель не может «подтвердить» ID строкой. `ground`-поле принимает только
-handle, созданный рантаймом для этого запуска. Чтобы модель могла ссылаться на
-значение, пометьте входное поле `sensitivity=secret` (или `sensitivity=pii`);
+handle, созданный рантаймом для этого запуска. Пометьте входное поле `ref`, если
+значение публичное, но модель должна ссылаться на него; `sensitivity=secret`
+нужен для конфиденциальных данных, `sensitivity=pii` — для полей вроде e-mail.
 `source=application` само по себе даёт метку `Trusted`, но не создаёт handle.
 
 ```go
 type TicketInput struct {
-	OrderID string `gobellim:"sensitivity=secret,required"`
+	OrderID string `gobellim:"ref,required"`
 }
 type RefundArgs struct {
 	OrderID string `gobellim:"required,ground"`
@@ -189,7 +199,7 @@ wf.Step("prepare", prepareRefund).
 
 res, err := wf.Run(ctx, requester, RefundCase{})
 // res.Status == flow.Suspended. Сохраните res.Suspension и res.State.
-out, err := wf.Resume(ctx, approver, *res.Suspension, res.State, flow.Approve)
+out, err := wf.Resume(ctx, approver, *res.Suspension, res.State, flow.VerdictApprove)
 ```
 
 `flow.FromEngine` берёт authorizer, audit, claim store, часы и ключ подписи у
@@ -197,7 +207,7 @@ out, err := wf.Resume(ctx, approver, *res.Suspension, res.State, flow.Approve)
 
 `Resume` проверяет tenant, expiry, версию flow, id шага, право апрувера,
 Four-Eyes, право requester'а, digest действия, пересчитанный из сохранённого
-состояния, и атомарный claim nonce. `DecisionUnknown` (нулевое значение) никогда
+состояния, и атомарный claim nonce. `VerdictUnknown` (нулевое значение) никогда
 не считается одобрением. Sealed-токена нет: `Suspension` и состояние хранит
 приложение, и `Suspension` подписан ключом выпустившего flow — объект, который
 процесс не подписывал, это `ErrFlowDrift` (`DESIGN.md` §8.5). Без `WithStore`

@@ -28,7 +28,10 @@ type tagSpec struct {
 	max            *float64
 	sensitivity    Sensitivity
 	hasSensitivity bool
-	ground         bool
+	// ref makes a value addressable without labelling it confidential: the model
+	// sees a handle, the approval card and the audit carry the value.
+	ref    bool
+	ground bool
 	// groundSource names the input field a grounded handle must come from.
 	// Empty means "the argument path itself"; "any" disables the check.
 	groundSource string
@@ -102,6 +105,11 @@ func parseTag(raw string) (tagSpec, error) {
 			}
 			s.sensitivity = v
 			s.hasSensitivity = true
+		case "ref":
+			if hasVal {
+				return s, badTag(key)
+			}
+			s.ref = true
 		case "ground":
 			if hasVal {
 				if val == "" {
@@ -154,8 +162,13 @@ func (f *fieldSchema) sensitivity() Sensitivity {
 // source keeps its trusted label, so a model may reference the value through a
 // handle.
 func (f *fieldSchema) redact(value string, l Label, hs *handleSet) string {
-	if value == "" {
+	if value == "" || hs == nil {
 		return value
+	}
+	if f.spec.ref {
+		// Addressable, not confidential: the model gets a handle and the value
+		// stays public in the card and the audit.
+		return hs.put(value, l)
 	}
 	switch f.sensitivity() {
 	case Secret:
@@ -292,8 +305,8 @@ func nodeForType(t reflect.Type, spec tagSpec, depth int) (nodeResult, error) {
 	case reflect.String:
 		// source, ground and sensitivity apply to strings.
 	case reflect.Slice, reflect.Array:
-		if spec.source != "" || spec.ground {
-			return nodeResult{}, fmt.Errorf("%w: source and ground apply to string fields only", ErrInvalidConfig)
+		if spec.source != "" || spec.ground || spec.ref {
+			return nodeResult{}, fmt.Errorf("%w: source, ground and ref apply to string fields only", ErrInvalidConfig)
 		}
 		if t.Elem().Kind() == reflect.Uint8 {
 			return nodeResult{}, fmt.Errorf("%w: []byte encodes as base64; use string", ErrUnsupportedType)
@@ -302,8 +315,8 @@ func nodeForType(t reflect.Type, spec tagSpec, depth int) (nodeResult, error) {
 			return nodeResult{}, fmt.Errorf("%w: sensitivity applies to strings and slices of strings", ErrInvalidConfig)
 		}
 	default:
-		if spec.source != "" || spec.ground || spec.sensitivity != Public {
-			return nodeResult{}, fmt.Errorf("%w: source, ground and sensitivity apply to strings only", ErrInvalidConfig)
+		if spec.source != "" || spec.ground || spec.ref || spec.sensitivity != Public {
+			return nodeResult{}, fmt.Errorf("%w: source, ground, ref and sensitivity apply to strings only", ErrInvalidConfig)
 		}
 	}
 
@@ -661,6 +674,12 @@ func (s *structSchema) checkInputTags() error {
 		if f.spec.ground {
 			return fmt.Errorf("%w: %s.%s: ground applies to a tool argument, not to a task input field", ErrInvalidConfig, s.typ, f.goName)
 		}
+		if f.spec.ref && f.spec.hasSensitivity {
+			// ref means "public but addressable"; sensitivity means "limit
+			// disclosure". A value cannot be both, and picking one silently would
+			// leave the developer with a protection that does not exist.
+			return fmt.Errorf("%w: %s.%s: ref and sensitivity are mutually exclusive", ErrInvalidConfig, s.typ, f.goName)
+		}
 		if f.nested != nil {
 			if err := f.nested.checkInputTags(); err != nil {
 				return err
@@ -679,6 +698,9 @@ func (s *structSchema) checkArgTags() error {
 		if f.spec.source != "" {
 			return fmt.Errorf("%w: %s.%s: source applies to a task input field, not to a tool argument", ErrInvalidConfig, s.typ, f.goName)
 		}
+		if f.spec.ref {
+			return fmt.Errorf("%w: %s.%s: ref applies to a task input field, not to a tool argument", ErrInvalidConfig, s.typ, f.goName)
+		}
 		if f.nested != nil {
 			if err := f.nested.checkArgTags(); err != nil {
 				return err
@@ -686,6 +708,54 @@ func (s *structSchema) checkArgTags() error {
 		}
 	}
 	return nil
+}
+
+// paths returns every JSON path a schema declares. NewTask uses it to reject a
+// ground argument that binds to an input field the task does not have: a
+// renamed input field would otherwise fail at run time, as a Deny the model
+// cannot explain.
+func (s *structSchema) paths() map[string]struct{} {
+	out := make(map[string]struct{}, len(s.fields))
+	var walk func(*structSchema, string)
+	walk = func(sc *structSchema, prefix string) {
+		for _, f := range sc.fields {
+			path := joinPath(prefix, f.jsonName)
+			out[path] = struct{}{}
+			if f.nested != nil {
+				walk(f.nested, path)
+			}
+		}
+	}
+	walk(s, "")
+	return out
+}
+
+// groundBinding is one ground argument and the input field it binds to.
+type groundBinding struct{ arg, source string }
+
+// groundBindings lists the input fields the ground arguments of this schema
+// expect. A bare ground binds to the argument's own path; ground=any opts out
+// and is not listed.
+func (s *structSchema) groundBindings() []groundBinding {
+	var out []groundBinding
+	var walk func(*structSchema, string)
+	walk = func(sc *structSchema, prefix string) {
+		for _, f := range sc.fields {
+			path := joinPath(prefix, f.jsonName)
+			if f.spec.ground && f.spec.groundSource != "any" {
+				source := f.spec.groundSource
+				if source == "" {
+					source = path
+				}
+				out = append(out, groundBinding{arg: path, source: source})
+			}
+			if f.nested != nil {
+				walk(f.nested, path)
+			}
+		}
+	}
+	walk(s, "")
+	return out
 }
 
 // checkGrounding walks the argument schema and the handles the model used.
