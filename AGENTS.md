@@ -56,9 +56,11 @@ layer and must match the current code; if code and `DESIGN.md` disagree, fix bot
 - `ApprovalCard.Args` is the masked view, never the executable arguments; the
   real values stay in `PendingAction.Args` on the server. Do not put raw values
   back into the card: an approver endpoint stores, renders and logs it.
-- `Out` is restored from the run's handles: a handle this run minted becomes its
-  value, and any other `<hN>` is removed. Do not pass an unresolved handle to the
-  caller and do not restore a handle the run did not mint.
+- `Out` is restored only in a field tagged `resolve`: there a handle this run
+  minted becomes its value. Every other field loses all `<hN>` tokens, minted or
+  not. Do not pass an unresolved handle to the caller, do not restore a handle
+  the run did not mint, and do not make restoration the default: a model that
+  types `<h3>` must not make the runtime paste a secret into a reply.
 - `WithApprovalKey` requires `WithClaimStore` (and `flow.WithSealer` requires
   `flow.WithStore`): a shared signing key with a per-process claim store lets one
   approval execute once per replica. Both `New`s reject that combination.

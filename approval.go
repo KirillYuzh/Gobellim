@@ -19,8 +19,8 @@ type Provenance struct {
 // ApprovalCard is the typed payload a trusted approver decides on. The UI belongs to the
 // service; the card only carries the facts needed for a meaningful decision.
 //
-// Args is the masked view: a secret argument is a handle and a PII argument is
-// masked, the same way the model saw it. The executable arguments are in
+// Args is the masked view: a secret argument is a handle and a patterns argument
+// is masked, the same way the model saw it. The executable arguments are in
 // PendingAction.Args, which stays on the server. Digest identifies the action
 // that will run, so the card can be shown, stored and logged without carrying
 // the values it describes.

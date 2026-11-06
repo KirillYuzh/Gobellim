@@ -136,13 +136,13 @@ functions. Gobellim fixes the model loop around them.
 type TicketInput struct {
 	TenantID string `gobellim:"source=principal,required"`
 	TicketID string `gobellim:"source=application,required"`
-	Body     string `gobellim:"required,sensitivity=pii"`
+	Body     string `gobellim:"required,sensitivity=patterns"`
 	OrderID  string `gobellim:"sensitivity=secret"`
 }
 
 type TriageOutput struct {
 	Category string `gobellim:"required,oneof=billing|technical|other"`
-	Reply    string
+	Reply    string `gobellim:"resolve"`
 }
 
 type RefundArgs struct {
@@ -242,7 +242,7 @@ from.
 | `source=principal`     | the value must equal the matching field of `Principal`    |
 | `source=application`   | the value is application state and becomes trusted        |
 | `ref`                  | mint a handle, keep the value public                      |
-| `sensitivity=pii`      | replace checked email/phone/card matches with handles     |
+| `sensitivity=patterns` | replace checked email/phone/card matches with handles     |
 | `sensitivity=secret`   | replace the whole value with one handle                   |
 | `sensitivity=internal` | label only; no masking                                    |
 | `oneof=a\|b`           | string enum                                               |
@@ -263,7 +263,7 @@ The same `sensitivity` tags apply to a tool result before it re-enters the model
 context. An unknown tag on a result is an error, not a silent way to turn masking
 off.
 
-`sensitivity=pii` is a regular expression with a checksum behind it, not a
+`sensitivity=patterns` is a regular expression with a checksum behind it, not a
 classifier. It does not recognise a passport, an address or a name, and a miss is
 silent. It reduces what the model sees; it does not replace a data ACL or a DLP
 system.
@@ -304,8 +304,9 @@ The decision comes from outside the model: a person, or your own business logic
 acting as an authenticated `Principal`. The Gate checks the same action either
 way.
 
-The card the approver sees is masked: a secret argument is a handle, a PII
-argument is masked, and `Provenance` says which field is which. The real values
+The card the approver sees is masked: a secret argument is a handle, a
+`sensitivity=patterns` argument is masked, and `Provenance` says which field is
+which. The real values
 stay in `PendingAction.Args` on the server.
 
 ```go
@@ -404,8 +405,8 @@ Guaranteed when the integration is correct:
   passing validator;
 - an approval is bound to the action it showed, re-checks the Gate, runs once,
   and is rejected when the engine did not issue it;
-- the approver sees masked values, and `Out` resolves handles this run minted and
-  drops the rest;
+- the approver sees masked values, and `Out` resolves handles this run minted,
+  but only in fields tagged `resolve`; everywhere else the tokens are dropped;
 - audit events carry labels and digests, and an unfinished run is `task.failed`,
   never `task.completed`;
 - a panic in a tool handler is not turned into `Deny`. It unwinds through the

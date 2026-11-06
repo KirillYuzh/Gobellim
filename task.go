@@ -208,12 +208,20 @@ func (t *Task[In, Out]) Run(ctx context.Context, p Principal, in In) (result Tas
 	var toolCalls int
 	repaired := false
 	defer func() {
+		// A panic in a tool handler or in the model loop unwinds through this
+		// defer with err == nil, so without a recover it is audited as
+		// "incomplete". That label hides a crash: an alert on "panic" is the
+		// difference between a bug report and a mystery.
+		r := recover()
 		ev := Event{
 			RunID: runID, Task: t.cfg.Name, PrincipalID: p.UserID, Tenant: p.Tenant,
 			Latency: t.engine.elapsed(start), ModelCalls: result.ModelCalls, ToolCalls: toolCalls,
 			PromptTokens: result.Usage.PromptTokens, CompletionTokens: result.Usage.CompletionTokens, TotalTokens: result.Usage.TotalTokens,
 		}
 		switch {
+		case r != nil:
+			ev.Kind = EventTaskFailed
+			ev.Error = "panic"
 		case err != nil:
 			ev.Kind = EventTaskFailed
 			ev.Error = errorClass(err)
@@ -227,6 +235,11 @@ func (t *Task[In, Out]) Run(ctx context.Context, p Principal, in In) (result Tas
 			ev.Error = "incomplete"
 		}
 		t.engine.emit(auditCtx, ev)
+		if r != nil {
+			// The audit is the only thing this recover adds. The panic keeps
+			// unwinding so the caller sees the stack it would have seen.
+			panic(r)
+		}
 	}()
 
 	t.engine.emit(auditCtx, Event{
@@ -536,7 +549,8 @@ func (t *Task[In, Out]) runToolCall(
 		}
 		rec.Executed = true
 		// A tool result re-enters the model context, so sensitivity tags on the
-		// result struct are honoured here: a secret becomes a handle, PII is masked.
+		// result struct are honoured here: a secret becomes a handle, a patterns
+		// field is masked.
 		body, err := marshalNoEscape(redactResult(out, ct.spec.name, hs))
 		if err != nil {
 			rec.Error = err.Error()
@@ -624,9 +638,11 @@ func (t *Task[In, Out]) decodeOutput(resp Response, hs *handleSet) (Out, error) 
 	if err := t.out.validate(reflect.ValueOf(decoded)); err != nil {
 		return out, err
 	}
-	// A handle in the answer becomes the value it stands for; one this run did
-	// not mint is removed rather than shown.
-	restoreValue(reflect.ValueOf(&decoded).Elem(), hs)
+	// A handle in a field tagged resolve becomes the value it stands for. Every
+	// other field loses its tokens, minted or not, so a placeholder never
+	// reaches the caller and a secret does not leak through a field the
+	// developer did not mark.
+	restoreValue(reflect.ValueOf(&decoded).Elem(), hs, false)
 	return decoded, nil
 }
 

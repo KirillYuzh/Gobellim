@@ -7,8 +7,8 @@ import (
 	"strings"
 )
 
-// PII detection for a field tagged sensitivity=pii. A match becomes a handle,
-// the same way a secret field becomes one handle.
+// PII detection for a field tagged sensitivity=patterns. A match becomes a
+// handle, the same way a secret field becomes one handle.
 //
 // Two ideas are borrowed from cloud-ru guardrails-llm-filter: a detector is not
 // a regex but a regex plus a check, and the checks are what make the masking
@@ -18,7 +18,7 @@ import (
 // information it needs.
 //
 // This is still not a DLP system. A match is masked; a miss is not a promise.
-type piiDetector struct {
+type patternDetector struct {
 	re    *regexp.Regexp
 	valid func(match string) bool
 }
@@ -33,7 +33,7 @@ var (
 	phoneRE = regexp.MustCompile(`(?:\+7|\b8)[\s\-]?\(?[0-9]{3}\)?[\s\-]?[0-9]{3}[\s\-]?[0-9]{2}[\s\-]?[0-9]{2}\b`)
 )
 
-var piiDetectors = []piiDetector{
+var patternDetectors = []patternDetector{
 	{re: emailRE},
 	{re: ibanRE, valid: ibanValid},
 	{re: cardRE, valid: func(m string) bool { return luhnValid(digitsOnly(m)) }},
@@ -43,15 +43,15 @@ var piiDetectors = []piiDetector{
 	{re: phoneRE},
 }
 
-type piiMatch struct{ start, end int }
+type patternMatch struct{ start, end int }
 
-// maskPII replaces every detected value with its handle. The original stays in
+// maskPatterns replaces every detected value with its handle. The original stays in
 // the handle set, so the model can reference it and the answer can be restored.
-func maskPII(s string, l Label, hs *handleSet) string {
+func maskPatterns(s string, l Label, hs *handleSet) string {
 	if s == "" {
 		return s
 	}
-	matches := findPII(s)
+	matches := findPatterns(s)
 	if len(matches) == 0 {
 		return s
 	}
@@ -67,16 +67,16 @@ func maskPII(s string, l Label, hs *handleSet) string {
 	return b.String()
 }
 
-// findPII returns non-overlapping matches, leftmost and longest first. One pass
-// over the original string, so a handle is never searched for PII again.
-func findPII(s string) []piiMatch {
-	var all []piiMatch
-	for _, d := range piiDetectors {
+// findPatterns returns non-overlapping matches, leftmost and longest first. One pass
+// over the original string, so a handle is never searched for Patterns again.
+func findPatterns(s string) []patternMatch {
+	var all []patternMatch
+	for _, d := range patternDetectors {
 		for _, loc := range d.re.FindAllStringIndex(s, -1) {
 			if d.valid != nil && !d.valid(s[loc[0]:loc[1]]) {
 				continue
 			}
-			all = append(all, piiMatch{start: loc[0], end: loc[1]})
+			all = append(all, patternMatch{start: loc[0], end: loc[1]})
 		}
 	}
 	if len(all) < 2 {

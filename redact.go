@@ -15,7 +15,7 @@ var (
 )
 
 // redactResult prepares a tool result for the model context. A field tagged
-// sensitivity=secret becomes a handle, a field tagged sensitivity=pii is
+// sensitivity=secret becomes a handle, a field tagged sensitivity=patterns is
 // masked, and every other value is passed through unchanged.
 //
 // Without this, a single read tool would put the same secrets back into the
@@ -86,7 +86,7 @@ func redactValue(v reflect.Value, base Label, hs *handleSet) any {
 		return out
 	case reflect.Slice, reflect.Array:
 		if v.Type().Elem().Kind() == reflect.Uint8 {
-			if base.Sensitivity == Secret || base.Sensitivity == PII {
+			if base.Sensitivity == Secret || base.Sensitivity == Patterns {
 				return redactString(string(v.Bytes()), base, hs)
 			}
 			return v.Interface()
@@ -138,20 +138,25 @@ func redactString(s string, l Label, hs *handleSet) string {
 	switch l.Sensitivity {
 	case Secret:
 		return hs.put(s, l)
-	case PII:
-		return maskPII(s, l, hs)
+	case Patterns:
+		return maskPatterns(s, l, hs)
 	default:
 		return s
 	}
 }
 
-// restoreValue replaces every handle inside a decoded output with the value it
-// was minted for. A handle this run did not mint is removed: the model can echo
-// one, and a caller must never receive an internal placeholder.
+// restoreValue gives a handle token back its value inside a decoded output.
+//
+// Only a field tagged `resolve` is restored. A string the model wrote can
+// contain "<h3>" by chance or on purpose, and pasting the value behind that
+// handle into a reply is a disclosure nobody declared. An untagged field still
+// loses every token, minted or not, so the caller never receives an internal
+// placeholder either.
 //
 // Masking without restoration is half a feature: the customer would read
-// "order <h1> is refunded" instead of the order number.
-func restoreValue(v reflect.Value, hs *handleSet) {
+// "order  is refunded" instead of the order number. Declaring `resolve` on the
+// field that carries the answer is what turns the placeholder back into data.
+func restoreValue(v reflect.Value, hs *handleSet, resolve bool) {
 	if hs == nil || !v.IsValid() {
 		return
 	}
@@ -164,38 +169,46 @@ func restoreValue(v reflect.Value, hs *handleSet) {
 	switch v.Kind() {
 	case reflect.String:
 		if v.CanSet() {
-			v.SetString(restoreString(v.String(), hs))
+			v.SetString(restoreString(v.String(), hs, resolve))
 		}
 	case reflect.Slice, reflect.Array:
 		if v.Type().Elem().Kind() == reflect.Uint8 {
 			return
 		}
 		for i := 0; i < v.Len(); i++ {
-			restoreValue(v.Index(i), hs)
+			restoreValue(v.Index(i), hs, resolve)
 		}
 	case reflect.Struct:
 		for i := 0; i < v.NumField(); i++ {
-			if v.Type().Field(i).PkgPath != "" {
+			sf := v.Type().Field(i)
+			if sf.PkgPath != "" {
 				continue
 			}
-			restoreValue(v.Field(i), hs)
+			// A malformed tag already failed at NewTask; here a parse error just
+			// means "not declared", which is the safe direction.
+			spec, err := parseTag(sf.Tag.Get("gobellim"))
+			restoreValue(v.Field(i), hs, err == nil && spec.resolve)
 		}
 	}
 }
 
-func restoreString(s string, hs *handleSet) string {
+func restoreString(s string, hs *handleSet, resolve bool) string {
 	if !strings.Contains(s, "<h") {
 		return s
 	}
 	return handleTokenRE.ReplaceAllStringFunc(s, func(tok string) string {
-		if e, ok := hs.get(tok); ok {
-			return e.value
+		if !resolve {
+			return ""
 		}
-		return ""
+		e, ok := hs.get(tok)
+		if !ok {
+			return ""
+		}
+		return e.value
 	})
 }
 
-// maskArgsJSON returns the argument object with PII and secret values replaced
+// maskArgsJSON returns the argument object with patterns and secret values replaced
 // the same way the model saw them. An approver reads this copy; the executable
 // arguments stay in PendingAction.Args on the server.
 //
@@ -245,7 +258,7 @@ func maskJSONValue(v any, path string, labels map[string]Label, hs *handleSet) (
 		return x, changed
 	case string:
 		l, ok := labels[path]
-		if !ok || l.Sensitivity < PII || x == "" {
+		if !ok || l.Sensitivity < Patterns || x == "" {
 			return x, false
 		}
 		m := redactString(x, l, hs)

@@ -54,8 +54,9 @@ Gobellim до 1.0. Поддерживается только последний 
   digest; изменённая карточка — `ErrApprovalDrift`.
 - Апрувер видит маскированную карточку: secret-аргумент — это handle, pii
   замаскирован, а `PendingAction.Args` хранит исполняемые значения на сервере.
-- `Out` резолвит handle'ы этого запуска и вычищает остальные `<hN>`, так что
-  внутренний плейсхолдер не доходит до клиента.
+- `Out` резолвит handle'ы только в поле с тегом `resolve`; в остальных полях
+  все токены `<hN>` вычищаются, так что внутренний плейсхолдер не доходит до
+  клиента, а secret не утекает через поле, которое никто не помечал.
 - Приостановка — серверный объект, а не bearer-токен: `flow.Resume` проверяет
   tenant, expiry, текущую approval-политику, пересобранный digest действия и
   атомарный claim nonce. Ключа, который надо ротировать, нет.
@@ -82,7 +83,7 @@ Gobellim до 1.0. Поддерживается только последний 
 | `Out` резолвит свои handle'ы и вычищает чужие    | `TestOutputRestoresIssuedHandleAndDropsUnknown`                                                              |
 | `ref` — адресуемость, а не конфиденциальность    | `TestRefIsAddressableWithoutBeingSecret`                                                                     |
 | `ground` привязан к объявленному полю входа      | `TestGroundSourceMustExistInTheInput`                                                                        |
-| PII-детекторы проверяют контрольные цифры        | `TestPIIChecksums`                                                                                           |
+| `patterns`-детекторы проверяют контрольные цифры | `TestPatternsChecksums`                                                                                      |
 | общий ключ требует общего claim store            | `TestSharedApprovalKeyRequiresASharedClaimStore`, `TestWithSealerRequiresWithStore`                          |
 | redaction результата fail-closed                 | `TestResultRedactionCoversMapBytesAndString`, `TestSensitivityOnScalarResultIsRejected`, `FuzzRedactResult`  |
 | отменённое одобрение не сжигает nonce            | `TestCanceledApprovalDoesNotConsumeTheNonce`                                                                 |

@@ -15,13 +15,13 @@ import (
 type ticketIn struct {
 	TenantID       string `gobellim:"source=principal,required"`
 	TicketID       string `gobellim:"source=application,required"`
-	Body           string `gobellim:"required,sensitivity=pii"`
+	Body           string `gobellim:"required,sensitivity=patterns"`
 	RequestedOrder string `gobellim:"sensitivity=secret"`
 }
 
 type triageOut struct {
 	Category string `gobellim:"required,oneof=billing|technical|other"`
-	Reply    string
+	Reply    string `gobellim:"resolve"`
 }
 
 type refundArgs struct {
@@ -352,7 +352,7 @@ func TestInputPIIIsMaskedBeforeTheModel(t *testing.T) {
 	}
 	prompt := calls[0].Messages[1].Content
 	if strings.Contains(prompt, "alice@example.com") {
-		t.Fatalf("PII leaked to the model: %q", prompt)
+		t.Fatalf("Patterns leaked to the model: %q", prompt)
 	}
 	if !strings.Contains(prompt, "<h") {
 		t.Fatalf("prompt has no handle: %q", prompt)
@@ -692,7 +692,7 @@ type handleOnlyArgs struct {
 
 type secretResult struct {
 	Card  string `gobellim:"sensitivity=secret"`
-	Email string `gobellim:"sensitivity=pii"`
+	Email string `gobellim:"sensitivity=patterns"`
 	Note  string
 }
 
@@ -818,7 +818,7 @@ func TestToolResultIsRedacted(t *testing.T) {
 		t.Fatalf("a secret reached the model: %s", toolMsg.Content)
 	}
 	if strings.Contains(toolMsg.Content, "a@b.co") {
-		t.Fatalf("PII reached the model: %s", toolMsg.Content)
+		t.Fatalf("Patterns reached the model: %s", toolMsg.Content)
 	}
 	if !strings.Contains(toolMsg.Content, "<h1>") || !strings.Contains(toolMsg.Content, "ok") {
 		t.Fatalf("tool result lost its shape: %s", toolMsg.Content)
@@ -904,7 +904,7 @@ func TestExecuteApprovedRejectsADifferentAction(t *testing.T) {
 	}
 }
 
-func TestPanicIsAuditedAsFailure(t *testing.T) {
+func TestPanicIsAuditedAsPanic(t *testing.T) {
 	boom := gobellim.Tool[readArgs, readResult]{
 		Name:      "boom",
 		Operation: gobellim.Read,
@@ -931,6 +931,11 @@ func TestPanicIsAuditedAsFailure(t *testing.T) {
 	}
 	if rec.Count(gobellim.EventTaskFailed) != 1 {
 		t.Fatalf("events = %+v", rec.Events())
+	}
+	for _, ev := range rec.Events() {
+		if ev.Kind == gobellim.EventTaskFailed && ev.Error != "panic" {
+			t.Fatalf("Error = %q, want %q", ev.Error, "panic")
+		}
 	}
 }
 
@@ -1336,7 +1341,7 @@ func TestGroundSourceMustExistInTheInput(t *testing.T) {
 
 type maskedArgs struct {
 	OrderID string `gobellim:"required,ground=RequestedOrder"`
-	Email   string `gobellim:"sensitivity=pii"`
+	Email   string `gobellim:"sensitivity=patterns"`
 }
 
 type maskedResult struct {
@@ -1387,7 +1392,7 @@ func TestApprovalCardMasksSensitiveArguments(t *testing.T) {
 	for _, p := range res.Pending.Card.Provenance {
 		seen[p.Arg] = p.Sensitivity
 	}
-	if seen["OrderID"] != gobellim.Secret || seen["Email"] != gobellim.PII {
+	if seen["OrderID"] != gobellim.Secret || seen["Email"] != gobellim.Patterns {
 		t.Fatalf("provenance = %v, want secret OrderID and pii Email", seen)
 	}
 
@@ -1404,9 +1409,10 @@ func TestApprovalCardMasksSensitiveArguments(t *testing.T) {
 	}
 }
 
-// A handle in the answer becomes the value it stands for; one this run did not
-// mint is removed. Otherwise the first real reply to a customer reads
-// "refunded <h1>".
+// A handle in a field tagged resolve becomes the value it stands for; a handle
+// this run did not mint, and every handle in an untagged field, is removed.
+// Otherwise the first real reply to a customer reads "refunded <h1>", and a
+// model that types "<h3>" pulls a secret into the answer.
 func TestOutputRestoresIssuedHandleAndDropsUnknown(t *testing.T) {
 	model := testkit.NewFakeModel(
 		testkit.Reply(`{"Category":"billing","Reply":"refunded <h1>; unknown <h2> done"}`),
@@ -1424,6 +1430,63 @@ func TestOutputRestoresIssuedHandleAndDropsUnknown(t *testing.T) {
 	}
 	if !strings.Contains(res.Output.Reply, "A-100") {
 		t.Fatalf("reply = %q, want the restored order number", res.Output.Reply)
+	}
+}
+
+// An output field without the tag never gives a handle its value back. A
+// secret argument materialises as <h1>, so a model that echoes the token would
+// otherwise paste the value into a customer-facing reply.
+func TestOutputWithoutResolveTagDropsHandle(t *testing.T) {
+	type out struct {
+		Reply string
+	}
+	model := testkit.NewFakeModel(
+		testkit.Reply(`{"Reply":"refunded <h1> done"}`),
+	)
+	task, err := gobellim.NewTask[refIn, out](newEngine(t, model, testkit.AllowAll, nil), gobellim.TaskConfig{
+		Name: "refund", Instruction: "answer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := task.Run(context.Background(), principal(), refIn{
+		TenantID: "acme", TicketID: "t-1", OrderID: "A-100",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(res.Output.Reply, "A-100") || strings.Contains(res.Output.Reply, "<h") {
+		t.Fatalf("reply = %q, want the token removed and the value withheld", res.Output.Reply)
+	}
+}
+
+// resolve is an output-side tag. Accepting it on an input field or a tool
+// argument would read as a protection the runtime never applies.
+func TestResolveTagIsRejectedOutsideTheOutput(t *testing.T) {
+	type badIn struct {
+		Body string `gobellim:"resolve"`
+	}
+	if _, err := gobellim.NewTask[badIn, triageOut](newEngine(t, testkit.NewFakeModel(), testkit.AllowAll, nil), gobellim.TaskConfig{
+		Name: "t", Instruction: "i",
+	}); !errors.Is(err, gobellim.ErrInvalidConfig) {
+		t.Fatalf("input err = %v, want ErrInvalidConfig", err)
+	}
+
+	type badArgs struct {
+		Query string `gobellim:"resolve"`
+	}
+	bad := gobellim.Tool[badArgs, triageOut]{
+		Name:      "q",
+		Operation: gobellim.Read,
+		Target:    testResource[badArgs],
+		Run: func(context.Context, gobellim.Principal, badArgs) (triageOut, error) {
+			return triageOut{}, nil
+		},
+	}
+	if _, err := gobellim.NewTask[ticketIn, triageOut](newEngine(t, testkit.NewFakeModel(), testkit.AllowAll, nil), gobellim.TaskConfig{
+		Name: "t", Instruction: "i", Tools: []gobellim.ToolDef{bad},
+	}); !errors.Is(err, gobellim.ErrInvalidConfig) {
+		t.Fatalf("argument err = %v, want ErrInvalidConfig", err)
 	}
 }
 

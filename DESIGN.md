@@ -186,12 +186,14 @@ type TicketInput struct {
     // not be trusted merely because they appear in user text.
     TenantID string `gobellim:"source=principal"`
     TicketID string `gobellim:"source=application"`
-    Body     string `gobellim:"required,sensitivity=pii"`
+    Body     string `gobellim:"untrusted,sensitivity=patterns"`
 }
 
 type TriageOutput struct {
     Category string `gobellim:"oneof=billing|technical|other"`
-    Reply    string // free-form model text: remains untrusted-derived
+    // resolve: a handle token in this field becomes its value again.
+    // Untagged, the token is removed: model text is untrusted-derived.
+    Reply    string `gobellim:"resolve"`
 }
 
 engine, err := gobellim.New(
@@ -264,7 +266,7 @@ refundTool := gobellim.Tool[RefundArgs, RefundResult]{
 
 Теги нужны, чтобы не дублировать простые ограничения в нескольких местах. Встроенная генерация схемы поддерживает только документированное подмножество типов/тегов и должна отказывать на неизвестном или неоднозначном ограничении. Важные бизнес-правила остаются обычными валидаторами Go. Схема для модели никогда не заменяет повторную runtime-валидацию аргументов.
 
-Поддерживаемое подмножество: `string`, `bool`, целые и дробные числа, срезы скаляров и вложенные структуры глубиной до двух уровней. Теги: `required`, `source=principal|application`, `ref`, `sensitivity=public|internal|pii|secret`, `oneof=a|b`, `min`, `max`, `ground` (или `ground=ПолеВхода`, `ground=any`). `source` и `ref` допустимы только в схеме входа задачи, `ground` только в схеме аргументов инструмента: тег не с той стороны — `ErrInvalidConfig` на `NewTask`, а не молчаливый no-op. `ref` и `sensitivity` взаимоисключающие: первый делает значение адресуемым, вторая ограничивает раскрытие. `sensitivity=pii` маскирует совпадения и проверяет контрольную сумму для карт (Luhn), СНИЛС, ИНН, ОГРН и IBAN, чтобы номер заказа или счёта без валидной суммы не превращался в handle; `sensitivity=secret` заменяет всё значение одним handle. `source`, `ref` и `ground` применимы только к `string`, `sensitivity` — к `string` и `[]string`. Неизвестный тег, `map`, указатель, интерфейс, срез структур, `time.Time`, `[]byte`, встроенная struct без явного `json`-имени и вложенность глубже двух уровней отклоняются на этапе `NewTask`. `required` на `bool` запрещён: ноль неотличим от отсутствия. `required` на строке и числе означает ненулевое значение. `ground`-поле принимает только существующий handle, созданный для этого запуска; сырая строка от модели не grounds аргумент.
+Поддерживаемое подмножество: `string`, `bool`, целые и дробные числа, срезы скаляров и вложенные структуры глубиной до двух уровней. Теги: `required`, `source=principal|application`, `ref`, `sensitivity=public|internal|patterns|secret`, `oneof=a|b`, `min`, `max`, `ground` (или `ground=ПолеВхода`, `ground=any`). `source` и `ref` допустимы только в схеме входа задачи, `ground` только в схеме аргументов инструмента: тег не с той стороны — `ErrInvalidConfig` на `NewTask`, а не молчаливый no-op. `ref` и `sensitivity` взаимоисключающие: первый делает значение адресуемым, вторая ограничивает раскрытие. `sensitivity=patterns` маскирует совпадения и проверяет контрольную сумму для карт (Luhn), СНИЛС, ИНН, ОГРН и IBAN, чтобы номер заказа или счёта без валидной суммы не превращался в handle; `sensitivity=secret` заменяет всё значение одним handle. `source`, `ref` и `ground` применимы только к `string`, `sensitivity` — к `string` и `[]string`. Неизвестный тег, `map`, указатель, интерфейс, срез структур, `time.Time`, `[]byte`, встроенная struct без явного `json`-имени и вложенность глубже двух уровней отклоняются на этапе `NewTask`. `required` на `bool` запрещён: ноль неотличим от отсутствия. `required` на строке и числе означает ненулевое значение. `ground`-поле принимает только существующий handle, созданный для этого запуска; сырая строка от модели не grounds аргумент.
 
 `encoding/json`-путь должен ограничивать размер, отклонять неизвестные поля там, где это возможно, проверять обязательные значения и не принимать неограниченную вложенность/массивы без лимитов.
 
@@ -287,7 +289,7 @@ type Sensitivity uint8
 const (
 Public Sensitivity = iota
 Internal
-PII
+Patterns
 Secret
 )
 
@@ -743,7 +745,7 @@ P0 и P1 реализованы, кроме sealed continuation: токена н
 5. Какие дефолтные лимиты размеров, tool calls, TTL и continuation выбирать после нагрузочных и attack-тестов?
 6. Какие изменения policy должны требовать немедленного отказа, а какие допускают явную миграцию старого workflow state?
 7. Как проверять не только unauthorized actions, но и сохранение полезности легитимных сценариев без зависимости от случайности провайдера?
-8. Резолвить ли handles в `Out` или только вычищать неизвестные `<hN>`? Решено: и то и другое — выпущенный в этом запуске handle резолвится, остальные удаляются.
+8. Резолвить ли handles в `Out` или только вычищать неизвестные `<hN>`? Решено: только в поле с тегом `resolve`; во всех остальных полях токены удаляются. Иначе модель, написавшая `<h3>`, заставляет рантайм вклеить secret в ответ.
 
 ## 16. Источники и prior art
 

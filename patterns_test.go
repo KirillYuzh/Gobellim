@@ -7,7 +7,7 @@ import (
 
 // A detector is a regex plus a check. Without the check, an invoice number or a
 // timestamp becomes a handle and the model loses information it needs.
-func TestPIIChecksums(t *testing.T) {
+func TestPatternsChecksums(t *testing.T) {
 	tests := []struct {
 		name  string
 		valid func(string) bool
@@ -59,12 +59,12 @@ func TestPIIChecksums(t *testing.T) {
 	}
 }
 
-func TestMaskPIIMintsHandlesOnlyForCheckedMatches(t *testing.T) {
+func TestMaskPatternsMintsHandlesOnlyForCheckedMatches(t *testing.T) {
 	hs := newHandleSet()
-	label := Label{Integrity: Untrusted, Sensitivity: PII}
+	label := Label{Integrity: Untrusted, Sensitivity: Patterns}
 	in := "card 4111 1111 1111 1111, order 1234567890123456, mail user@example.com"
 
-	got := maskPII(in, label, hs)
+	got := maskPatterns(in, label, hs)
 
 	if strings.Contains(got, "4111") {
 		t.Fatalf("a Luhn-valid card was not masked: %q", got)
@@ -80,12 +80,12 @@ func TestMaskPIIMintsHandlesOnlyForCheckedMatches(t *testing.T) {
 	}
 }
 
-// A handle is never searched for PII again: one pass over the original string
+// A handle is never searched for Patterns again: one pass over the original string
 // keeps a masked value from being masked twice.
-func TestMaskPIIIsOnePass(t *testing.T) {
+func TestMaskPatternsIsOnePass(t *testing.T) {
 	hs := newHandleSet()
-	label := Label{Integrity: Untrusted, Sensitivity: PII}
-	got := maskPII("a@example.com and b@example.com", label, hs)
+	label := Label{Integrity: Untrusted, Sensitivity: Patterns}
+	got := maskPatterns("a@example.com and b@example.com", label, hs)
 
 	if strings.Count(got, "<h") != 2 {
 		t.Fatalf("masked = %q, want two handles", got)

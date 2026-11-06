@@ -51,7 +51,7 @@ type prepared struct {
 	target Resource
 	digest string
 	// raw is the resolved argument object the handler receives; masked is the
-	// same object with secret and PII fields replaced, and it is what an
+	// same object with secret and patterns fields replaced, and it is what an
 	// approver is shown.
 	raw         json.RawMessage
 	masked      json.RawMessage
@@ -250,8 +250,8 @@ func checkResultType(t reflect.Type, spec tagSpec, depth int, seen map[reflect.T
 			if err != nil {
 				return fmt.Errorf("%w: result %s.%s", err, t.Name(), sf.Name)
 			}
-			if ts.ref || ts.ground || ts.source != "" {
-				return fmt.Errorf("%w: result %s.%s: ref, ground and source apply to a task input field", ErrInvalidConfig, t.Name(), sf.Name)
+			if ts.ref || ts.ground || ts.source != "" || ts.resolve {
+				return fmt.Errorf("%w: result %s.%s: ref, ground, resolve and source apply to a task field, not to a tool result", ErrInvalidConfig, t.Name(), sf.Name)
 			}
 			if err := checkResultType(sf.Type, ts, depth+1, seen); err != nil {
 				return err
