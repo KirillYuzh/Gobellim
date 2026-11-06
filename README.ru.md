@@ -143,7 +143,7 @@ type TicketInput struct {
 
 type TriageOutput struct {
 	Category string `gobellim:"required,oneof=billing|technical|other"`
-	Reply    string
+	Reply    string `gobellim:"resolve"`
 }
 
 type RefundArgs struct {
@@ -245,6 +245,7 @@ RBAC/ACL, бизнес-валидация, затем потолок опера�
 | `source=principal`     | строка должна совпадать с полем `Principal`                        |
 | `source=application`   | значение пришло из состояния приложения и получает `Trusted`       |
 | `ref`                  | выпустить handle, оставив значение публичным                       |
+| `resolve`              | (только выход) handle в строке снова становится значением          |
 | `sensitivity=pii`      | проверенные совпадения e-mail/телефона/карты заменяются на handles |
 | `sensitivity=secret`   | всё значение заменяется одним handle                               |
 | `sensitivity=internal` | метка без маскирования                                             |
@@ -407,8 +408,8 @@ engine, err := gobellim.New(
   пересказ, ни через прошедший валидатор;
 - одобрение привязано к показанному действию, заново прогоняет Gate, исполняется
   один раз и отклоняется, если engine его не выпускал;
-- апрувер видит маскированные значения, а `Out` резолвит handle'ы этого запуска и
-  вычищает остальные;
+- апрувер видит маскированные значения, а `Out` резолвит handle'ы только в полях
+  с тегом `resolve` и вычищает токены везде остальном;
 - audit несёт labels и digest, а незавершённый запуск — это `task.failed`,
   никогда `task.completed`;
 - паника в tool handler не превращается в `Deny`. Она разматывается через

@@ -624,9 +624,11 @@ func (t *Task[In, Out]) decodeOutput(resp Response, hs *handleSet) (Out, error) 
 	if err := t.out.validate(reflect.ValueOf(decoded)); err != nil {
 		return out, err
 	}
-	// A handle in the answer becomes the value it stands for; one this run did
-	// not mint is removed rather than shown.
-	restoreValue(reflect.ValueOf(&decoded).Elem(), hs)
+	// A handle in a field tagged resolve becomes the value it stands for. Every
+	// other field loses its tokens, minted or not, so a placeholder never
+	// reaches the caller and a secret does not leak through a field the
+	// developer did not mark.
+	restoreValue(reflect.ValueOf(&decoded).Elem(), hs, false)
 	return decoded, nil
 }
 

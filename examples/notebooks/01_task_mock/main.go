@@ -20,7 +20,7 @@ type TicketInput struct {
 
 type TriageOutput struct {
 	Category string `gobellim:"required,oneof=billing|technical|other"`
-	Reply    string
+	Reply    string `gobellim:"resolve"`
 }
 
 type RefundArgs struct {

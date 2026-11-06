@@ -35,6 +35,10 @@ type tagSpec struct {
 	// groundSource names the input field a grounded handle must come from.
 	// Empty means "the argument path itself"; "any" disables the check.
 	groundSource string
+	// resolve lets a task output field take a handle's value back. Without it an
+	// output string keeps no handle token at all: the model can echo "<h3>", and
+	// pasting a secret into a reply is a disclosure nobody declared.
+	resolve bool
 }
 
 func badTag(key string) error {
@@ -110,6 +114,11 @@ func parseTag(raw string) (tagSpec, error) {
 				return s, badTag(key)
 			}
 			s.ref = true
+		case "resolve":
+			if hasVal {
+				return s, badTag(key)
+			}
+			s.resolve = true
 		case "ground":
 			if hasVal {
 				if val == "" {
@@ -674,6 +683,9 @@ func (s *structSchema) checkInputTags() error {
 		if f.spec.ground {
 			return fmt.Errorf("%w: %s.%s: ground applies to a tool argument, not to a task input field", ErrInvalidConfig, s.typ, f.goName)
 		}
+		if f.spec.resolve {
+			return fmt.Errorf("%w: %s.%s: resolve applies to a task output field, not to a task input field", ErrInvalidConfig, s.typ, f.goName)
+		}
 		if f.spec.ref && f.spec.hasSensitivity {
 			// ref means "public but addressable"; sensitivity means "limit
 			// disclosure". A value cannot be both, and picking one silently would
@@ -700,6 +712,9 @@ func (s *structSchema) checkArgTags() error {
 		}
 		if f.spec.ref {
 			return fmt.Errorf("%w: %s.%s: ref applies to a task input field, not to a tool argument", ErrInvalidConfig, s.typ, f.goName)
+		}
+		if f.spec.resolve {
+			return fmt.Errorf("%w: %s.%s: resolve applies to a task output field, not to a tool argument", ErrInvalidConfig, s.typ, f.goName)
 		}
 		if f.nested != nil {
 			if err := f.nested.checkArgTags(); err != nil {
