@@ -25,7 +25,7 @@ Gobellim до 1.0. Поддерживается только последний 
 
 - коду приложения, его конфигурации и зарегистрированным tool handlers;
 - `Principal`, созданному после аутентификации;
-- источникам policy и ключу continuation;
+- источникам policy;
 - решению аутентифицированного approver в рамках показанного ему действия.
 
 Не доверяем:
@@ -43,21 +43,54 @@ Gobellim до 1.0. Поддерживается только последний 
 - Каждый model-initiated tool call проходит через `gate.go`.
 - Неизвестный инструмент, невалидные аргументы, ошибка авторизации и
   ungrounded-аргументы — `Deny`.
-- Метки могут только ухудшаться; свободный текст модели — `Derived`.
-- Handle, выданный не в этом run, отклоняется как ungrounded.
-- Одобрение привязано к инструменту и каноническим аргументам через digest.
-- Continuation использует AES-GCM с key ID и AAD tenant/flow; подделанный,
-  истёкший или чужой токен отклоняется.
+- Метки могут только ухудшаться. `Tool.Validate` только отказывает; потолок
+  поднимает лишь одобрение вне модели конкретного действия, и оно заменяет
+  потолок access, а не метки.
+- Handle, выданный не в этом run, handle в non-`ground` поле и handle из чужого
+  входного поля отклоняются как ungrounded.
+- Любой access, кроме `AccessCompute`, требует непустого `Target`: ACL не может
+  молча выродиться в RBAC.
+- Одобрение привязано ко всей карточке и каноническим аргументам через HMAC и
+  digest; изменённая карточка — `ErrApprovalDrift`.
+- Приостановка — серверный объект, а не bearer-токен: `flow.Resume` проверяет
+  tenant, expiry, текущую approval-политику, пересобранный digest действия и
+  атомарный claim nonce. Ключа, который надо ротировать, нет.
+- Отменённый запрос `ExecuteApproved` не расходует nonce.
 - Аудит хранит digest и метки, а не prompt text, сырые аргументы, секреты или
-  токены.
+  approval nonces.
+
+## Гарантия → тест
+
+Каждая гарантия выше закреплена тестом: рефакторинг, который уберёт проверку,
+уронит CI, а не молча ослабит библиотеку.
+
+| Гарантия                                         | Тест                                                                                                         |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| каждый вызов идёт через Gate                     | `TestUngroundedCallDoesNotReachTheAuthorizer`, `TestRBACDenyDoesNotExecute`                                  |
+| неизвестный инструмент и плохие аргументы — Deny | `TestUnknownToolIsDenied`, `TestInvalidOutputIsRejected`                                                     |
+| handle вне `ground` — Deny                       | `TestHandleIsRejectedOutsideGroundField`                                                                     |
+| handle из чужого поля — Deny                     | `TestGroundRejectsHandleFromAnotherField`                                                                    |
+| выдуманный handle — Deny                         | `TestFabricatedHandleIsDenied`, `TestUngroundedArgumentIsDenied`                                             |
+| `Validate` ничего не повышает                    | `TestUntrustedHandleWithValidatorStillEscalates`, `TestGroundedHandleWithoutValidatorEscalates`              |
+| `Send` требует trusted-происхождения             | `TestUntrustedHandleCannotSend`                                                                              |
+| любой access кроме `Compute` требует цель        | `TestNonReadToolRequiresResource`, `TestReadWithoutTargetIsAConfigError`, `TestWriteWithEmptyTargetIsDenied` |
+| redaction результата fail-closed                 | `TestResultRedactionCoversMapBytesAndString`, `TestSensitivityOnScalarResultIsRejected`, `FuzzRedactResult`  |
+| отменённое одобрение не сжигает nonce            | `TestCanceledApprovalDoesNotConsumeTheNonce`                                                                 |
+| одобрение одноразово                             | `TestExecuteApprovedIsSingleUse`, `TestParallelResume`                                                       |
+| цель одобрения привязана к tenant                | `TestResumeRejectsForeignTenantTarget`                                                                       |
+| подделанная карточка отклоняется                 | `TestTamperedCard`                                                                                           |
+| `MaxTokens` ограничен                            | `TestRequestCarriesBoundedMaxTokens`                                                                         |
+| claim store ограничен                            | `TestMemClaimsIsBounded`                                                                                     |
+| один Engine и Task безопасны к гонкам            | `TestTaskRunIsConcurrentSafe` (с `-race`)                                                                    |
+| парсер тегов и редактор держат любой ввод        | `FuzzParseTag`, `FuzzDecodeStrict`, `FuzzResolveHandles`, `FuzzRedactResult`                                 |
 
 ## Что не покрыто
 
 - Поведение провайдера модели и сетевой путь до него.
-- Компрометация процесса приложения, конфигурации или ключа continuation.
+- Компрометация процесса приложения или конфигурации.
 - Retrieval и data ACL. Приложение обязано отфильтровать документы до передачи
   их в `Task`.
-- Корректность permissions, эффектов инструментов и resource binding, которые
+- Корректность permissions, access инструментов и resource binding, которые
   объявило приложение.
 - Exactly-once для внешнего побочного эффекта.
 - Межрепличная одноразовость Resume без `Store`.

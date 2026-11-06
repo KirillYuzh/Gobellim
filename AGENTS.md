@@ -16,39 +16,41 @@ layer and must match the current code; if code and `DESIGN.md` disagree, fix bot
 - The model proposes; the Gate decides. Every model-initiated tool call goes
   through the Gate in `gate.go`. Never call a tool handler directly from the
   model loop.
-- `gobellim.New` and `flow.New` require a model, an authorizer and an audit sink;
-  each missing one is `ErrInvalidConfig`. Do not reintroduce a silent no-op
-  default: a run without an audit trail must be an explicit
+- `gobellim.New` requires a model, an authorizer and an audit sink; `flow.New`
+  requires an authorizer and an audit sink. Each missing one is
+  `ErrInvalidConfig`. Do not reintroduce a silent no-op default: a run without an
+  audit trail must be an explicit
   `SlogSink{Logger: slog.New(slog.DiscardHandler)}`.
-- Unknown tool, invalid arguments, authorizer error, tenant mismatch and
-  ungrounded arguments are `Deny`, never `Allow`.
+- Unknown tool, invalid arguments, authorizer error, tenant mismatch, a target
+  mismatch and ungrounded arguments are `Deny`, never `Allow`.
 - Gate order is tenant binding → grounding → `Authorizer` → `Tool.Validate` →
-  effect ceiling. Do not move `Authorizer` before grounding: an id the model
+  access ceiling. Do not move `Authorizer` before grounding: an id the model
   invented must not reach the application's ACL, and `Validate` must not run for
   a caller who is already unauthorized.
-- `Operation` has no permissive default. The zero value is `OperationUnknown` and
-  `NewTask` rejects it; declare `OperationRead`, `OperationWrite`, `OperationSend`,
-  `OperationDelete` or `OperationCompute`. `Compute` is target-free; every other class
-  requires `Tool.Target` to return a `Resource` with a non-empty `Type`, `ID` and
-  `TenantID`.
+- `Access` has no permissive default. The zero value is `AccessUnknown` and
+  `NewTask` rejects it; declare `AccessRead`, `AccessWrite`, `AccessSend`,
+  `AccessDelete` or `AccessCompute`. `AccessCompute` is target-free; every other
+  access requires `Tool.Target` to return a non-empty `Resource`.
 - An empty label set is `Untrusted`. Do not initialize an accumulator to
   `Trusted` without a non-empty-label check.
-- `ground` means "the value must be an existing handle minted for this run". A
-  raw string from the model never grounds an argument. To let the model
-  reference a value, mark the input field `sensitivity=secret` or
-  `sensitivity=pii`.
+- `ground` means "the value must be an existing handle minted for this run, from
+  the declared input field". A raw string from the model never grounds an
+  argument, and a handle in a non-`ground` field is `ErrUngrounded`. A bare
+  `ground` binds to the argument path; `ground=SourceField` binds to another
+  input field; `ground=any` is the explicit opt-out. To let the model reference a
+  value, mark the input field `sensitivity=secret` or `sensitivity=pii`.
 - Labels only worsen. Do not add a path that promotes `Untrusted`/`Derived` to
-  `Trusted`. There is no promotion inside the Gate: `Tool.Validate` confirms the
-  business meaning, not the origin, so its success raises nothing. `Trusted`
-  arrives only from a task input field marked `source=principal` or
-  `source=application`, and from the handle minted for such a field. Free model
-  text is `Derived`; `oneof` and numeric ranges constrain shape, not truth.
+  `Trusted` without an explicit approval outside the model. `Tool.Validate` is deny-only: a
+  successful `Validate` promotes nothing, so a model-supplied handle never
+  becomes `Trusted`. Free model text is `Derived`; `oneof` and numeric ranges
+  constrain shape, not truth. `Validated` does not exist.
 - A tool result re-enters the model context, so `sensitivity` on the result
   struct is honoured before the result is marshalled (`redact.go`). Do not add a
   path that puts a raw `secret` field into a tool message. An unknown tag on a
   result is a configuration error.
-- `Target` is required for `Write`, `Send` and `Delete`: without a target the
-  ACL check silently degrades to RBAC only.
+- `Target` is required for every access except `AccessCompute`: without a
+  non-empty `Resource` the ACL check silently degrades to RBAC only. An empty
+  target is `Deny` with rule `target-unbound`.
 - `PendingAction` is single-use. `Task.ExecuteApproved` claims its nonce in the
   `Engine` ClaimStore before the handler runs; a second call is
   `ErrApprovalReplay`. Claim before the effect is deliberate: a crash loses the
@@ -80,8 +82,8 @@ layer and must match the current code; if code and `DESIGN.md` disagree, fix bot
 - Tests use the standard library only. Validate with
   `go build ./... && go vet ./... && go test ./... -race -shuffle=on`.
   `testkit.DiscardAudit()` is the explicit sink for a test that ignores audit.
-- Never log or persist prompt text, raw arguments, secrets or continuation
-  tokens. Audit events carry digests and labels, not values.
+- Never log or persist prompt text, raw arguments, secrets or approval nonces.
+  Audit events carry digests and labels, not values.
 - The `gobellim:"..."` tag subset is documented in `DESIGN.md` §5.3 and
   `README.md`. Rejecting an unknown tag is intentional.
 - `source` and `ground` apply to strings only, on opposite sides of the
@@ -96,16 +98,17 @@ layer and must match the current code; if code and `DESIGN.md` disagree, fix bot
 
 ## Layout
 
-| Path                    | What                                                                                                   |
-| ----------------------- | ------------------------------------------------------------------------------------------------------ |
-| `*.go`                  | the root `gobellim` package: `Engine`, `Task`, `Tool`, `Gate`, labels, handles, schema, audit          |
-| `flow/`                 | sequential workflow, approval card, `Suspension` the application stores, `Store` interface, `MemStore` |
-| `store/sql/`            | `database/sql` claims adapter with `Prune`                                                             |
-| `plugins/langfuse/`     | optional audit sink: batched trace/generation/span ingestion, dry-run mode                             |
-| `plugins/gigachat/`     | optional GigaChat model adapter: freemium OAuth, `functions`/`function_call` mapping                   |
-| `examples/notebooks/`   | runnable notebook-style scenarios: deterministic mocks and real GigaChat free-tier calls               |
-| `testkit/`              | fake model, authorizers, audit recorder                                                                |
-| `internal/importrules/` | stdlib-only dependency-direction test                                                                  |
-| `DESIGN.md`             | the specification                                                                                      |
-| `docs/`                 | how-to documentation                                                                                   |
-| `site/`                 | docs site                                                                                              |
+| Path                    | What                                                                                                                 |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `*.go`                  | the root `gobellim` package: `Engine`, `Task`, `Tool`, `Gate`, labels, handles, schema, audit                        |
+| `flow/`                 | sequential workflow, approval card, `Store` interface, `MemStore`; suspensions are stored by the application         |
+| `store/sql/`            | `database/sql` claims adapter with `Prune`                                                                           |
+| `plugins/langfuse/`     | optional audit sink: batched trace/generation/span ingestion, dry-run mode                                           |
+| `plugins/gigachat/`     | optional GigaChat model adapter: freemium OAuth, `functions`/`function_call` mapping                                 |
+| `examples/notebooks/`   | runnable notebook-style scenarios: deterministic mocks and real GigaChat free-tier calls                             |
+| `testkit/`              | fake model, authorizers, audit recorder                                                                              |
+| `internal/importrules/` | stdlib-only dependency-direction test                                                                                |
+| `DESIGN.md`             | the specification                                                                                                    |
+| `docs/`                 | how-to documentation                                                                                                 |
+| `site/`                 | docs site                                                                                                            |
+| `embedding-demo/`       | embeddings example: e5-small via ONNX Runtime in-process, hybrid BM25 + kNN in Elasticsearch, own module and compose |
