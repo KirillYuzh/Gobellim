@@ -263,6 +263,11 @@ The same `sensitivity` tags apply to a tool result before it re-enters the model
 context. An unknown tag on a result is an error, not a silent way to turn masking
 off.
 
+`sensitivity=pii` is a regular expression with a checksum behind it, not a
+classifier. It does not recognise a passport, an address or a name, and a miss is
+silent. It reduces what the model sees; it does not replace a data ACL or a DLP
+system.
+
 ## Grounding is a handle
 
 A `ground` field accepts only a handle minted for this run, so the model cannot
@@ -270,6 +275,10 @@ invent an ID or paste a trusted string it saw elsewhere. Mark the input field
 `ref` to make a public value addressable: the model sees a handle, while the
 approver card and the audit keep the value. For confidential data use
 `sensitivity=secret` instead.
+
+`ref` mints one handle for the whole value, `secret` hides the whole value and
+mints the same handle, and `pii` masks only the fragments it detects. Pick by
+what the model needs to reference, not by how secret the value feels.
 
 A bare `ground` binds to the argument's own path. `ground=TicketID` names another
 input field. `ground=any` is the explicit opt-out.
@@ -340,6 +349,21 @@ The `Suspension` and the state are yours to store. A suspension built from a
 request body is `ErrFlowDrift`, because the issuing flow signs it. Without
 `WithStore` the claim store is process-local; between replicas, share a `Store`
 and give every engine the same `gobellim.WithApprovalKey`.
+
+Without `WithClaimStore` the store keeps 262,144 nonces, which is about 70
+approvals per second at the default one-hour TTL. When it is full the claim fails
+closed with `ErrClaimStoreFull`; use `store/sql` above that rate.
+
+### Which path
+
+- **One action, one decision.** `Task.Run` returns a `PendingAction` and
+  `ExecuteApproved` executes it. This is the shortest path to production.
+- **Several steps, a TTL, or a durable suspension.** `flow` runs one
+  `Run`/`Resume` pair per approval boundary and keeps the state in your store.
+- **`flow` is the stricter one.** It authorizes the approver through the
+  `Authorizer` and re-checks the requester's action permission on resume.
+  `ExecuteApproved` trusts the two principals the application passes, so the
+  application must authenticate both.
 
 ## Observability
 
