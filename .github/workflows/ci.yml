@@ -94,3 +94,20 @@ jobs:
           cache: true
       - run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
       - run: govulncheck ./...
+
+  site:
+    name: docs site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      # The pages under site/ are built from the same Markdown this repository
+      # tests, and nothing else checks that they still render.
+      - run: npm ci
+        working-directory: site
+      - run: npm run build
+        working-directory: site
