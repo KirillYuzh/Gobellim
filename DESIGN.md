@@ -191,7 +191,9 @@ type TicketInput struct {
 
 type TriageOutput struct {
     Category string `gobellim:"oneof=billing|technical|other"`
-    Reply    string // free-form model text: remains untrusted-derived
+    // resolve: a handle token in this field becomes its value again.
+    // Untagged, the token is removed: model text is untrusted-derived.
+    Reply    string `gobellim:"resolve"`
 }
 
 engine, err := gobellim.New(
@@ -743,7 +745,7 @@ P0 и P1 реализованы, кроме sealed continuation: токена н
 5. Какие дефолтные лимиты размеров, tool calls, TTL и continuation выбирать после нагрузочных и attack-тестов?
 6. Какие изменения policy должны требовать немедленного отказа, а какие допускают явную миграцию старого workflow state?
 7. Как проверять не только unauthorized actions, но и сохранение полезности легитимных сценариев без зависимости от случайности провайдера?
-8. Резолвить ли handles в `Out` или только вычищать неизвестные `<hN>`? Решено: и то и другое — выпущенный в этом запуске handle резолвится, остальные удаляются.
+8. Резолвить ли handles в `Out` или только вычищать неизвестные `<hN>`? Решено: только в поле с тегом `resolve`; во всех остальных полях токены удаляются. Иначе модель, написавшая `<h3>`, заставляет рантайм вклеить secret в ответ.
 
 ## 16. Источники и prior art
 

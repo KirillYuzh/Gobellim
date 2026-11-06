@@ -143,7 +143,7 @@ type TicketInput struct {
 
 type TriageOutput struct {
 	Category string `gobellim:"required,oneof=billing|technical|other"`
-	Reply    string
+	Reply    string `gobellim:"resolve"`
 }
 
 type RefundArgs struct {
@@ -407,8 +407,8 @@ engine, err := gobellim.New(
   пересказ, ни через прошедший валидатор;
 - одобрение привязано к показанному действию, заново прогоняет Gate, исполняется
   один раз и отклоняется, если engine его не выпускал;
-- апрувер видит маскированные значения, а `Out` резолвит handle'ы этого запуска и
-  вычищает остальные;
+- апрувер видит маскированные значения, а `Out` резолвит handle'ы только в полях
+  с тегом `resolve` и вычищает токены везде остальном;
 - audit несёт labels и digest, а незавершённый запуск — это `task.failed`,
   никогда `task.completed`;
 - паника в tool handler не превращается в `Deny`. Она разматывается через

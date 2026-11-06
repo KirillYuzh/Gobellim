@@ -142,7 +142,7 @@ type TicketInput struct {
 
 type TriageOutput struct {
 	Category string `gobellim:"required,oneof=billing|technical|other"`
-	Reply    string
+	Reply    string `gobellim:"resolve"`
 }
 
 type RefundArgs struct {
@@ -405,8 +405,8 @@ Guaranteed when the integration is correct:
   passing validator;
 - an approval is bound to the action it showed, re-checks the Gate, runs once,
   and is rejected when the engine did not issue it;
-- the approver sees masked values, and `Out` resolves handles this run minted and
-  drops the rest;
+- the approver sees masked values, and `Out` resolves handles this run minted,
+  but only in fields tagged `resolve`; everywhere else the tokens are dropped;
 - audit events carry labels and digests, and an unfinished run is `task.failed`,
   never `task.completed`;
 - a panic in a tool handler is not turned into `Deny`. It unwinds through the
