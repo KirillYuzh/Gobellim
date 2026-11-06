@@ -6,67 +6,79 @@ import (
 	"fmt"
 )
 
-// Effect is the side-effect class of a tool. The zero value is unknown and is
-// rejected by NewTask: a tool must declare what it does.
-type Effect uint8
+// Operation says what a tool does to the world. It is the first thing a reader
+// should understand about a tool, so the values are verbs, not access-system
+// terms. The zero value is invalid and NewTask rejects it.
+type Operation uint8
 
 const (
-	// EffectUnknown is the zero value. It is never a valid tool effect.
-	EffectUnknown Effect = iota
-	// EffectRead reads state.
-	EffectRead
-	// EffectWrite mutates state.
-	EffectWrite
-	// EffectEgress sends data outside the trust boundary.
-	EffectEgress
-	// EffectDestructive is an irreversible or high-risk action.
-	EffectDestructive
+	// OperationUnknown is the zero value. It is never a valid tool operation.
+	OperationUnknown Operation = iota
+	// OperationRead reads application or external data. Target is required,
+	// because the authorizer needs the object to check the ACL.
+	OperationRead
+	// OperationWrite changes application state. Target is required.
+	OperationWrite
+	// OperationSend sends data outside the trust boundary. Target must identify
+	// the recipient, not just the tool.
+	OperationSend
+	// OperationDelete destroys data or performs an irreversible action. Target is
+	// required.
+	OperationDelete
+	// OperationCompute is pure work with no application data and no external
+	// side access. Target is optional; the permission check still applies.
+	OperationCompute
 )
 
 // Short aliases for tool declarations.
 const (
-	Read        = EffectRead
-	Write       = EffectWrite
-	Egress      = EffectEgress
-	Destructive = EffectDestructive
+	Read    = OperationRead
+	Write   = OperationWrite
+	Send    = OperationSend
+	Delete  = OperationDelete
+	Compute = OperationCompute
 )
 
-// String returns the tag name of the effect.
-func (e Effect) String() string {
-	switch e {
-	case EffectRead:
+// String returns the tag name of the operation.
+func (a Operation) String() string {
+	switch a {
+	case OperationRead:
 		return "read"
-	case EffectWrite:
+	case OperationWrite:
 		return "write"
-	case EffectEgress:
-		return "egress"
-	case EffectDestructive:
-		return "destructive"
+	case OperationSend:
+		return "send"
+	case OperationDelete:
+		return "delete"
+	case OperationCompute:
+		return "compute"
 	default:
 		return "unknown"
 	}
 }
 
-// MarshalJSON encodes the effect as its tag name.
-func (e Effect) MarshalJSON() ([]byte, error) { return json.Marshal(e.String()) }
+// MarshalJSON encodes the operation as its tag name.
+func (a Operation) MarshalJSON() ([]byte, error) { return json.Marshal(a.String()) }
 
-// UnmarshalJSON decodes an effect from its tag name.
-func (e *Effect) UnmarshalJSON(b []byte) error {
+// UnmarshalJSON decodes an operation from its tag name.
+func (a *Operation) UnmarshalJSON(b []byte) error {
 	var s string
 	if err := json.Unmarshal(b, &s); err != nil {
 		return err
 	}
 	switch s {
 	case "read":
-		*e = EffectRead
+		*a = OperationRead
 	case "write":
-		*e = EffectWrite
-	case "egress":
-		*e = EffectEgress
-	case "destructive":
-		*e = EffectDestructive
+		*a = OperationWrite
+	case "send":
+		*a = OperationSend
+	case "delete":
+		*a = OperationDelete
+	case "compute":
+		*a = OperationCompute
 	default:
-		return fmt.Errorf("%w: unknown effect %q", ErrInvalidConfig, s)
+		return fmt.Errorf("%w: unknown operation %q", ErrInvalidConfig, s)
 	}
 	return nil
 }
@@ -78,7 +90,8 @@ type Resource struct {
 	TenantID string
 }
 
-// Authorizer adapts the service's existing RBAC/ACL checks.
+// Authorizer adapts the service's existing RBAC/ACL checks. An error or a
+// false result is a Deny; there is no permissive default.
 type Authorizer interface {
 	Allowed(ctx context.Context, p Principal, permission string, resource Resource) (bool, error)
 }
@@ -99,7 +112,7 @@ const (
 	Deny DecisionKind = iota
 	// Allow permits the action.
 	Allow
-	// Escalate sends the action to a human.
+	// Escalate sends the action to an approval outside the model.
 	Escalate
 )
 
@@ -123,3 +136,30 @@ type Decision struct {
 	RuleIDs []string
 	Reason  string
 }
+
+// Rule IDs are the stable, machine-readable reasons attached to a Decision.
+// Audit dashboards and policy diffs key off them, so a typo silently breaks a
+// dashboard. Compare against these values instead of a string literal.
+const (
+	RuleTenantMismatch   = "tenant-mismatch"
+	RuleTargetUnbound    = "target-unbound"
+	RuleUngrounded       = "ungrounded"
+	RuleAuthzError       = "authz-error"
+	RuleRBACACL          = "rbac-acl"
+	RuleBusinessValidate = "business-validate"
+	RuleCompute          = "compute"
+	RuleRead             = "read"
+	RuleWrite            = "write"
+	RuleWriteUntrusted   = "write-untrusted"
+	RuleSend             = "send"
+	RuleSendUntrusted    = "send-untrusted"
+	RuleDelete           = "delete"
+	RuleDeleteUntrusted  = "delete-untrusted"
+	RuleUnknownOperation = "unknown-operation"
+	RuleApproved         = "approved"
+	RuleApprovalForged   = "approval-forged"
+	RuleApprovalDrift    = "approval-drift"
+	RuleUnknownTool      = "unknown-tool"
+	RuleInvalidArgs      = "invalid-args"
+	RuleBatchSuspended   = "batch-suspended"
+)

@@ -24,7 +24,11 @@ var (
 	ErrApprovalExpired = errors.New("gobellim: approval expired")
 	// ErrApprovalReplay signals an approval that was already used.
 	ErrApprovalReplay = errors.New("gobellim: approval already used")
+	// ErrClaimStoreFull signals that an in-process claim store reached its
+	// bound. A full store is a failed claim, never an allow; use a shared store
+	// for production volumes.
+	ErrClaimStoreFull = errors.New("gobellim: claim store is full")
 	// ErrApprovalDrift signals a pending action that changed since approval, or
-	// a tool whose effect or identity changed under the same arguments.
+	// a tool whose operation or identity changed under the same arguments.
 	ErrApprovalDrift = errors.New("gobellim: approved action changed")
 )

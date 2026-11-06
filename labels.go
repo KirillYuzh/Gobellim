@@ -14,9 +14,8 @@ const (
 	Untrusted Integrity = iota
 	// Derived marks model output: a schema limits its shape, not its truth.
 	Derived
-	// Validated marks a value promoted by an explicit validator.
-	Validated
-	// Trusted marks application or principal state.
+	// Trusted marks application or principal state. It is the only integrity
+	// level that can reach an unattended Write or Send.
 	Trusted
 )
 
@@ -27,8 +26,6 @@ func (i Integrity) String() string {
 		return "untrusted"
 	case Derived:
 		return "derived"
-	case Validated:
-		return "validated"
 	case Trusted:
 		return "trusted"
 	default:
@@ -59,8 +56,6 @@ func parseIntegrity(s string) (Integrity, bool) {
 		return Untrusted, true
 	case "derived":
 		return Derived, true
-	case "validated":
-		return Validated, true
 	case "trusted":
 		return Trusted, true
 	default:
@@ -76,8 +71,9 @@ const (
 	Public Sensitivity = iota
 	// Internal is disclosed inside the tenant.
 	Internal
-	// PII is personal data and needs masking.
-	PII
+	// Patterns masks the personal-data shapes the detector knows: email, phone,
+	// card and Russian document numbers. It is not a classifier.
+	Patterns
 	// Secret must not reach the model or a log in clear text.
 	Secret
 )
@@ -89,8 +85,8 @@ func (s Sensitivity) String() string {
 		return "public"
 	case Internal:
 		return "internal"
-	case PII:
-		return "pii"
+	case Patterns:
+		return "patterns"
 	case Secret:
 		return "secret"
 	default:
@@ -121,8 +117,8 @@ func parseSensitivity(s string) (Sensitivity, bool) {
 		return Public, true
 	case "internal":
 		return Internal, true
-	case "pii":
-		return PII, true
+	case "patterns":
+		return Patterns, true
 	case "secret":
 		return Secret, true
 	default:

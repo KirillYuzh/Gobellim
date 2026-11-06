@@ -19,8 +19,8 @@ type Config struct {
 	ApprovalTTL time.Duration
 	// ApprovalKey signs a PendingAction. A nil value generates a random
 	// per-process key, so an action escalated on one replica can be approved
-	// only on that replica; set a shared 32-byte key to move approvals between
-	// replicas.
+	// only on that replica. Set a shared 32-byte key together with a shared
+	// ClaimStore; the key alone lets one approval execute once per replica.
 	ApprovalKey []byte
 	Now         func() time.Time
 }
@@ -46,13 +46,15 @@ func WithPolicyVersion(v string) Option { return func(c *Config) { c.PolicyVersi
 // WithClaimStore makes approved actions single-use across replicas.
 func WithClaimStore(s ClaimStore) Option { return func(c *Config) { c.Claims = s } }
 
-// WithApprovalTTL sets how long a PendingAction stays executable. The default
-// is 24 hours.
+// WithApprovalTTL sets how long a PendingAction stays executable. A zero value
+// uses the default of 1 hour; a negative value is ErrInvalidConfig. An approval
+// that sits unused for a day is a stale decision.
 func WithApprovalTTL(d time.Duration) Option { return func(c *Config) { c.ApprovalTTL = d } }
 
 // WithApprovalKey sets the HMAC key that authenticates a PendingAction. It must
-// be 32 bytes. Use it when an action escalated on one replica may be approved
-// on another.
+// be 32 bytes. Use it together with WithClaimStore when an action escalated on
+// one replica may be approved on another; a shared key without a shared claim
+// store is ErrInvalidConfig.
 func WithApprovalKey(key []byte) Option { return func(c *Config) { c.ApprovalKey = key } }
 
 // WithClock overrides the clock. It exists for tests.
@@ -68,11 +70,11 @@ type Engine struct {
 	policyVersion string
 	claims        ClaimStore
 	approvalTTL   time.Duration
-	approvalKey   []byte
+	sealer        *Sealer
 	now           func() time.Time
 }
 
-const defaultApprovalTTL = 24 * time.Hour
+const defaultApprovalTTL = time.Hour
 
 // New validates the configuration and builds an Engine.
 func New(opts ...Option) (*Engine, error) {
@@ -95,9 +97,20 @@ func New(opts ...Option) (*Engine, error) {
 	if err := limits.validate(); err != nil {
 		return nil, err
 	}
+	if len(cfg.ApprovalKey) > 0 && cfg.Claims == nil {
+		// A shared key moves a PendingAction between replicas, but the default
+		// claim store is per-process: the same approval could then execute once
+		// on every replica. The pair belongs together.
+		return nil, fmt.Errorf("%w: WithApprovalKey needs WithClaimStore: a shared key without a shared claim store allows one approval to run on every replica", ErrInvalidConfig)
+	}
 	audit := cfg.Audit
 	ttl := cfg.ApprovalTTL
-	if ttl <= 0 {
+	if ttl < 0 {
+		// A missing option is a zero value, but a negative duration was written on
+		// purpose. Defaulting it would hide a typo behind a working approval.
+		return nil, fmt.Errorf("%w: approval TTL must not be negative", ErrInvalidConfig)
+	}
+	if ttl == 0 {
 		ttl = defaultApprovalTTL
 	}
 	now := cfg.Now
@@ -112,9 +125,13 @@ func New(opts ...Option) (*Engine, error) {
 	}
 	key := cfg.ApprovalKey
 	if len(key) == 0 {
-		key = []byte(randomHex(32))
-	} else if len(key) != 32 {
-		return nil, fmt.Errorf("%w: approval key must be 32 bytes", ErrInvalidConfig)
+		// randomHex(16) is 32 bytes of ASCII, which is the length NewSealer
+		// requires: a default key and an explicit one behave the same way.
+		key = []byte(randomHex(16))
+	}
+	sealer, err := NewSealer(key)
+	if err != nil {
+		return nil, err
 	}
 	return &Engine{
 		model:         cfg.Model,
@@ -124,9 +141,38 @@ func New(opts ...Option) (*Engine, error) {
 		policyVersion: cfg.PolicyVersion,
 		claims:        claims,
 		approvalTTL:   ttl,
-		approvalKey:   key,
+		sealer:        sealer,
 		now:           now,
 	}, nil
+}
+
+// Deps is a snapshot of the Engine's collaborators. An optional package such as
+// flow uses it to share one authorizer, one audit sink, one claim store, one
+// clock and one approval key with the Engine, instead of asking the application
+// to configure a second set that can silently disagree.
+//
+// Two authorizers for one use case is a security gap rather than a preference:
+// the Gate would check a caller against one ACL and the approval against
+// another.
+type Deps struct {
+	Authorizer  Authorizer
+	Audit       Sink
+	Claims      ClaimStore
+	Now         func() time.Time
+	ApprovalTTL time.Duration
+	Sealer      *Sealer
+}
+
+// Deps returns the Engine's collaborators.
+func (e *Engine) Deps() Deps {
+	return Deps{
+		Authorizer:  e.authz,
+		Audit:       e.audit,
+		Claims:      e.claims,
+		Now:         e.now,
+		ApprovalTTL: e.approvalTTL,
+		Sealer:      e.sealer,
+	}
 }
 
 // Limits returns the effective budgets.

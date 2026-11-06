@@ -1,54 +1,46 @@
-// Package flow is the sequential, code-driven workflow with optional human
-// approval. It never resumes a Go stack: it suspends at a step boundary, seals
-// the minimal state into a token, and continues from the next step after a
-// checked approval.
 package flow
 
 import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	gobellim "github.com/KirillYuzh/Gobellim"
 )
 
 var (
-	// ErrContinuation signals a malformed, tampered or foreign token.
-	ErrContinuation = errors.New("flow: invalid continuation")
-	// ErrExpired signals a token past its expiry.
-	ErrExpired = errors.New("flow: continuation expired")
-	// ErrFlowDrift signals a token from another workflow or version.
-	ErrFlowDrift = errors.New("flow: workflow version drift")
-	// ErrReplay signals a token that was already consumed.
-	ErrReplay = errors.New("flow: continuation replay")
-	// ErrUnauthorized signals an approver without the required permission.
-	ErrUnauthorized = errors.New("flow: approver is not authorized")
-	// ErrContinuationTooLarge signals a sealed state above the configured cap.
-	ErrContinuationTooLarge = errors.New("flow: continuation exceeds the size limit")
-	// ErrDecision signals an unknown approval decision. The zero Decision is
-	// never treated as an approval.
-	ErrDecision = errors.New("flow: unknown approval decision")
+	// ErrExpired reports an approval whose lifetime is over.
+	ErrExpired = errors.New("flow: approval expired")
+	// ErrReplay reports an approval nonce that was already used.
+	ErrReplay = errors.New("flow: approval already used")
+	// ErrFlowDrift reports a card or step that no longer matches the flow.
+	ErrFlowDrift = errors.New("flow: flow or step changed")
+	// ErrUnauthorized reports a missing principal or a policy denial.
+	ErrUnauthorized = errors.New("flow: unauthorized")
+	// ErrVerdict reports an approver's answer that is neither VerdictApprove nor
+	// VerdictReject.
+	ErrVerdict = errors.New("flow: unknown verdict")
 )
 
-// Status is the outcome of a Run or Resume.
+// Status is the explicit outcome of a flow run.
 type Status uint8
 
 const (
-	// Running means the flow is executing.
+	// Running is the zero value: the flow did not reach a terminal outcome.
 	Running Status = iota
-	// Suspended means the flow stopped at an approval boundary.
+	// Suspended means an approval step stopped the flow.
 	Suspended
-	// Done means the flow finished.
+	// Done means every step completed.
 	Done
-	// Rejected means the approver rejected the action.
+	// Rejected means an approver rejected the approval.
 	Rejected
-	// Expired means the approval expired.
+	// Expired means the approval window closed.
 	Expired
-	// Failed means a step or a check failed.
+	// Failed means a step returned an error.
 	Failed
 )
 
@@ -72,29 +64,37 @@ func (s Status) String() string {
 	}
 }
 
-// Decision is the approver's answer. Editing arguments is deliberately not
-// supported: a changed action must go through a new run.
-type Decision uint8
+// Verdict is an approver's answer to an approval card: VerdictApprove or
+// VerdictReject. The zero value approves nothing. The name keeps it apart from
+// the Gate's Decision and from the Approve step.
+type Verdict uint8
 
 const (
-	// DecisionUnknown is the zero value. It is never a valid answer and Resume
-	// rejects it, so an uninitialised variable cannot approve an action.
-	DecisionUnknown Decision = iota
-	// Approve lets the workflow continue.
-	Approve
-	// Reject terminates the workflow without executing the action.
-	Reject
+	// VerdictUnknown is the zero value. It never approves anything.
+	VerdictUnknown Verdict = iota
+	// VerdictApprove accepts the action.
+	VerdictApprove
+	// VerdictReject refuses the action. A rejection is final for this nonce.
+	VerdictReject
 )
 
-// Suspension is returned when a flow needs a human decision.
+// Suspension describes the approval a flow is waiting for. The application
+// stores it server-side and returns only an opaque id to the client. There is no
+// sealed bearer token, and the structure is not encrypted: Proof binds it to the
+// flow that issued it, nothing more.
+//
+// Proof is an HMAC over every field, so a Resume cannot accept a suspension this
+// process did not issue. Losing it, or editing any other field, is ErrFlowDrift.
 type Suspension struct {
-	ID        string                `json:"id"`
-	Card      gobellim.ApprovalCard `json:"card"`
-	Token     string                `json:"token"`
-	ExpiresAt time.Time             `json:"expires_at"`
+	Nonce     string
+	Card      gobellim.ApprovalCard
+	ExpiresAt time.Time
+	Requester gobellim.Principal
+	Proof     []byte
 }
 
-// Result is the typed outcome of Run and Resume.
+// Result is the outcome of Run or Resume. An error is returned separately, not
+// hidden in Result, so a caller has one place to check.
 type Result[S any] struct {
 	Status     Status
 	State      S
@@ -106,10 +106,9 @@ type config struct {
 	policyVersion string
 	authz         gobellim.Authorizer
 	audit         gobellim.Sink
-	sealer        *Sealer
-	store         Store
+	store         gobellim.ClaimStore
+	sealer        *gobellim.Sealer
 	ttl           time.Duration
-	maxTokenBytes int
 	maxWallTime   time.Duration
 	now           func() time.Time
 }
@@ -117,7 +116,8 @@ type config struct {
 // Option configures a Flow.
 type Option func(*config)
 
-// Version pins the workflow version checked on resume.
+// Version sets the workflow version. A token from another version is rejected
+// by ErrFlowDrift.
 func Version(v int) Option { return func(c *config) { c.version = v } }
 
 // WithPolicyVersion stamps audit events with the active policy version.
@@ -126,23 +126,22 @@ func WithPolicyVersion(v string) Option { return func(c *config) { c.policyVersi
 // WithAuthorizer sets the RBAC/ACL adapter. It is required.
 func WithAuthorizer(a gobellim.Authorizer) Option { return func(c *config) { c.authz = a } }
 
-// WithAudit sets the audit sink.
+// WithAudit sets the audit sink. It is required.
 func WithAudit(s gobellim.Sink) Option { return func(c *config) { c.audit = s } }
 
-// WithSealer sets the continuation sealer. Without one the flow uses an
-// ephemeral per-process key, which cannot resume on another replica.
-func WithSealer(s *Sealer) Option { return func(c *config) { c.sealer = s } }
+// WithStore sets the claim store that makes a resume single-use. The default is
+// a bounded in-process store; use store/sql for cross-replica deployments.
+func WithStore(s gobellim.ClaimStore) Option { return func(c *config) { c.store = s } }
 
-// WithStore enables single-use resume across replicas.
-func WithStore(s Store) Option { return func(c *config) { c.store = s } }
+// WithSealer signs the Suspension. A nil value generates a random per-process
+// key, so a suspension escalated on one replica cannot be resumed on another.
+// flow.FromEngine reuses the Engine's sealer, which is the intended wiring.
+func WithSealer(s *gobellim.Sealer) Option { return func(c *config) { c.sealer = s } }
 
-// WithTTL sets the default approval lifetime.
+// WithTTL sets the default approval lifetime. The default is 1 hour.
 func WithTTL(d time.Duration) Option { return func(c *config) { c.ttl = d } }
 
-// WithMaxTokenBytes caps the sealed continuation size.
-func WithMaxTokenBytes(n int) Option { return func(c *config) { c.maxTokenBytes = n } }
-
-// WithMaxWallTime caps one Run or Resume, including all steps.
+// WithMaxWallTime bounds one Run or Resume call.
 func WithMaxWallTime(d time.Duration) Option { return func(c *config) { c.maxWallTime = d } }
 
 // WithClock overrides the clock. It exists for tests.
@@ -161,25 +160,36 @@ type approve[S any] struct {
 	fourEyes         bool
 	ttl              time.Duration
 	card             func(ctx context.Context, p gobellim.Principal, s S) (gobellim.ApprovalCard, error)
-	resource         func(ctx context.Context, p gobellim.Principal, s S) (gobellim.Resource, error)
+	target           func(ctx context.Context, p gobellim.Principal, s S) (gobellim.Resource, error)
+	// hasTarget separates "this approval is about an object" from "this
+	// approval is about proceeding". Only the first form must bind a tenant.
+	hasTarget bool
 }
 
-// Flow is a linear, typed workflow.
+// Flow is a linear, typed workflow. Steps run in order. An approval step stops
+// the flow; the application stores the Suspension and the state, then calls
+// Resume after an approver decides.
 type Flow[S any] struct {
 	name  string
 	cfg   config
 	steps []*step[S]
+	ids   map[string]struct{}
 	err   error
 }
 
 // New starts a flow. Configuration errors are returned immediately.
+//
+// New is the standalone constructor: the claim store and the approval key it
+// creates are private to this process. That is fine for a flow that never calls
+// a Task, and a trap for one that does -- the Task then approves with a
+// different authorizer than the flow used. Use FromEngine when the flow runs a
+// Task.
 func New[S any](name string, opts ...Option) (*Flow[S], error) {
 	cfg := config{
-		version:       1,
-		ttl:           24 * time.Hour,
-		maxTokenBytes: 64 << 10,
-		maxWallTime:   60 * time.Second,
-		now:           time.Now,
+		version:     1,
+		ttl:         time.Hour,
+		maxWallTime: 60 * time.Second,
+		now:         time.Now,
 	}
 	for _, o := range opts {
 		o(&cfg)
@@ -191,28 +201,53 @@ func New[S any](name string, opts ...Option) (*Flow[S], error) {
 		return nil, fmt.Errorf("%w: authorizer is required", gobellim.ErrInvalidConfig)
 	case cfg.audit == nil:
 		return nil, fmt.Errorf("%w: audit sink is required", gobellim.ErrInvalidConfig)
-	case cfg.sealer == nil:
-		return nil, fmt.Errorf("%w: sealer is required", gobellim.ErrInvalidConfig)
 	case cfg.version < 1:
 		return nil, fmt.Errorf("%w: flow version must be positive", gobellim.ErrInvalidConfig)
 	case cfg.ttl <= 0:
 		return nil, fmt.Errorf("%w: TTL must be positive", gobellim.ErrInvalidConfig)
-	case cfg.maxTokenBytes <= 0:
-		return nil, fmt.Errorf("%w: max token bytes must be positive", gobellim.ErrInvalidConfig)
 	case cfg.maxWallTime <= 0:
 		return nil, fmt.Errorf("%w: max wall time must be positive", gobellim.ErrInvalidConfig)
+	case cfg.sealer != nil && cfg.store == nil:
+		// A shared signing key lets another replica accept a Suspension, but the
+		// default store is per-process: the same suspension could then resume once
+		// on every replica. The pair belongs together.
+		return nil, fmt.Errorf("%w: WithSealer needs WithStore: a shared signing key without a shared store allows one approval on every replica", gobellim.ErrInvalidConfig)
 	}
 	if cfg.store == nil {
-		// A per-process store is the safe default: without it a token could be
-		// resumed an unlimited number of times inside one replica.
 		store := NewMemStore()
 		store.Now = cfg.now
 		cfg.store = store
 	}
-	if cfg.now == nil {
-		cfg.now = time.Now
+	if cfg.sealer == nil {
+		key := make([]byte, 32)
+		_, _ = rand.Read(key)
+		sealer, err := gobellim.NewSealer(key)
+		if err != nil {
+			return nil, err
+		}
+		cfg.sealer = sealer
 	}
-	return &Flow[S]{name: name, cfg: cfg}, nil
+	return &Flow[S]{name: name, cfg: cfg, ids: make(map[string]struct{})}, nil
+}
+
+// FromEngine builds a Flow that shares the Engine's authorizer, audit sink,
+// claim store, clock and approval key. Use it whenever the flow executes a Task:
+// a flow that authorizes an approver with a different adapter than the Task it
+// resumes is a security gap, not a style choice. Explicit options still win.
+func FromEngine[S any](e *gobellim.Engine, name string, opts ...Option) (*Flow[S], error) {
+	if e == nil {
+		return nil, fmt.Errorf("%w: engine is required", gobellim.ErrInvalidConfig)
+	}
+	d := e.Deps()
+	base := []Option{
+		WithAuthorizer(d.Authorizer),
+		WithAudit(d.Audit),
+		WithStore(d.Claims),
+		WithSealer(d.Sealer),
+		WithClock(d.Now),
+		WithTTL(d.ApprovalTTL),
+	}
+	return New[S](name, append(base, opts...)...)
 }
 
 func (f *Flow[S]) fail(err error) {
@@ -221,14 +256,26 @@ func (f *Flow[S]) fail(err error) {
 	}
 }
 
-// Step adds a deterministic step. Steps must be pure or idempotent up to the
-// next approval boundary.
+func (f *Flow[S]) addID(id string) bool {
+	if _, dup := f.ids[id]; dup {
+		f.fail(fmt.Errorf("%w: duplicate step id %q", gobellim.ErrInvalidConfig, id))
+		return false
+	}
+	f.ids[id] = struct{}{}
+	return true
+}
+
+// Step adds a deterministic step. A step must be idempotent up to the next
+// approval boundary.
 func (f *Flow[S]) Step(id string, fn func(ctx context.Context, p gobellim.Principal, s *S) error) *Flow[S] {
 	if f.err != nil {
 		return f
 	}
 	if id == "" || fn == nil {
 		f.fail(fmt.Errorf("%w: step id and function are required", gobellim.ErrInvalidConfig))
+		return f
+	}
+	if !f.addID(id) {
 		return f
 	}
 	f.steps = append(f.steps, &step[S]{id: id, run: fn})
@@ -248,13 +295,14 @@ type ApproveConfig[S any] struct {
 	FourEyes bool
 	// TTL overrides the flow's approval lifetime for this step.
 	TTL time.Duration
-	// Card builds the approval card from the workflow state.
+	// Card builds the approval card from the workflow state. It must be
+	// deterministic: Resume rebuilds it and compares the action digest.
 	Card func(ctx context.Context, p gobellim.Principal, s S) (gobellim.ApprovalCard, error)
-	// Resource binds the approved action to an object and tenant.
-	Resource func(ctx context.Context, p gobellim.Principal, s S) (gobellim.Resource, error)
+	// Target binds the approved action to an object and tenant.
+	Target func(ctx context.Context, p gobellim.Principal, s S) (gobellim.Resource, error)
 }
 
-func noResource[S any](context.Context, gobellim.Principal, S) (gobellim.Resource, error) {
+func noTarget[S any](context.Context, gobellim.Principal, S) (gobellim.Resource, error) {
 	return gobellim.Resource{}, nil
 }
 
@@ -272,6 +320,9 @@ func (f *Flow[S]) Approve(id string, cfg ApproveConfig[S]) *Flow[S] {
 		f.fail(fmt.Errorf("%w: approve %s: Card is required", gobellim.ErrInvalidConfig, id))
 		return f
 	}
+	if !f.addID(id) {
+		return f
+	}
 	permission := cfg.Permission
 	if permission == "" {
 		permission = "approve:" + f.name + "." + id
@@ -283,29 +334,14 @@ func (f *Flow[S]) Approve(id string, cfg ApproveConfig[S]) *Flow[S] {
 		fourEyes:         cfg.FourEyes,
 		ttl:              cfg.TTL,
 		card:             cfg.Card,
-		resource:         noResource[S],
+		target:           noTarget[S],
+		hasTarget:        cfg.Target != nil,
 	}
-	if cfg.Resource != nil {
-		a.resource = cfg.Resource
+	if cfg.Target != nil {
+		a.target = cfg.Target
 	}
 	f.steps = append(f.steps, &step[S]{id: id, approve: a})
 	return f
-}
-
-// ApprovePending adds an approval boundary whose card is the PendingAction a
-// previous step produced. It removes only the card closure: permission,
-// resource and action permission stay explicit application policy.
-func (f *Flow[S]) ApprovePending(id string, pending func(S) *gobellim.PendingAction, cfg ApproveConfig[S]) *Flow[S] {
-	if cfg.Card == nil {
-		cfg.Card = func(_ context.Context, _ gobellim.Principal, s S) (gobellim.ApprovalCard, error) {
-			p := pending(s)
-			if p == nil {
-				return gobellim.ApprovalCard{}, fmt.Errorf("%w: approve %s: no pending action in the state", gobellim.ErrInvalidConfig, id)
-			}
-			return p.Card, nil
-		}
-	}
-	return f.Approve(id, cfg)
 }
 
 // Run executes from the first step. It returns Suspended at an approval
@@ -337,7 +373,6 @@ func (f *Flow[S]) runFrom(ctx context.Context, p gobellim.Principal, s S, from i
 			continue
 		}
 
-		needed := true
 		if st.approve.when != nil {
 			ok, err := st.approve.when(ctx, p, s)
 			if err != nil {
@@ -347,10 +382,9 @@ func (f *Flow[S]) runFrom(ctx context.Context, p gobellim.Principal, s S, from i
 				})
 				return Result[S]{Status: Failed, State: s}, err
 			}
-			needed = ok
-		}
-		if !needed {
-			continue
+			if !ok {
+				continue
+			}
 		}
 
 		card, err := st.approve.card(ctx, p, s)
@@ -370,36 +404,13 @@ func (f *Flow[S]) runFrom(ctx context.Context, p gobellim.Principal, s S, from i
 		if card.Digest == "" {
 			card.Digest = card.ActionDigest()
 		}
-
-		state, err := json.Marshal(s)
-		if err != nil {
-			return Result[S]{Status: Failed, State: s}, fmt.Errorf("flow: encode state: %w", err)
+		suspension := &Suspension{
+			Nonce:     newID("n_"),
+			Card:      card,
+			ExpiresAt: card.ExpiresAt,
+			Requester: p,
 		}
-		cont := continuation{
-			V:           1,
-			Flow:        f.name,
-			FlowVersion: f.cfg.version,
-			Tenant:      p.Tenant,
-			Requester:   p,
-			Step:        i,
-			StepID:      st.id,
-			ExpiresAt:   card.ExpiresAt,
-			Nonce:       newID(""),
-			State:       state,
-			Card:        card,
-		}
-		plain, err := json.Marshal(cont)
-		if err != nil {
-			return Result[S]{Status: Failed, State: s}, fmt.Errorf("flow: encode continuation: %w", err)
-		}
-		token, err := f.cfg.sealer.Seal(plain, f.aad(p.Tenant))
-		if err != nil {
-			return Result[S]{Status: Failed, State: s}, err
-		}
-		if len(token) > f.cfg.maxTokenBytes {
-			err := fmt.Errorf("%w: %d bytes, cap is %d", ErrContinuationTooLarge, len(token), f.cfg.maxTokenBytes)
-			return Result[S]{Status: Failed, State: s}, err
-		}
+		suspension.Proof = f.sign(suspension)
 
 		f.emit(ctx, gobellim.Event{
 			Kind: gobellim.EventWorkflowSuspended, RunID: card.RunID, Flow: f.name, Step: st.id,
@@ -409,102 +420,106 @@ func (f *Flow[S]) runFrom(ctx context.Context, p gobellim.Principal, s S, from i
 			Kind: gobellim.EventApprovalRequested, RunID: card.RunID, Flow: f.name, Step: st.id,
 			PrincipalID: p.UserID, Tenant: p.Tenant, Decision: gobellim.Escalate,
 		})
-
-		return Result[S]{
-			Status: Suspended,
-			State:  s,
-			Suspension: &Suspension{
-				ID:        card.RunID,
-				Card:      card,
-				Token:     token,
-				ExpiresAt: card.ExpiresAt,
-			},
-		}, nil
+		return Result[S]{Status: Suspended, State: s, Suspension: suspension}, nil
 	}
-
 	return Result[S]{Status: Done, State: s}, nil
 }
 
-// Resume checks a token and an approval, then continues from the step after
-// the approval boundary. The checks are listed in DESIGN.md §8.6; every one is
-// fail-closed.
-func (f *Flow[S]) Resume(ctx context.Context, approver gobellim.Principal, token string, d Decision) (Result[S], error) {
+// Resume checks an approval and continues from the step after the approval
+// boundary. The application passes the requester, the approver, the nonce and
+// the card it stored from Run, plus the state it stored. Nothing here is a
+// bearer token: the approval endpoint must authenticate the approver and load
+// the suspension server-side.
+func (f *Flow[S]) Resume(
+	ctx context.Context,
+	approver gobellim.Principal,
+	susp Suspension,
+	state S,
+	v Verdict,
+) (Result[S], error) {
 	var zero Result[S]
 	if f.err != nil {
 		return zero, f.err
 	}
+	requester := susp.Requester
+	card := susp.Card
+	nonce := susp.Nonce
+	if err := requester.Validate(); err != nil {
+		return zero, err
+	}
 	if err := approver.Validate(); err != nil {
 		return zero, err
 	}
-	if len(token) > f.cfg.maxTokenBytes {
-		// The cap applies to tokens we accepted, not only to tokens we issued:
-		// an unbounded token would be decoded on a public approval endpoint.
-		return zero, fmt.Errorf("%w: token is %d bytes, cap is %d", ErrContinuation, len(token), f.cfg.maxTokenBytes)
+	if nonce == "" {
+		return zero, fmt.Errorf("%w: nonce is required", ErrFlowDrift)
+	}
+	if !f.signedByUs(&susp) {
+		// A suspension this flow did not issue is not an approval. Without this
+		// check the struct is a bearer token: the nonce inside it decides
+		// single-use, so a caller able to supply one could replay an approval.
+		return zero, fmt.Errorf("%w: suspension was not issued by this flow", ErrFlowDrift)
+	}
+	if requester.Tenant != approver.Tenant {
+		return zero, fmt.Errorf("%w: approver tenant does not match requester", ErrUnauthorized)
 	}
 	ctx, cancel := context.WithTimeout(ctx, f.cfg.maxWallTime)
 	defer cancel()
 
-	plain, err := f.cfg.sealer.Open(token, f.aad(approver.Tenant))
-	if err != nil {
-		return zero, fmt.Errorf("%w: %w", ErrContinuation, err)
+	if card.Flow != f.name {
+		return zero, fmt.Errorf("%w: card flow is %q, want %q", ErrFlowDrift, card.Flow, f.name)
 	}
-	var c continuation
-	if err := json.Unmarshal(plain, &c); err != nil {
-		return zero, fmt.Errorf("%w: %w", ErrContinuation, err)
+	if card.ExpiresAt.IsZero() {
+		return zero, fmt.Errorf("%w: card has no expiry", ErrFlowDrift)
 	}
-	if c.V != 1 {
-		return zero, fmt.Errorf("%w: unknown format version %d", ErrContinuation, c.V)
-	}
-	if c.Flow != f.name || c.FlowVersion != f.cfg.version {
+	if f.cfg.now().After(card.ExpiresAt) {
 		f.emit(ctx, gobellim.Event{
-			Kind: gobellim.EventWorkflowFailed, RunID: c.Card.RunID, Flow: f.name, Step: c.StepID,
-			PrincipalID: approver.UserID, Tenant: approver.Tenant, Error: "flow-drift",
-		})
-		return zero, fmt.Errorf("%w: token is %q v%d, expected %q v%d",
-			ErrFlowDrift, c.Flow, c.FlowVersion, f.name, f.cfg.version)
-	}
-	if f.cfg.now().After(c.ExpiresAt) {
-		f.emit(ctx, gobellim.Event{
-			Kind: gobellim.EventWorkflowExpired, RunID: c.Card.RunID, Flow: f.name, Step: c.StepID,
+			Kind: gobellim.EventWorkflowExpired, RunID: card.RunID, Flow: f.name, Step: card.Step,
 			PrincipalID: approver.UserID, Tenant: approver.Tenant,
 		})
-		return Result[S]{Status: Expired}, fmt.Errorf("%w: expired at %s", ErrExpired, c.ExpiresAt.Format(time.RFC3339))
-	}
-	if c.Tenant != approver.Tenant {
-		return zero, fmt.Errorf("%w: tenant mismatch", ErrContinuation)
+		return Result[S]{Status: Expired, State: state}, fmt.Errorf("%w: expired at %s", ErrExpired, card.ExpiresAt.Format(time.RFC3339))
 	}
 
-	var state S
-	if err := json.Unmarshal(c.State, &state); err != nil {
-		return zero, fmt.Errorf("%w: state: %w", ErrContinuation, err)
+	idx, a, err := f.approvalAt(card.Step)
+	if err != nil {
+		return zero, err
 	}
-	if c.Step < 0 || c.Step >= len(f.steps) || f.steps[c.Step].approve == nil {
-		return zero, fmt.Errorf("%w: step %d is not an approval boundary", ErrFlowDrift, c.Step)
+	if card.RequiredPermission != a.permission || card.FourEyes != a.fourEyes {
+		return zero, fmt.Errorf("%w: approval policy changed for step %q", ErrFlowDrift, card.Step)
 	}
-	if f.steps[c.Step].id != c.StepID {
-		return zero, fmt.Errorf("%w: step %d is %q, token is %q", ErrFlowDrift, c.Step, f.steps[c.Step].id, c.StepID)
-	}
-	a := f.steps[c.Step].approve
 
-	resource, err := a.resource(ctx, c.Requester, state)
+	target, err := a.target(ctx, requester, state)
 	if err != nil {
 		return Result[S]{Status: Failed, State: state}, err
 	}
-	ok, err := f.cfg.authz.Allowed(ctx, approver, a.permission, resource)
+	// A target bound to another tenant would let the approver authorize a
+	// foreign object. flow repeats this check because Target here is
+	// application code, not a Tool declaration. A declared target must name its
+	// tenant: filling it from the requester would make the check true by
+	// construction.
+	if a.hasTarget && target.TenantID == "" {
+		return Result[S]{Status: Failed, State: state},
+			fmt.Errorf("%w: approval target is not bound to a tenant", ErrFlowDrift)
+	}
+	if target.TenantID == "" {
+		target.TenantID = requester.Tenant
+	}
+	if target.TenantID != requester.Tenant {
+		return Result[S]{Status: Failed, State: state},
+			fmt.Errorf("%w: target is bound to another tenant", ErrUnauthorized)
+	}
+	ok, err := f.cfg.authz.Allowed(ctx, approver, a.permission, target)
 	if err != nil || !ok {
 		f.emit(ctx, gobellim.Event{
-			Kind: gobellim.EventApprovalDenied, RunID: c.Card.RunID, Flow: f.name, Step: c.StepID,
+			Kind: gobellim.EventApprovalDenied, RunID: card.RunID, Flow: f.name, Step: card.Step,
 			PrincipalID: approver.UserID, Tenant: approver.Tenant, Error: "approver-permission",
 		})
 		return Result[S]{Status: Failed, State: state},
 			fmt.Errorf("%w: approver lacks %s", ErrUnauthorized, a.permission)
 	}
 
-	switch d {
-	case Reject:
-		// A rejection consumes the token: a human who said no must not be
-		// replayed as a yes by the same continuation. A retry needs a new Run.
-		claimed, err := f.cfg.store.Claim(ctx, c.Nonce, c.ExpiresAt)
+	switch v {
+	case VerdictReject:
+		claimed, err := f.cfg.store.Claim(ctx, nonce, card.ExpiresAt)
 		if err != nil {
 			return Result[S]{Status: Failed, State: state}, fmt.Errorf("flow: store claim: %w", err)
 		}
@@ -512,25 +527,25 @@ func (f *Flow[S]) Resume(ctx context.Context, approver gobellim.Principal, token
 			return Result[S]{Status: Failed, State: state}, ErrReplay
 		}
 		f.emit(ctx, gobellim.Event{
-			Kind: gobellim.EventApprovalDenied, RunID: c.Card.RunID, Flow: f.name, Step: c.StepID,
+			Kind: gobellim.EventApprovalDenied, RunID: card.RunID, Flow: f.name, Step: card.Step,
 			PrincipalID: approver.UserID, Tenant: approver.Tenant,
 		})
 		return Result[S]{Status: Rejected, State: state}, nil
-	case Approve:
+	case VerdictApprove:
 	default:
-		return Result[S]{Status: Failed, State: state}, fmt.Errorf("%w: %d", ErrDecision, d)
+		return Result[S]{Status: Failed, State: state}, fmt.Errorf("%w: %d", ErrVerdict, v)
 	}
 
-	if a.fourEyes && approver.UserID == c.Requester.UserID {
+	if a.fourEyes && approver.UserID == requester.UserID {
 		return Result[S]{Status: Failed, State: state},
 			fmt.Errorf("%w: four-eyes requires a different approver", ErrUnauthorized)
 	}
 
 	if a.actionPermission != "" {
-		ok, err := f.cfg.authz.Allowed(ctx, c.Requester, a.actionPermission, resource)
+		ok, err := f.cfg.authz.Allowed(ctx, requester, a.actionPermission, target)
 		if err != nil || !ok {
 			f.emit(ctx, gobellim.Event{
-				Kind: gobellim.EventApprovalDenied, RunID: c.Card.RunID, Flow: f.name, Step: c.StepID,
+				Kind: gobellim.EventApprovalDenied, RunID: card.RunID, Flow: f.name, Step: card.Step,
 				PrincipalID: approver.UserID, Tenant: approver.Tenant, Error: "action-permission",
 			})
 			return Result[S]{Status: Failed, State: state},
@@ -538,22 +553,20 @@ func (f *Flow[S]) Resume(ctx context.Context, approver gobellim.Principal, token
 		}
 	}
 
-	// Rebuild the card from the sealed state and compare the action digest.
-	// The token is authentic, but this also catches a non-deterministic builder
-	// or an application-level mutation of the pending action.
-	rebuilt, err := a.card(ctx, c.Requester, state)
+	// Rebuild the card from the stored state and compare the action digest.
+	// This catches a non-deterministic builder or a mutated state.
+	rebuilt, err := a.card(ctx, requester, state)
 	if err != nil {
 		return Result[S]{Status: Failed, State: state}, err
 	}
-	if rebuilt.ActionDigest() != c.Card.ActionDigest() {
+	if rebuilt.ActionDigest() != card.ActionDigest() {
 		return Result[S]{Status: Failed, State: state},
 			fmt.Errorf("%w: pending action changed", ErrFlowDrift)
 	}
 
-	// Claim before the effect: a crash in the window between the claim and the
-	// external call loses the approval instead of risking a second execution.
-	// Recovery is reconciliation with the provider, not a retry.
-	claimed, err := f.cfg.store.Claim(ctx, c.Nonce, c.ExpiresAt)
+	// Claim before the remaining steps: a crash loses the approval instead of
+	// running the post-approval steps twice.
+	claimed, err := f.cfg.store.Claim(ctx, nonce, card.ExpiresAt)
 	if err != nil {
 		return Result[S]{Status: Failed, State: state}, fmt.Errorf("flow: store claim: %w", err)
 	}
@@ -562,17 +575,26 @@ func (f *Flow[S]) Resume(ctx context.Context, approver gobellim.Principal, token
 	}
 
 	f.emit(ctx, gobellim.Event{
-		Kind: gobellim.EventApprovalGranted, RunID: c.Card.RunID, Flow: f.name, Step: c.StepID,
+		Kind: gobellim.EventApprovalGranted, RunID: card.RunID, Flow: f.name, Step: card.Step,
 		PrincipalID: approver.UserID, Tenant: approver.Tenant,
 	})
 	f.emit(ctx, gobellim.Event{
-		Kind: gobellim.EventWorkflowResumed, RunID: c.Card.RunID, Flow: f.name, Step: c.StepID,
-		PrincipalID: c.Requester.UserID, Tenant: c.Requester.Tenant,
+		Kind: gobellim.EventWorkflowResumed, RunID: card.RunID, Flow: f.name, Step: card.Step,
+		PrincipalID: requester.UserID, Tenant: requester.Tenant,
 	})
 
-	// The remaining steps run as the requester and can read the approver from
-	// the context to record who approved an action.
-	return f.runFrom(withApprover(ctx, approver), c.Requester, state, c.Step+1)
+	// The remaining steps run as the requester; ApproverFrom carries the
+	// authenticated approver to the step that executes the action.
+	return f.runFrom(withApprover(ctx, approver), requester, state, idx+1)
+}
+
+func (f *Flow[S]) approvalAt(id string) (int, *approve[S], error) {
+	for i, st := range f.steps {
+		if st.id == id && st.approve != nil {
+			return i, st.approve, nil
+		}
+	}
+	return 0, nil, fmt.Errorf("%w: step %q is not an approval boundary", ErrFlowDrift, id)
 }
 
 // approverKey carries the authenticated approver from Resume to the steps that
@@ -597,37 +619,61 @@ func (f *Flow[S]) ttlFor(a *approve[S]) time.Duration {
 	return f.cfg.ttl
 }
 
-func (f *Flow[S]) aad(tenant string) []byte {
-	// Tenant and flow are bound outside the ciphertext. The workflow version is
-	// inside the authenticated payload, so a mismatch yields ErrFlowDrift
-	// instead of looking like tampering.
-	return []byte(tenant + "|" + f.name)
-}
-
 func (f *Flow[S]) emit(ctx context.Context, e gobellim.Event) {
 	e.Time = f.cfg.now()
 	e.PolicyVersion = f.cfg.policyVersion
 	f.cfg.audit.Emit(ctx, e)
 }
 
+// suspensionMessage is the canonical byte string a Suspension is signed over.
+// Every field is included, because the card is what the approver decided on and
+// the nonce is what makes the decision single-use. Strings are length-prefixed
+// so no two different field values produce the same message.
+func suspensionMessage(s *Suspension) []byte {
+	b := make([]byte, 0, 512)
+	add := func(v string) {
+		b = strconv.AppendInt(b, int64(len(v)), 10)
+		b = append(b, ':')
+		b = append(b, v...)
+		b = append(b, 0)
+	}
+	add(s.Nonce)
+	add(s.Requester.UserID)
+	add(s.Requester.Tenant)
+	for _, r := range s.Requester.Roles {
+		add(r)
+	}
+	c := s.Card
+	for _, v := range []string{
+		c.RunID, c.Flow, c.Step, c.Tool, c.Operation.String(), string(c.Args),
+		c.Digest, c.Reason, c.RequiredPermission,
+	} {
+		add(v)
+	}
+	b = strconv.AppendBool(b, c.FourEyes)
+	b = append(b, 0)
+	b = strconv.AppendInt(b, c.ExpiresAt.UnixNano(), 10)
+	b = append(b, 0)
+	for _, p := range c.Provenance {
+		add(p.Arg)
+		add(p.Source)
+		add(p.Integrity.String())
+	}
+	return strconv.AppendInt(b, s.ExpiresAt.UnixNano(), 10)
+}
+
+func (f *Flow[S]) sign(s *Suspension) []byte {
+	return f.cfg.sealer.Sign(suspensionMessage(s))
+}
+
+func (f *Flow[S]) signedByUs(s *Suspension) bool {
+	return f.cfg.sealer.Verify(suspensionMessage(s), s.Proof)
+}
+
 func newID(prefix string) string {
 	var b [12]byte
 	_, _ = rand.Read(b[:])
 	return prefix + hex.EncodeToString(b[:])
-}
-
-type continuation struct {
-	V           int                   `json:"v"`
-	Flow        string                `json:"flow"`
-	FlowVersion int                   `json:"flow_version"`
-	Tenant      string                `json:"tenant"`
-	Requester   gobellim.Principal    `json:"requester"`
-	Step        int                   `json:"step"`
-	StepID      string                `json:"step_id"`
-	ExpiresAt   time.Time             `json:"expires_at"`
-	Nonce       string                `json:"nonce"`
-	State       json.RawMessage       `json:"state"`
-	Card        gobellim.ApprovalCard `json:"card"`
 }
 
 // Err reports the first configuration error recorded by Step or Approve. Run and

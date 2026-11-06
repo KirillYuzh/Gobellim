@@ -14,13 +14,13 @@ import (
 type TicketInput struct {
 	TenantID string `gobellim:"source=principal,required"`
 	TicketID string `gobellim:"source=application,required"`
-	Body     string `gobellim:"required,sensitivity=pii"`
+	Body     string `gobellim:"required,sensitivity=patterns"`
 	OrderID  string `gobellim:"sensitivity=secret"`
 }
 
 type TriageOutput struct {
 	Category string `gobellim:"required,oneof=billing|technical|other"`
-	Reply    string
+	Reply    string `gobellim:"resolve"`
 }
 
 type RefundArgs struct {
@@ -38,7 +38,7 @@ func main() {
 	principal := gobellim.Principal{UserID: "u-1", Tenant: "acme"}
 
 	notebook.Cell("1. Вход — это данные, а не инструкции", `
-Body размечен как sensitivity=pii: e-mail заменяется на handle <h1>.
+Body размечен как sensitivity=patterns: e-mail заменяется на handle <h1>.
 OrderID размечен как sensitivity=secret: модель видит <h2>, а не сам номер.
 source=principal требует, чтобы TenantID совпадал с Principal.`)
 
@@ -52,9 +52,9 @@ source=principal требует, чтобы TenantID совпадал с Princip
 	var executed int
 	refund := gobellim.Tool[RefundArgs, RefundResult]{
 		Name:       "orders.refund",
-		Effect:     gobellim.Write,
+		Operation:  gobellim.Write,
 		Permission: "orders:refund",
-		Resource: func(p gobellim.Principal, a RefundArgs) gobellim.Resource {
+		Target: func(p gobellim.Principal, a RefundArgs) gobellim.Resource {
 			return gobellim.Resource{Type: "order", ID: a.OrderID, TenantID: p.Tenant}
 		},
 		Run: func(context.Context, gobellim.Principal, RefundArgs) (RefundResult, error) {
@@ -99,7 +99,7 @@ source=principal требует, чтобы TenantID совпадал с Princip
 		notebook.Cell("2. Gate остановил write", `
 Аргумент OrderID пришёл из untrusted-поля, поэтому Write не разрешён молча.
 Возвращается approval card; tool handler не вызывался.`)
-		notebook.Result("tool: %s, effect: %s", res.Pending.Card.Tool, res.Pending.Card.Effect)
+		notebook.Result("tool: %s, operation: %s", res.Pending.Card.Tool, res.Pending.Card.Operation)
 		notebook.Result("args (resolved for the approver): %s", string(res.Pending.Card.Args))
 		notebook.Result("digest: %s", res.Pending.Card.Digest)
 		for _, p := range res.Pending.Card.Provenance {
@@ -110,7 +110,7 @@ source=principal требует, чтобы TenantID совпадал с Princip
 	notebook.Cell("3. Что произошло", `
 Модель не получила ни e-mail, ни номер заказа в открытом виде.
 Даже если она подставит handle в write-инструмент, Gate не выполнит действие
-без одобрения человека. После одобрения приложение вызывает
+без одобрения из доверенного источника. После одобрения приложение вызывает
 Task.ExecuteApproved с той же карточкой: Gate перепроверит tenant, ACL,
 бизнес-валидацию и digest. Следующий notebook показывает остальные отказы.`)
 	fmt.Println()

@@ -14,7 +14,7 @@ const (
 	EventTaskStarted EventKind = "task.started"
 	// EventTaskCompleted marks a task that produced a valid output.
 	EventTaskCompleted EventKind = "task.completed"
-	// EventTaskSuspended marks a task that stopped for human approval.
+	// EventTaskSuspended marks a task that stopped for an approval outside the model.
 	EventTaskSuspended EventKind = "task.suspended"
 	// EventTaskFailed marks a task that returned an error.
 	EventTaskFailed EventKind = "task.failed"
@@ -26,11 +26,14 @@ const (
 	EventGateDenied EventKind = "gate.denied"
 	// EventGateEscalated marks an escalated action.
 	EventGateEscalated EventKind = "gate.escalated"
+	// EventModelRetried marks a reply that was not valid JSON and was asked for
+	// again. A steady rate here means the model or the schema is wrong.
+	EventModelRetried EventKind = "model.retried"
 	// EventToolCompleted marks a completed tool call.
 	EventToolCompleted EventKind = "tool.completed"
 	// EventWorkflowSuspended marks a workflow that needs approval.
 	EventWorkflowSuspended EventKind = "workflow.suspended"
-	// EventApprovalRequested marks an approval card issued to a human.
+	// EventApprovalRequested marks an approval card issued to a trusted approver.
 	EventApprovalRequested EventKind = "approval.requested"
 	// EventApprovalGranted marks an approved action.
 	EventApprovalGranted EventKind = "approval.granted"
@@ -45,7 +48,7 @@ const (
 )
 
 // Event is one audit record. It never carries prompt text, raw arguments,
-// secrets or continuation tokens.
+// secrets or approval cards.
 type Event struct {
 	Kind             EventKind
 	Time             time.Time
@@ -56,7 +59,7 @@ type Event struct {
 	PrincipalID      string
 	Tenant           string
 	Tool             string
-	Effect           Effect
+	Operation        Operation
 	Decision         DecisionKind
 	RuleIDs          []string
 	PolicyVersion    string
@@ -73,8 +76,13 @@ type Event struct {
 	Error            string
 }
 
-// Sink receives audit events. Implementations must not block the caller for
-// long and must not log the values an event deliberately omits.
+// Sink receives audit events. Implementations must be safe for concurrent use
+// and must not perform I/O on the caller's goroutine: Emit runs on the request
+// path, once per model call and once per Gate decision. Buffer the event in
+// your own goroutine and expose a Close that flushes it.
+//
+// An event deliberately omits prompt text, raw arguments and secrets; a sink
+// must not add them back.
 type Sink interface {
 	Emit(ctx context.Context, e Event)
 }
@@ -104,8 +112,8 @@ func (s SlogSink) Emit(ctx context.Context, e Event) {
 	add("principal", e.PrincipalID)
 	add("tenant", e.Tenant)
 	add("tool", e.Tool)
-	if e.Effect != EffectUnknown {
-		add("effect", e.Effect.String())
+	if e.Operation != OperationUnknown {
+		add("operation", e.Operation.String())
 	}
 	if len(e.RuleIDs) > 0 || e.Decision != Deny {
 		add("decision", e.Decision.String())

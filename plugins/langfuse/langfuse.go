@@ -37,6 +37,13 @@ type Config struct {
 	// OnDrop receives an event the queue could not accept. Audit loss must be
 	// visible to the application, not only to Dropped().
 	OnDrop func(gobellim.Event)
+	// SendPrincipalID sends the caller's principal id to Langfuse. It is off by
+	// default: a principal id is personal data, and an audit sink is not an
+	// identity export.
+	SendPrincipalID bool
+	// SendTenant sends the tenant reference to Langfuse. It is off by default
+	// for the same reason.
+	SendTenant bool
 }
 
 const defaultHost = "https://cloud.langfuse.com"
@@ -296,7 +303,8 @@ func (s *Sink) convert(e gobellim.Event) []ingestionEvent {
 			ID: s.newID(), Timestamp: stamp, Type: "trace-create",
 			Body: traceBody{
 				ID: traceID, Timestamp: stamp, Name: name,
-				UserID: e.PrincipalID, Metadata: metadata(e),
+				UserID:   principal(e, s.cfg.SendPrincipalID),
+				Metadata: s.metadata(e),
 			},
 		}}
 	case gobellim.EventModelCompleted:
@@ -310,7 +318,7 @@ func (s *Sink) convert(e gobellim.Event) []ingestionEvent {
 					"output": e.CompletionTokens,
 					"total":  e.TotalTokens,
 				},
-				Metadata: metadata(e),
+				Metadata: s.metadata(e),
 			},
 		}}
 	default:
@@ -327,13 +335,20 @@ func (s *Sink) convert(e gobellim.Event) []ingestionEvent {
 			Body: spanBody{
 				ID: s.newID(), TraceID: traceID, Name: name,
 				StartTime: formatTime(start), EndTime: stamp,
-				Level: level, Metadata: metadata(e), StatusMsg: e.Error,
+				Level: level, Metadata: s.metadata(e), StatusMsg: e.Error,
 			},
 		}}
 	}
 }
 
-func metadata(e gobellim.Event) map[string]any {
+func principal(e gobellim.Event, send bool) string {
+	if !send {
+		return ""
+	}
+	return e.PrincipalID
+}
+
+func (s *Sink) metadata(e gobellim.Event) map[string]any {
 	m := map[string]any{"kind": string(e.Kind)}
 	add := func(k, v string) {
 		if v != "" {
@@ -343,13 +358,15 @@ func metadata(e gobellim.Event) map[string]any {
 	add("task", e.Task)
 	add("flow", e.Flow)
 	add("step", e.Step)
-	add("tenant", e.Tenant)
+	if s.cfg.SendTenant {
+		add("tenant", e.Tenant)
+	}
 	add("tool", e.Tool)
 	add("policy_version", e.PolicyVersion)
 	add("args_digest", e.ArgsDigest)
 	add("error", e.Error)
-	if e.Effect != gobellim.EffectUnknown {
-		m["effect"] = e.Effect.String()
+	if e.Operation != gobellim.OperationUnknown {
+		m["operation"] = e.Operation.String()
 	}
 	if len(e.RuleIDs) > 0 || e.Decision != gobellim.Deny {
 		m["decision"] = e.Decision.String()

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,7 +27,7 @@ func sampleEvents(t *testing.T) []gobellim.Event {
 		},
 		{
 			Kind: gobellim.EventGateAllowed, Time: now, RunID: "run-1", Task: "triage",
-			Tool: "orders.read", Effect: gobellim.EffectRead, Decision: gobellim.Allow,
+			Tool: "orders.read", Operation: gobellim.OperationRead, Decision: gobellim.Allow,
 			RuleIDs: []string{"read"}, ArgsDigest: "abc", Integrity: gobellim.Derived, Sensitivity: gobellim.Public,
 		},
 		{Kind: gobellim.EventTaskCompleted, Time: now, RunID: "run-1", Task: "triage", ModelCalls: 1, ToolCalls: 1},
@@ -129,6 +130,31 @@ func TestCloseIsIdempotentAndEmitAfterCloseIsSafe(t *testing.T) {
 	sink.Emit(context.Background(), gobellim.Event{Kind: gobellim.EventTaskStarted})
 	if sink.Dropped() != 1 {
 		t.Fatalf("dropped = %d, want 1: an event lost after Close must still be visible", sink.Dropped())
+	}
+}
+
+func TestCloseDoesNotLeakTheWorker(t *testing.T) {
+	base := runtime.NumGoroutine()
+	for i := 0; i < 20; i++ {
+		sink, err := New(Config{DryRun: true, BatchSize: 1, FlushInterval: time.Millisecond})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sink.Emit(context.Background(), gobellim.Event{Kind: gobellim.EventTaskStarted})
+		if err := sink.Close(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Close returns once the batch is flushed; the waiter goroutine may still be
+	// unwinding, so poll briefly instead of asserting on a single sample.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if n := runtime.NumGoroutine(); n <= base {
+			return
+		} else if time.Now().After(deadline) {
+			t.Fatalf("goroutines = %d after Close, baseline %d", n, base)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

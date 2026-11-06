@@ -22,14 +22,23 @@ const (
 // tagSpec is the parsed content of a `gobellim:"..."` struct tag.
 type tagSpec struct {
 	required       bool
-	untrusted      bool
 	source         string
 	oneof          []string
 	min            *float64
 	max            *float64
 	sensitivity    Sensitivity
 	hasSensitivity bool
-	ground         bool
+	// ref makes a value addressable without labelling it confidential: the model
+	// sees a handle, the approval card and the audit carry the value.
+	ref    bool
+	ground bool
+	// groundSource names the input field a grounded handle must come from.
+	// Empty means "the argument path itself"; "any" disables the check.
+	groundSource string
+	// resolve lets a task output field take a handle's value back. Without it an
+	// output string keeps no handle token at all: the model can echo "<h3>", and
+	// pasting a secret into a reply is a disclosure nobody declared.
+	resolve bool
 }
 
 func badTag(key string) error {
@@ -53,11 +62,6 @@ func parseTag(raw string) (tagSpec, error) {
 				return s, badTag(key)
 			}
 			s.required = true
-		case "untrusted":
-			if hasVal {
-				return s, badTag(key)
-			}
-			s.untrusted = true
 		case "source":
 			if !hasVal || (val != "principal" && val != "application") {
 				return s, badTag(key)
@@ -105,17 +109,27 @@ func parseTag(raw string) (tagSpec, error) {
 			}
 			s.sensitivity = v
 			s.hasSensitivity = true
-		case "ground":
+		case "ref":
 			if hasVal {
 				return s, badTag(key)
+			}
+			s.ref = true
+		case "resolve":
+			if hasVal {
+				return s, badTag(key)
+			}
+			s.resolve = true
+		case "ground":
+			if hasVal {
+				if val == "" {
+					return s, badTag(key)
+				}
+				s.groundSource = val
 			}
 			s.ground = true
 		default:
 			return s, badTag(key)
 		}
-	}
-	if s.source != "" && s.untrusted {
-		return s, fmt.Errorf("%w: source and untrusted are mutually exclusive", ErrInvalidConfig)
 	}
 	if s.min != nil && s.max != nil && *s.min > *s.max {
 		return s, fmt.Errorf("%w: min is greater than max", ErrInvalidConfig)
@@ -152,19 +166,24 @@ func (f *fieldSchema) sensitivity() Sensitivity {
 	return Public
 }
 
-// redact hides a value according to its declared sensitivity. PII is masked by
+// redact hides a value according to its declared sensitivity. A patterns field is masked by
 // the narrow regex set; a secret is replaced by one opaque handle. A trusted
 // source keeps its trusted label, so a model may reference the value through a
 // handle.
 func (f *fieldSchema) redact(value string, l Label, hs *handleSet) string {
-	if value == "" {
+	if value == "" || hs == nil {
 		return value
+	}
+	if f.spec.ref {
+		// Addressable, not confidential: the model gets a handle and the value
+		// stays public in the card and the audit.
+		return hs.put(value, l)
 	}
 	switch f.sensitivity() {
 	case Secret:
 		return hs.put(value, l)
-	case PII:
-		return maskPII(value, l, hs)
+	case Patterns:
+		return maskPatterns(value, l, hs)
 	default:
 		return value
 	}
@@ -240,6 +259,16 @@ func buildStruct(t reflect.Type, depth int) (*structSchema, error) {
 		if skip {
 			continue
 		}
+		if opts := strings.Split(sf.Tag.Get("json"), ","); len(opts) > 1 {
+			for _, o := range opts[1:] {
+				if o == "string" {
+					// The generated schema says number or boolean, so the model sends an
+					// unquoted value and decodeStrict would reject it. Differing here
+					// would surface as a runtime argument error on every call.
+					return nil, fmt.Errorf("%w: %s.%s uses json \",string\", which conflicts with the generated schema", ErrUnsupportedType, t, sf.Name)
+				}
+			}
+		}
 		if sf.Anonymous && !hasExplicitJSONName(sf) {
 			return nil, fmt.Errorf("%w: %s embeds %s; declare an explicit field", ErrUnsupportedType, t, sf.Type)
 		}
@@ -285,8 +314,8 @@ func nodeForType(t reflect.Type, spec tagSpec, depth int) (nodeResult, error) {
 	case reflect.String:
 		// source, ground and sensitivity apply to strings.
 	case reflect.Slice, reflect.Array:
-		if spec.source != "" || spec.ground {
-			return nodeResult{}, fmt.Errorf("%w: source and ground apply to string fields only", ErrInvalidConfig)
+		if spec.source != "" || spec.ground || spec.ref {
+			return nodeResult{}, fmt.Errorf("%w: source, ground and ref apply to string fields only", ErrInvalidConfig)
 		}
 		if t.Elem().Kind() == reflect.Uint8 {
 			return nodeResult{}, fmt.Errorf("%w: []byte encodes as base64; use string", ErrUnsupportedType)
@@ -295,8 +324,8 @@ func nodeForType(t reflect.Type, spec tagSpec, depth int) (nodeResult, error) {
 			return nodeResult{}, fmt.Errorf("%w: sensitivity applies to strings and slices of strings", ErrInvalidConfig)
 		}
 	default:
-		if spec.source != "" || spec.ground || spec.sensitivity != Public {
-			return nodeResult{}, fmt.Errorf("%w: source, ground and sensitivity apply to strings only", ErrInvalidConfig)
+		if spec.source != "" || spec.ground || spec.ref || spec.sensitivity != Public {
+			return nodeResult{}, fmt.Errorf("%w: source, ground, ref and sensitivity apply to strings only", ErrInvalidConfig)
 		}
 	}
 
@@ -645,6 +674,187 @@ func (s *structSchema) labels(base Label) map[string]Label {
 	return out
 }
 
+// checkInputTags rejects a tag that only makes sense on a tool argument.
+// Accepting it here would be a silent no-op on a security tag: the developer
+// declares "this value must be an existing handle" on a field the runtime never
+// grounds, and reads the result as a protection that does not exist.
+func (s *structSchema) checkInputTags() error {
+	for _, f := range s.fields {
+		if f.spec.ground {
+			return fmt.Errorf("%w: %s.%s: ground applies to a tool argument, not to a task input field", ErrInvalidConfig, s.typ, f.goName)
+		}
+		if f.spec.resolve {
+			return fmt.Errorf("%w: %s.%s: resolve applies to a task output field, not to a task input field", ErrInvalidConfig, s.typ, f.goName)
+		}
+		if f.spec.ref && f.spec.hasSensitivity {
+			// ref means "public but addressable"; sensitivity means "limit
+			// disclosure". A value cannot be both, and picking one silently would
+			// leave the developer with a protection that does not exist.
+			return fmt.Errorf("%w: %s.%s: ref and sensitivity are mutually exclusive", ErrInvalidConfig, s.typ, f.goName)
+		}
+		if f.nested != nil {
+			if err := f.nested.checkInputTags(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// checkArgTags rejects a tag that only makes sense on a task input field. The
+// runtime labels a tool argument from the model as Derived no matter what the
+// declaration says, so source=application on an argument is a declaration the
+// Gate would never honour.
+func (s *structSchema) checkArgTags() error {
+	for _, f := range s.fields {
+		if f.spec.source != "" {
+			return fmt.Errorf("%w: %s.%s: source applies to a task input field, not to a tool argument", ErrInvalidConfig, s.typ, f.goName)
+		}
+		if f.spec.ref {
+			return fmt.Errorf("%w: %s.%s: ref applies to a task input field, not to a tool argument", ErrInvalidConfig, s.typ, f.goName)
+		}
+		if f.spec.resolve {
+			return fmt.Errorf("%w: %s.%s: resolve applies to a task output field, not to a tool argument", ErrInvalidConfig, s.typ, f.goName)
+		}
+		if f.nested != nil {
+			if err := f.nested.checkArgTags(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// paths returns every JSON path a schema declares. NewTask uses it to reject a
+// ground argument that binds to an input field the task does not have: a
+// renamed input field would otherwise fail at run time, as a Deny the model
+// cannot explain.
+func (s *structSchema) paths() map[string]struct{} {
+	out := make(map[string]struct{}, len(s.fields))
+	var walk func(*structSchema, string)
+	walk = func(sc *structSchema, prefix string) {
+		for _, f := range sc.fields {
+			path := joinPath(prefix, f.jsonName)
+			out[path] = struct{}{}
+			if f.nested != nil {
+				walk(f.nested, path)
+			}
+		}
+	}
+	walk(s, "")
+	return out
+}
+
+// groundBinding is one ground argument and the input field it binds to.
+type groundBinding struct{ arg, source string }
+
+// groundBindings lists the input fields the ground arguments of this schema
+// expect. A bare ground binds to the argument's own path; ground=any opts out
+// and is not listed.
+func (s *structSchema) groundBindings() []groundBinding {
+	var out []groundBinding
+	var walk func(*structSchema, string)
+	walk = func(sc *structSchema, prefix string) {
+		for _, f := range sc.fields {
+			path := joinPath(prefix, f.jsonName)
+			if f.spec.ground && f.spec.groundSource != "any" {
+				source := f.spec.groundSource
+				if source == "" {
+					source = path
+				}
+				out = append(out, groundBinding{arg: path, source: source})
+			}
+			if f.nested != nil {
+				walk(f.nested, path)
+			}
+		}
+	}
+	walk(s, "")
+	return out
+}
+
+// checkGrounding walks the argument schema and the handles the model used.
+// A handle may appear only in a field tagged ground. A ground field must
+// contain a handle, and that handle must come from the declared source (the
+// argument path by default). A raw string never grounds an argument.
+func (s *structSchema) checkGrounding(handleLabels map[string]Label) (bool, error) {
+	for path, l := range handleLabels {
+		f, ok := s.fieldByPath(path)
+		if !ok || !f.spec.ground {
+			return false, fmt.Errorf("%w: handle used in non-handle field %s", ErrUngrounded, path)
+		}
+		if err := groundSource(f, path, l); err != nil {
+			return false, err
+		}
+	}
+	grounded := true
+	var walk func(*structSchema, string)
+	walk = func(sc *structSchema, prefix string) {
+		for _, f := range sc.fields {
+			path := joinPath(prefix, f.jsonName)
+			if f.spec.ground {
+				if _, ok := handleLabels[path]; !ok {
+					grounded = false
+				}
+			}
+			if f.nested != nil {
+				walk(f.nested, path)
+			}
+		}
+	}
+	walk(s, "")
+	return grounded, nil
+}
+
+func (s *structSchema) fieldByPath(path string) (*fieldSchema, bool) {
+	if path == "" {
+		return nil, false
+	}
+	parts := strings.Split(path, ".")
+	cur := s
+	for i, part := range parts {
+		var next *fieldSchema
+		for _, f := range cur.fields {
+			if f.jsonName == part {
+				next = f
+				break
+			}
+		}
+		if next == nil {
+			return nil, false
+		}
+		if i == len(parts)-1 {
+			return next, true
+		}
+		if next.nested == nil {
+			return nil, false
+		}
+		cur = next.nested
+	}
+	return nil, false
+}
+
+func groundSource(f *fieldSchema, path string, l Label) error {
+	if f.spec.groundSource == "any" {
+		return nil
+	}
+	want := f.spec.groundSource
+	if want == "" {
+		want = path
+	}
+	if len(l.Sources) == 0 || l.Sources[0].ID != want {
+		return fmt.Errorf("%w: handle for %s came from %q, want %q", ErrUngrounded, path, sourceID(l), want)
+	}
+	return nil
+}
+
+func sourceID(l Label) string {
+	if len(l.Sources) == 0 {
+		return ""
+	}
+	return l.Sources[0].ID
+}
+
 // marshalNoEscape encodes JSON without HTML escaping so a handle stays
 // readable as <h1> in the prompt instead of \u003ch1\u003e.
 func marshalNoEscape(v any) ([]byte, error) {
@@ -716,13 +926,13 @@ func (f *fieldSchema) prepareValue(fv reflect.Value, path string, p Principal, h
 			}
 			l = Label{
 				Integrity:   Trusted,
-				Sources:     []SourceRef{{Kind: "principal", ID: f.goName}},
+				Sources:     []SourceRef{{Kind: "principal", ID: path}},
 				Sensitivity: f.sensitivity(),
 			}
 		case "application":
 			l = Label{
 				Integrity:   Trusted,
-				Sources:     []SourceRef{{Kind: "application", ID: f.goName}},
+				Sources:     []SourceRef{{Kind: "application", ID: path}},
 				Sensitivity: f.sensitivity(),
 			}
 		default:

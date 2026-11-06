@@ -1,18 +1,15 @@
 package flow
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	gobellim "github.com/KirillYuzh/Gobellim"
-	"github.com/KirillYuzh/Gobellim/testkit"
 )
 
 type refundState struct {
@@ -21,16 +18,15 @@ type refundState struct {
 	Executed bool
 }
 
-type authzFunc func(ctx context.Context, p gobellim.Principal, permission string, resource gobellim.Resource) (bool, error)
+type authzFunc func(context.Context, gobellim.Principal, string, gobellim.Resource) (bool, error)
 
-func (f authzFunc) Allowed(ctx context.Context, p gobellim.Principal, permission string, resource gobellim.Resource) (bool, error) {
-	return f(ctx, p, permission, resource)
+func (f authzFunc) Allowed(ctx context.Context, p gobellim.Principal, permission string, r gobellim.Resource) (bool, error) {
+	return f(ctx, p, permission, r)
 }
 
-func perms(m map[string]bool) gobellim.Authorizer {
+func perms(granted map[string]bool) gobellim.Authorizer {
 	return authzFunc(func(_ context.Context, _ gobellim.Principal, permission string, _ gobellim.Resource) (bool, error) {
-		v, ok := m[permission]
-		return ok && v, nil
+		return granted[permission], nil
 	})
 }
 
@@ -46,25 +42,18 @@ func approver(id string) gobellim.Principal {
 	return gobellim.Principal{UserID: id, Tenant: "acme"}
 }
 
-func testSealer(t *testing.T) *Sealer {
-	t.Helper()
-	s, err := NewSealer("test-key", bytes.Repeat([]byte{7}, 32))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return s
-}
+type silentAudit struct{}
 
-func buildFlow(authz gobellim.Authorizer, sealer *Sealer, store Store, opts ...Option) *Flow[refundState] {
+func (silentAudit) Emit(context.Context, gobellim.Event) {}
+
+func buildFlow(authz gobellim.Authorizer, store gobellim.ClaimStore, opts ...Option) *Flow[refundState] {
 	base := []Option{
 		WithAuthorizer(authz),
-		WithSealer(sealer),
 		WithStore(store),
 		WithAudit(silentAudit{}),
 		WithTTL(time.Hour),
 	}
 	base = append(base, opts...)
-
 	f, err := New[refundState]("refund", base...)
 	if err != nil {
 		panic(err)
@@ -88,12 +77,12 @@ func buildFlow(authz gobellim.Authorizer, sealer *Sealer, store Store, opts ...O
 				return gobellim.ApprovalCard{}, err
 			}
 			return gobellim.ApprovalCard{
-				Tool:   "orders.refund",
-				Effect: gobellim.Write,
-				Args:   args,
+				Tool:      "orders.refund",
+				Operation: gobellim.Write,
+				Args:      args,
 			}, nil
 		},
-		Resource: func(_ context.Context, p gobellim.Principal, s refundState) (gobellim.Resource, error) {
+		Target: func(_ context.Context, p gobellim.Principal, s refundState) (gobellim.Resource, error) {
 			return gobellim.Resource{Type: "order", ID: s.OrderID, TenantID: p.Tenant}, nil
 		},
 	})
@@ -105,211 +94,158 @@ func buildFlow(authz gobellim.Authorizer, sealer *Sealer, store Store, opts ...O
 }
 
 func newFlow(authz gobellim.Authorizer, opts ...Option) *Flow[refundState] {
-	return buildFlow(authz, mustSealer(), NewMemStore(), opts...)
+	return buildFlow(authz, NewMemStore(), opts...)
 }
 
-// silentAudit keeps the tests that do not assert events readable.
-type silentAudit struct{}
-
-func (silentAudit) Emit(context.Context, gobellim.Event) {}
-
-func mustSealer() *Sealer {
-	s, err := NewSealer("test-key", bytes.Repeat([]byte{7}, 32))
-	if err != nil {
-		panic(err)
-	}
-	return s
-}
-
-func TestSuspendAndResume(t *testing.T) {
-	f := newFlow(perms(defaultPerms()))
+func suspended(t *testing.T, f *Flow[refundState]) Result[refundState] {
+	t.Helper()
 	res, err := f.Run(context.Background(), requester(), refundState{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Status != Suspended {
-		t.Fatalf("status = %v, want Suspended", res.Status)
+	if res.Status != Suspended || res.Suspension == nil {
+		t.Fatalf("status = %v, suspension = %+v", res.Status, res.Suspension)
 	}
-	if res.Suspension == nil || res.Suspension.Token == "" {
-		t.Fatal("suspension has no token")
-	}
+	return res
+}
+
+func resume(ctx context.Context, f *Flow[refundState], res Result[refundState], p gobellim.Principal, v Verdict) (Result[refundState], error) {
+	return f.Resume(ctx, p, *res.Suspension, res.State, v)
+}
+
+func TestSuspendAndResume(t *testing.T) {
+	f := newFlow(perms(defaultPerms()))
+	res := suspended(t, f)
 	card := res.Suspension.Card
-	if card.Tool != "orders.refund" || card.Effect != gobellim.Write {
+	if card.Tool != "orders.refund" || card.Operation != gobellim.Write {
 		t.Fatalf("card = %+v", card)
 	}
-	if card.RequiredPermission != "refund:approve" {
-		t.Fatalf("required permission = %q", card.RequiredPermission)
-	}
-	if !card.FourEyes || card.Digest == "" {
+	if card.RequiredPermission != "refund:approve" || !card.FourEyes || card.Digest == "" {
 		t.Fatalf("card = %+v", card)
 	}
 	if res.State.Executed {
 		t.Fatal("the post-approval step ran before approval")
 	}
 
-	out, err := f.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Approve)
+	out, err := resume(context.Background(), f, res, approver("m-1"), VerdictApprove)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.Status != Done {
-		t.Fatalf("status = %v, want Done", out.Status)
-	}
-	if !out.State.Executed {
-		t.Fatal("the post-approval step did not run")
+	if out.Status != Done || !out.State.Executed {
+		t.Fatalf("status = %v executed = %v", out.Status, out.State.Executed)
 	}
 }
 
 func TestReject(t *testing.T) {
 	f := newFlow(perms(defaultPerms()))
-	res, err := f.Run(context.Background(), requester(), refundState{})
+	res := suspended(t, f)
+	out, err := resume(context.Background(), f, res, approver("m-1"), VerdictReject)
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := f.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Reject)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.Status != Rejected {
-		t.Fatalf("status = %v, want Rejected", out.Status)
-	}
-	if out.State.Executed {
-		t.Fatal("rejected action executed")
+	if out.Status != Rejected || out.State.Executed {
+		t.Fatalf("status = %v executed = %v", out.Status, out.State.Executed)
 	}
 }
 
-func TestRejectConsumesTheToken(t *testing.T) {
+func TestRejectConsumesTheNonce(t *testing.T) {
 	f := newFlow(perms(defaultPerms()))
-	res, err := f.Run(context.Background(), requester(), refundState{})
-	if err != nil {
+	res := suspended(t, f)
+	if _, err := resume(context.Background(), f, res, approver("m-1"), VerdictReject); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Reject); err != nil {
-		t.Fatal(err)
-	}
-	// The same continuation must not be replayed as an approval.
-	out, err := f.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Approve)
-	if !errors.Is(err, ErrReplay) {
+	if _, err := resume(context.Background(), f, res, approver("m-2"), VerdictApprove); !errors.Is(err, ErrReplay) {
 		t.Fatalf("err = %v, want ErrReplay", err)
 	}
-	if out.State.Executed {
-		t.Fatal("a rejected action executed on replay")
-	}
 }
 
-func TestTamperedToken(t *testing.T) {
+func TestTamperedCard(t *testing.T) {
 	f := newFlow(perms(defaultPerms()))
-	res, err := f.Run(context.Background(), requester(), refundState{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	token := res.Suspension.Token
-	tampered := token[:len(token)-1] + "A"
-	if tampered == token {
-		tampered = token + "A"
-	}
-	if _, err := f.Resume(context.Background(), approver("m-1"), tampered, Approve); !errors.Is(err, ErrContinuation) {
-		t.Fatalf("err = %v, want ErrContinuation", err)
+	res := suspended(t, f)
+	card := res.Suspension.Card
+	card.Args = json.RawMessage(`{"order_id":"A-999","cents":4900}`)
+	susp := *res.Suspension
+	susp.Card = card
+	_, err := f.Resume(context.Background(), approver("m-1"), susp, res.State, VerdictApprove)
+	if !errors.Is(err, ErrFlowDrift) {
+		t.Fatalf("err = %v, want ErrFlowDrift", err)
 	}
 }
 
 func TestOtherTenant(t *testing.T) {
 	f := newFlow(perms(defaultPerms()))
-	res, err := f.Run(context.Background(), requester(), refundState{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := suspended(t, f)
 	other := gobellim.Principal{UserID: "m-1", Tenant: "other"}
-	if _, err := f.Resume(context.Background(), other, res.Suspension.Token, Approve); !errors.Is(err, ErrContinuation) {
-		t.Fatalf("err = %v, want ErrContinuation", err)
+	_, err := resume(context.Background(), f, res, other, VerdictApprove)
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("err = %v, want ErrUnauthorized", err)
 	}
 }
 
 func TestExpired(t *testing.T) {
-	now := time.Now()
-	f := newFlow(perms(defaultPerms()), WithClock(func() time.Time { return now }))
-	res, err := f.Run(context.Background(), requester(), refundState{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	now := time.Unix(1_700_000_000, 0)
+	f := newFlow(perms(defaultPerms()), WithClock(func() time.Time { return now }), WithTTL(time.Minute))
+	res := suspended(t, f)
 	now = now.Add(2 * time.Hour)
-	out, err := f.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Approve)
-	if !errors.Is(err, ErrExpired) {
-		t.Fatalf("err = %v, want ErrExpired", err)
-	}
-	if out.Status != Expired {
-		t.Fatalf("status = %v, want Expired", out.Status)
+	out, err := resume(context.Background(), f, res, approver("m-1"), VerdictApprove)
+	if !errors.Is(err, ErrExpired) || out.Status != Expired {
+		t.Fatalf("status = %v err = %v, want Expired/ErrExpired", out.Status, err)
 	}
 }
 
 func TestRevokedActionPermission(t *testing.T) {
-	f := newFlow(perms(map[string]bool{"refund:approve": true, "orders:refund": false}))
-	res, err := f.Run(context.Background(), requester(), refundState{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	out, err := f.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Approve)
-	if !errors.Is(err, ErrUnauthorized) {
+	f := newFlow(perms(map[string]bool{"refund:approve": true}))
+	res := suspended(t, f)
+	if _, err := resume(context.Background(), f, res, approver("m-1"), VerdictApprove); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("err = %v, want ErrUnauthorized", err)
-	}
-	if out.State.Executed {
-		t.Fatal("revoked action executed")
 	}
 }
 
 func TestApproverPermission(t *testing.T) {
-	f := newFlow(perms(map[string]bool{"refund:approve": false, "orders:refund": true}))
-	res, err := f.Run(context.Background(), requester(), refundState{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Approve); !errors.Is(err, ErrUnauthorized) {
+	f := newFlow(perms(map[string]bool{"orders:refund": true}))
+	res := suspended(t, f)
+	if _, err := resume(context.Background(), f, res, approver("m-1"), VerdictApprove); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("err = %v, want ErrUnauthorized", err)
 	}
 }
 
 func TestRejectRequiresApproverPermission(t *testing.T) {
-	f := newFlow(perms(map[string]bool{"refund:approve": false, "orders:refund": true}))
-	res, err := f.Run(context.Background(), requester(), refundState{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Reject); !errors.Is(err, ErrUnauthorized) {
+	f := newFlow(perms(map[string]bool{"orders:refund": true}))
+	res := suspended(t, f)
+	if _, err := resume(context.Background(), f, res, approver("m-1"), VerdictReject); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("err = %v, want ErrUnauthorized", err)
 	}
 }
 
 func TestFourEyes(t *testing.T) {
 	f := newFlow(perms(defaultPerms()))
-	res, err := f.Run(context.Background(), requester(), refundState{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.Resume(context.Background(), requester(), res.Suspension.Token, Approve); !errors.Is(err, ErrUnauthorized) {
+	res := suspended(t, f)
+	if _, err := resume(context.Background(), f, res, requester(), VerdictApprove); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("err = %v, want ErrUnauthorized", err)
 	}
 }
 
 func TestReplay(t *testing.T) {
 	f := newFlow(perms(defaultPerms()))
-	res, err := f.Run(context.Background(), requester(), refundState{})
-	if err != nil {
+	res := suspended(t, f)
+	if _, err := resume(context.Background(), f, res, approver("m-1"), VerdictApprove); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Approve); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Approve); !errors.Is(err, ErrReplay) {
+	if _, err := resume(context.Background(), f, res, approver("m-2"), VerdictApprove); !errors.Is(err, ErrReplay) {
 		t.Fatalf("err = %v, want ErrReplay", err)
 	}
 }
 
 func TestParallelResume(t *testing.T) {
 	store := NewMemStore()
-	sealer := testSealer(t)
+	f := buildFlow(perms(defaultPerms()), store)
+	res := suspended(t, f)
+
 	var executions atomic.Int32
-	f, err := New[refundState]("refund",
+	// The execute step is the only one that writes, so count it by replacing
+	// the flow with a fresh one whose last step counts.
+	f2, err := New[refundState]("refund",
 		WithAuthorizer(perms(defaultPerms())),
-		WithSealer(sealer),
 		WithStore(store),
 		WithAudit(silentAudit{}),
 		WithTTL(time.Hour),
@@ -317,35 +253,31 @@ func TestParallelResume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Step("prepare", func(_ context.Context, _ gobellim.Principal, s *refundState) error {
+	f2.Step("prepare", func(_ context.Context, _ gobellim.Principal, s *refundState) error {
 		s.OrderID = "A-1042"
 		s.Cents = 4900
 		return nil
 	})
-	f.Approve("manager", ApproveConfig[refundState]{
+	f2.Approve("manager", ApproveConfig[refundState]{
 		Permission:       "refund:approve",
 		ActionPermission: "orders:refund",
 		TTL:              time.Hour,
 		Card: func(_ context.Context, _ gobellim.Principal, s refundState) (gobellim.ApprovalCard, error) {
 			return gobellim.ApprovalCard{
-				Tool:   "orders.refund",
-				Effect: gobellim.Write,
-				Args:   json.RawMessage(`{"order_id":"A-1042","cents":4900}`),
+				Tool:      "orders.refund",
+				Operation: gobellim.Write,
+				Args:      json.RawMessage(`{"order_id":"A-1042","cents":4900}`),
 			}, nil
 		},
-		Resource: func(_ context.Context, p gobellim.Principal, s refundState) (gobellim.Resource, error) {
+		Target: func(_ context.Context, p gobellim.Principal, s refundState) (gobellim.Resource, error) {
 			return gobellim.Resource{Type: "order", ID: s.OrderID, TenantID: p.Tenant}, nil
 		},
 	})
-	f.Step("execute", func(_ context.Context, _ gobellim.Principal, _ *refundState) error {
+	f2.Step("execute", func(_ context.Context, _ gobellim.Principal, _ *refundState) error {
 		executions.Add(1)
 		return nil
 	})
-
-	res, err := f.Run(context.Background(), requester(), refundState{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res2 := suspended(t, f2)
 
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
@@ -354,7 +286,7 @@ func TestParallelResume(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			out, err := f.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Approve)
+			out, err := resume(context.Background(), f2, res2, approver("m-1"), VerdictApprove)
 			errs[i], statuses[i] = err, out.Status
 		}()
 	}
@@ -377,334 +309,231 @@ func TestParallelResume(t *testing.T) {
 	if got := executions.Load(); got != 1 {
 		t.Fatalf("executions = %d, want 1", got)
 	}
+	_ = res
 }
 
-func TestFlowDrift(t *testing.T) {
-	sealer := testSealer(t)
-	f := buildFlow(perms(defaultPerms()), sealer, NewMemStore(), Version(1))
-	res, err := f.Run(context.Background(), requester(), refundState{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	f2, err := New[refundState]("refund",
+func TestResumeRejectsForeignTenantTarget(t *testing.T) {
+	f, err := New[refundState]("refund",
 		WithAuthorizer(perms(defaultPerms())),
-		WithSealer(sealer),
+		WithStore(NewMemStore()),
 		WithAudit(silentAudit{}),
-		Version(2),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f2.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Approve); !errors.Is(err, ErrFlowDrift) {
-		t.Fatalf("err = %v, want ErrFlowDrift", err)
+	f.Approve("manager", ApproveConfig[refundState]{
+		Permission: "refund:approve",
+		FourEyes:   true,
+		Card: func(context.Context, gobellim.Principal, refundState) (gobellim.ApprovalCard, error) {
+			return gobellim.ApprovalCard{Tool: "orders.refund", Operation: gobellim.Write}, nil
+		},
+		Target: func(context.Context, gobellim.Principal, refundState) (gobellim.Resource, error) {
+			return gobellim.Resource{Type: "order", ID: "A-1", TenantID: "other"}, nil
+		},
+	})
+	res := suspended(t, f)
+	if _, err := f.Resume(context.Background(), approver("m-1"), *res.Suspension, res.State, VerdictApprove); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("foreign tenant target err = %v, want ErrUnauthorized", err)
 	}
 }
 
-func TestContinuationTooLarge(t *testing.T) {
-	f := newFlow(perms(defaultPerms()), WithMaxTokenBytes(10))
-	if _, err := f.Run(context.Background(), requester(), refundState{}); !errors.Is(err, ErrContinuationTooLarge) {
-		t.Fatalf("err = %v, want ErrContinuationTooLarge", err)
+func TestFlowDrift(t *testing.T) {
+	f := newFlow(perms(defaultPerms()))
+	res := suspended(t, f)
+
+	badFlow := res.Suspension.Card
+	badFlow.Flow = "other"
+	suspFlow := *res.Suspension
+	suspFlow.Card = badFlow
+	if _, err := f.Resume(context.Background(), approver("m-1"), suspFlow, res.State, VerdictApprove); !errors.Is(err, ErrFlowDrift) {
+		t.Fatalf("flow drift err = %v", err)
+	}
+
+	badStep := res.Suspension.Card
+	badStep.Step = "missing"
+	suspStep := *res.Suspension
+	suspStep.Card = badStep
+	if _, err := f.Resume(context.Background(), approver("m-1"), suspStep, res.State, VerdictApprove); !errors.Is(err, ErrFlowDrift) {
+		t.Fatalf("step drift err = %v", err)
 	}
 }
 
 func TestConditionalApprovalSkipped(t *testing.T) {
 	f, err := New[refundState]("refund",
 		WithAuthorizer(perms(defaultPerms())),
-		WithSealer(mustSealer()),
+		WithStore(NewMemStore()),
 		WithAudit(silentAudit{}),
-		WithTTL(time.Hour),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
+	f.Step("prepare", func(_ context.Context, _ gobellim.Principal, s *refundState) error {
+		s.Cents = 0
+		return nil
+	})
 	f.Approve("manager", ApproveConfig[refundState]{
-		When:       func(_ context.Context, _ gobellim.Principal, _ refundState) (bool, error) { return false, nil },
-		Permission: "refund:approve",
-		Card: func(_ context.Context, _ gobellim.Principal, _ refundState) (gobellim.ApprovalCard, error) {
-			return gobellim.ApprovalCard{Tool: "orders.refund"}, nil
+		When: func(_ context.Context, _ gobellim.Principal, s refundState) (bool, error) { return s.Cents > 0, nil },
+		Card: func(context.Context, gobellim.Principal, refundState) (gobellim.ApprovalCard, error) {
+			return gobellim.ApprovalCard{Tool: "orders.refund", Operation: gobellim.Write}, nil
 		},
 	})
 	f.Step("execute", func(_ context.Context, _ gobellim.Principal, s *refundState) error {
 		s.Executed = true
 		return nil
 	})
-
 	res, err := f.Run(context.Background(), requester(), refundState{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res.Status != Done || !res.State.Executed {
-		t.Fatalf("status=%v executed=%v", res.Status, res.State.Executed)
-	}
-}
-
-func TestSealer(t *testing.T) {
-	key := bytes.Repeat([]byte{1}, 32)
-	s, err := NewSealer("k1", key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	token, err := s.Seal([]byte("hello"), []byte("aad"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	plain, err := s.Open(token, []byte("aad"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(plain) != "hello" {
-		t.Fatalf("plain = %q", plain)
-	}
-	if _, err := s.Open(token, []byte("other")); err == nil {
-		t.Fatal("opened a token with the wrong AAD")
-	}
-
-	rotated, err := NewSealer("k2", bytes.Repeat([]byte{2}, 32))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := rotated.WithKey("k1", key); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := rotated.Open(token, []byte("aad")); err != nil {
-		t.Fatalf("rotation failed: %v", err)
-	}
-
-	if _, err := NewSealer("short", []byte("short")); err == nil {
-		t.Fatal("accepted a short key")
-	}
-}
-
-func TestMalformedToken(t *testing.T) {
-	f := newFlow(perms(defaultPerms()))
-	if _, err := f.Resume(context.Background(), approver("m-1"), "", Approve); !errors.Is(err, ErrContinuation) {
-		t.Fatalf("err = %v, want ErrContinuation", err)
+		t.Fatalf("status = %v executed = %v", res.Status, res.State.Executed)
 	}
 }
 
 func TestUnknownDecisionIsNotApproval(t *testing.T) {
 	f := newFlow(perms(defaultPerms()))
-	res, err := f.Run(context.Background(), requester(), refundState{})
-	if err != nil {
-		t.Fatal(err)
+	res := suspended(t, f)
+	if _, err := resume(context.Background(), f, res, approver("m-1"), VerdictUnknown); !errors.Is(err, ErrVerdict) {
+		t.Fatalf("err = %v, want ErrVerdict", err)
 	}
-	if _, err := f.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Decision(9)); !errors.Is(err, ErrDecision) {
-		t.Fatalf("err = %v, want ErrDecision", err)
-	}
-	if _, err := f.Resume(context.Background(), approver("m-1"), res.Suspension.Token, DecisionUnknown); !errors.Is(err, ErrDecision) {
-		t.Fatalf("zero decision approved an action: %v", err)
+	if out, err := resume(context.Background(), f, res, approver("m-1"), VerdictApprove); err != nil || out.Status != Done {
+		t.Fatalf("a valid approval after VerdictUnknown: status=%v err=%v", out.Status, err)
 	}
 }
 
 func TestDefaultStorePreventsReplay(t *testing.T) {
-	f := buildFlow(perms(defaultPerms()), mustSealer(), nil)
-	res, err := f.Run(context.Background(), requester(), refundState{})
-	if err != nil {
+	f := newFlow(perms(defaultPerms()))
+	res := suspended(t, f)
+	if _, err := resume(context.Background(), f, res, approver("m-1"), VerdictApprove); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Approve); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Approve); !errors.Is(err, ErrReplay) {
+	if _, err := resume(context.Background(), f, res, approver("m-2"), VerdictApprove); !errors.Is(err, ErrReplay) {
 		t.Fatalf("err = %v, want ErrReplay", err)
 	}
 }
 
-func TestStepDrift(t *testing.T) {
-	sealer := mustSealer()
-	f := buildFlow(perms(defaultPerms()), sealer, NewMemStore())
-	res, err := f.Run(context.Background(), requester(), refundState{})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	other, err := New[refundState]("refund",
+func TestDuplicateStepIDIsRejected(t *testing.T) {
+	f, err := New[refundState]("refund",
 		WithAuthorizer(perms(defaultPerms())),
-		WithSealer(sealer),
 		WithAudit(silentAudit{}),
-		WithTTL(time.Hour),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	other.Step("prepare", func(context.Context, gobellim.Principal, *refundState) error { return nil })
-	other.Approve("renamed", ApproveConfig[refundState]{
+	f.Step("same", func(context.Context, gobellim.Principal, *refundState) error { return nil })
+	f.Step("same", func(context.Context, gobellim.Principal, *refundState) error { return nil })
+	if f.Err() == nil {
+		t.Fatal("duplicate step id was accepted")
+	}
+}
+
+// A suspension is a bearer object unless it is signed: whoever supplies one
+// chooses the nonce, and the nonce is what makes an approval single-use.
+func TestSuspensionIsSigned(t *testing.T) {
+	f := newFlow(perms(defaultPerms()))
+	res := suspended(t, f)
+
+	forged := *res.Suspension
+	forged.Requester = gobellim.Principal{UserID: "u-2", Tenant: "acme"}
+	if _, err := f.Resume(context.Background(), approver("m-1"), forged, res.State, VerdictApprove); !errors.Is(err, ErrFlowDrift) {
+		t.Fatalf("forged requester err = %v, want ErrFlowDrift", err)
+	}
+
+	stripped := *res.Suspension
+	stripped.Proof = nil
+	if _, err := f.Resume(context.Background(), approver("m-1"), stripped, res.State, VerdictApprove); !errors.Is(err, ErrFlowDrift) {
+		t.Fatalf("missing proof err = %v, want ErrFlowDrift", err)
+	}
+
+	if _, err := f.Resume(context.Background(), approver("m-1"), *res.Suspension, res.State, VerdictApprove); err != nil {
+		t.Fatalf("an untouched suspension must resume: %v", err)
+	}
+}
+
+// A declared target must name its tenant. Filling it from the requester would
+// make the tenant comparison true by construction.
+func TestApprovalTargetWithoutTenantIsRejected(t *testing.T) {
+	f, err := New[refundState]("refund",
+		WithAuthorizer(perms(defaultPerms())),
+		WithStore(NewMemStore()),
+		WithAudit(silentAudit{}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Step("prepare", func(_ context.Context, _ gobellim.Principal, s *refundState) error {
+		s.OrderID = "A-1"
+		return nil
+	})
+	f.Approve("manager", ApproveConfig[refundState]{
+		Permission: "refund:approve",
 		Card: func(context.Context, gobellim.Principal, refundState) (gobellim.ApprovalCard, error) {
-			return gobellim.ApprovalCard{Tool: "orders.refund"}, nil
+			return gobellim.ApprovalCard{Tool: "orders.refund", Operation: gobellim.Write}, nil
+		},
+		Target: func(context.Context, gobellim.Principal, refundState) (gobellim.Resource, error) {
+			return gobellim.Resource{Type: "order", ID: "A-1"}, nil
 		},
 	})
-
-	if _, err := other.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Approve); !errors.Is(err, ErrFlowDrift) {
+	res := suspended(t, f)
+	if _, err := resume(context.Background(), f, res, approver("m-1"), VerdictApprove); !errors.Is(err, ErrFlowDrift) {
 		t.Fatalf("err = %v, want ErrFlowDrift", err)
 	}
 }
 
-func TestMemStoreExpiredNonceCanBeClaimedAgain(t *testing.T) {
-	store := NewMemStore()
-	ctx := context.Background()
-	if ok, err := store.Claim(ctx, "n", time.Now().Add(-time.Second)); err != nil || !ok {
-		t.Fatalf("first claim: ok=%v err=%v", ok, err)
-	}
-	if ok, err := store.Claim(ctx, "n", time.Now().Add(time.Hour)); err != nil || !ok {
-		t.Fatalf("expired nonce was not reusable: ok=%v err=%v", ok, err)
-	}
-	if ok, _ := store.Claim(ctx, "n", time.Now().Add(time.Hour)); ok {
-		t.Fatal("live nonce was claimed twice")
-	}
-	store.Forget(time.Now().Add(2 * time.Hour))
-	if ok, _ := store.Claim(ctx, "n", time.Now().Add(time.Hour)); !ok {
-		t.Fatal("Forget did not drop the expired nonce")
-	}
+// stubModel satisfies gobellim.Model for tests that never reach the model.
+type stubModel struct{}
+
+func (stubModel) Chat(context.Context, gobellim.Request) (gobellim.Response, error) {
+	return gobellim.Response{}, errors.New("stub model")
 }
 
-type bridgeIn struct {
-	TenantID string `gobellim:"source=principal,required"`
-	OrderID  string `gobellim:"sensitivity=secret,required"`
-}
-
-type bridgeOut struct {
-	OK bool
-}
-
-type bridgeArgs struct {
-	OrderID string `gobellim:"required,ground"`
-}
-
-type bridgeResult struct {
-	RefundID string
-}
-
-type bridgeState struct {
-	Pending  gobellim.PendingAction
-	Executed bool
-}
-
-// TestTaskApprovalInsideFlow is the end-to-end contract: a Task escalates, flow
-// seals the PendingAction, a human approves, and the exact action executes
-// through the Gate once.
-func TestTaskApprovalInsideFlow(t *testing.T) {
-	var executed int
-	refund := gobellim.Tool[bridgeArgs, bridgeResult]{
-		Name:   "orders.refund",
-		Effect: gobellim.Write,
-		Resource: func(p gobellim.Principal, _ bridgeArgs) gobellim.Resource {
-			return gobellim.Resource{Type: "order", ID: "A-1042", TenantID: p.Tenant}
-		},
-		Permission: "orders:refund",
-		Run: func(context.Context, gobellim.Principal, bridgeArgs) (bridgeResult, error) {
-			executed++
-			return bridgeResult{RefundID: "r-1"}, nil
-		},
-	}
-	model := testkit.NewFakeModel(
-		testkit.Call("orders.refund", map[string]any{"OrderID": "<h1>"}),
-		testkit.Reply(`{"OK":true}`),
-	)
+// FromEngine exists so a flow that resumes a Task authorizes the approver with
+// the same adapter the Gate uses. A second, weaker authorizer is the kind of
+// mistake that ships quietly.
+func TestFromEngineSharesTheAuthorizer(t *testing.T) {
 	engine, err := gobellim.New(
-		gobellim.WithModel(model),
-		gobellim.WithAuthorizer(perms(defaultPerms())),
+		gobellim.WithModel(stubModel{}),
+		gobellim.WithAuthorizer(perms(map[string]bool{})),
 		gobellim.WithAudit(silentAudit{}),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	task, err := gobellim.NewTask[bridgeIn, bridgeOut](engine, gobellim.TaskConfig{
-		Name:        "refund.propose",
-		Instruction: "propose a refund",
-		Tools:       []gobellim.ToolDef{refund},
-	})
+	f, err := FromEngine[refundState](engine, "refund")
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	f, err := New[bridgeState]("refund-bridge",
-		WithAuthorizer(perms(defaultPerms())),
-		WithSealer(testSealer(t)),
-		WithAudit(silentAudit{}),
-		WithTTL(time.Hour),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.Step("propose", func(ctx context.Context, p gobellim.Principal, s *bridgeState) error {
-		res, err := task.Run(ctx, p, bridgeIn{TenantID: p.Tenant, OrderID: "A-1042"})
-		if err != nil {
-			return err
-		}
-		if res.Pending == nil {
-			return errors.New("the model did not propose an action")
-		}
-		s.Pending = *res.Pending
+	f.Step("prepare", func(_ context.Context, _ gobellim.Principal, s *refundState) error {
+		s.OrderID = "A-1"
+		s.Cents = 1
 		return nil
 	})
-	f.ApprovePending("manager", func(s bridgeState) *gobellim.PendingAction { return &s.Pending }, ApproveConfig[bridgeState]{
-		Permission:       "refund:approve",
-		ActionPermission: "orders:refund",
-		Resource: func(_ context.Context, p gobellim.Principal, _ bridgeState) (gobellim.Resource, error) {
-			return gobellim.Resource{Type: "order", ID: "A-1042", TenantID: p.Tenant}, nil
+	f.Approve("manager", ApproveConfig[refundState]{
+		Permission: "refund:approve",
+		Card: func(context.Context, gobellim.Principal, refundState) (gobellim.ApprovalCard, error) {
+			return gobellim.ApprovalCard{Tool: "orders.refund", Operation: gobellim.Write}, nil
 		},
 	})
-	f.Step("execute", func(ctx context.Context, p gobellim.Principal, s *bridgeState) error {
-		approver, ok := ApproverFrom(ctx)
-		if !ok {
-			return errors.New("no approver in the context")
-		}
-		_, rec, err := task.ExecuteApproved(ctx, p, approver, &s.Pending)
-		if err != nil {
-			return err
-		}
-		if !rec.Executed {
-			return errors.New("the approved action did not run")
-		}
-		s.Executed = true
-		return nil
-	})
-
-	res, err := f.Run(context.Background(), requester(), bridgeState{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Status != Suspended {
-		t.Fatalf("status = %v", res.Status)
-	}
-	if executed != 0 {
-		t.Fatal("the escalated action ran before approval")
-	}
-
-	out, err := f.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Approve)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.Status != Done || !out.State.Executed || executed != 1 {
-		t.Fatalf("status=%v state=%+v executed=%d", out.Status, out.State, executed)
-	}
-	if _, err := f.Resume(context.Background(), approver("m-1"), res.Suspension.Token, Approve); !errors.Is(err, ErrReplay) {
-		t.Fatalf("err = %v, want ErrReplay", err)
-	}
-	if executed != 1 {
-		t.Fatalf("executed = %d, want 1", executed)
+	res := suspended(t, f)
+	if _, err := resume(context.Background(), f, res, approver("m-1"), VerdictApprove); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("err = %v, want ErrUnauthorized from the engine's authorizer", err)
 	}
 }
 
-func TestResumeRejectsOversizedToken(t *testing.T) {
-	f, err := New[refundState]("refund",
-		WithAuthorizer(perms(defaultPerms())),
-		WithSealer(mustSealer()),
-		WithAudit(silentAudit{}),
-		WithMaxTokenBytes(64),
-	)
+// A shared sealer lets another replica accept a Suspension. Without a shared
+// store the same suspension would then resume once per replica, so the pair is
+// a configuration error at New.
+func TestWithSealerRequiresWithStore(t *testing.T) {
+	sealer, err := gobellim.NewSealer(make([]byte, 32))
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Step("prepare", func(context.Context, gobellim.Principal, *refundState) error { return nil })
-	f.Approve("manager", ApproveConfig[refundState]{
-		Card: func(context.Context, gobellim.Principal, refundState) (gobellim.ApprovalCard, error) {
-			return gobellim.ApprovalCard{Tool: "orders.refund"}, nil
-		},
-	})
-
-	token := strings.Repeat("A", 1<<20)
-	if _, err := f.Resume(context.Background(), approver("m-1"), token, Approve); !errors.Is(err, ErrContinuation) {
-		t.Fatalf("err = %v, want ErrContinuation", err)
+	_, err = New[refundState]("refund",
+		WithAuthorizer(perms(defaultPerms())),
+		WithAudit(silentAudit{}),
+		WithSealer(sealer),
+	)
+	if !errors.Is(err, gobellim.ErrInvalidConfig) {
+		t.Fatalf("err = %v, want ErrInvalidConfig", err)
 	}
 }

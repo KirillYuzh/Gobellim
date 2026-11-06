@@ -1,4 +1,4 @@
-// Notebook 06: GigaChat proposes a write; the Gate escalates to a human.
+// Notebook 06: GigaChat proposes a write; the Gate escalates to a trusted approver.
 // Run:
 //
 //	export GIGACHAT_AUTH_KEY='<Authorization key from GigaChat Studio>'
@@ -22,7 +22,7 @@ import (
 type refundIn struct {
 	TenantID string `gobellim:"source=principal,required"`
 	OrderID  string `gobellim:"sensitivity=secret,required"`
-	Request  string `gobellim:"required,sensitivity=pii"`
+	Request  string `gobellim:"required,sensitivity=patterns"`
 }
 
 type refundOut struct {
@@ -74,9 +74,9 @@ func main() {
 	var executed int
 	refund := gobellim.Tool[refundArgs, refundResult]{
 		Name:       "orders.refund",
-		Effect:     gobellim.Write,
+		Operation:  gobellim.Write,
 		Permission: "orders:refund",
-		Resource: func(p gobellim.Principal, a refundArgs) gobellim.Resource {
+		Target: func(p gobellim.Principal, a refundArgs) gobellim.Resource {
 			return gobellim.Resource{Type: "order", ID: a.OrderID, TenantID: p.Tenant}
 		},
 		Run: func(context.Context, gobellim.Principal, refundArgs) (refundResult, error) {
@@ -106,7 +106,7 @@ func main() {
 
 	notebook.Cell("1. Вход", `
 OrderID помечен sensitivity=secret: модель видит handle <h1>.
-Request помечен sensitivity=pii: e-mail/телефоны маскируются.
+Request помечен sensitivity=patterns: e-mail/телефоны маскируются.
 Приложение передаёт настоящий OrderID только через handle set.`)
 	input := refundIn{
 		TenantID: "acme",
@@ -135,14 +135,14 @@ runtime ищет инструмент в закрытом реестре и от
 Write с аргументом из untrusted-поля не выполняется. Карточка содержит
 резолвнутые аргументы для апрувера, digest действия и provenance.
 В реальном сервисе карточка уходит в UI; приложение применяет ACL апрувера.`)
-		notebook.Result("tool: %s, effect: %s", res.Pending.Card.Tool, res.Pending.Card.Effect)
+		notebook.Result("tool: %s, operation: %s", res.Pending.Card.Tool, res.Pending.Card.Operation)
 		notebook.Result("args: %s", string(res.Pending.Card.Args))
 		notebook.Result("digest: %s", res.Pending.Card.Digest)
 		for _, p := range res.Pending.Card.Provenance {
 			notebook.Result("provenance: %s ← %s (%s)", p.Arg, p.Source, p.Integrity)
 		}
 
-		notebook.Cell("4. Человек одобрил", `
+		notebook.Cell("4. Доверенный источник одобрил", `
 Приложение вызывает ExecuteApproved только после реального одобрения и
 передаёт Principal запросившего, а не апрувера. Gate заново проверяет tenant,
 RBAC/ACL и бизнес-валидацию; аргументы должны совпасть с digest карточки.`)

@@ -50,8 +50,11 @@ decision, latency и токены.`)
 
 	search := gobellim.Tool[searchArgs, searchResult]{
 		Name:       "kb.search",
-		Effect:     gobellim.Read,
+		Operation:  gobellim.Read,
 		Permission: "kb:search",
+		Target: func(p gobellim.Principal, _ searchArgs) gobellim.Resource {
+			return gobellim.Resource{Type: "kb", ID: "kb-main", TenantID: p.Tenant}
+		},
 		Run: func(context.Context, gobellim.Principal, searchArgs) (searchResult, error) {
 			return searchResult{Hits: []string{"refund policy v2"}}, nil
 		},
@@ -93,9 +96,9 @@ span.`)
 	}
 	notebook.Result("dropped events: %d", sink.Dropped())
 	notebook.Cell("3. Что смотреть в Langfuse", `
-trace: run_id, task, principal, tenant.
+trace: run_id, task; principal и tenant — только при SendPrincipalID/SendTenant.
 generation: model, prompt/completion/total tokens, latency.
-span: gate decision, rule ids, effect, integrity, sensitivity, args digest.
+span: gate decision, rule ids, operation, integrity, sensitivity, args digest.
 Для реальной отправки задайте LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY и
 LANGFUSE_HOST — см. пример 06.`)
 	fmt.Println()

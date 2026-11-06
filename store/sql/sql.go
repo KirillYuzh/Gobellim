@@ -30,7 +30,7 @@ type Execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
-// Store keeps continuation nonces in one table. Exactly one replica can claim a
+// Store keeps approval nonces in one table. Exactly one replica can claim a
 // nonce; the loser gets (false, nil). Expired rows are removed by Prune.
 type Store struct {
 	db          Execer
