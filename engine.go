@@ -46,8 +46,9 @@ func WithPolicyVersion(v string) Option { return func(c *Config) { c.PolicyVersi
 // WithClaimStore makes approved actions single-use across replicas.
 func WithClaimStore(s ClaimStore) Option { return func(c *Config) { c.Claims = s } }
 
-// WithApprovalTTL sets how long a PendingAction stays executable. The default
-// is 1 hour; an approval that sits unused for a day is a stale decision.
+// WithApprovalTTL sets how long a PendingAction stays executable. A zero value
+// uses the default of 1 hour; a negative value is ErrInvalidConfig. An approval
+// that sits unused for a day is a stale decision.
 func WithApprovalTTL(d time.Duration) Option { return func(c *Config) { c.ApprovalTTL = d } }
 
 // WithApprovalKey sets the HMAC key that authenticates a PendingAction. It must
@@ -104,7 +105,12 @@ func New(opts ...Option) (*Engine, error) {
 	}
 	audit := cfg.Audit
 	ttl := cfg.ApprovalTTL
-	if ttl <= 0 {
+	if ttl < 0 {
+		// A missing option is a zero value, but a negative duration was written on
+		// purpose. Defaulting it would hide a typo behind a working approval.
+		return nil, fmt.Errorf("%w: approval TTL must not be negative", ErrInvalidConfig)
+	}
+	if ttl == 0 {
 		ttl = defaultApprovalTTL
 	}
 	now := cfg.Now

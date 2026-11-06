@@ -461,3 +461,17 @@ func TestSharedApprovalKeyRequiresASharedClaimStore(t *testing.T) {
 		t.Fatalf("key with an explicit claim store: %v", err)
 	}
 }
+
+// A zero TTL means "the default". A negative one was written on purpose and is
+// a typo, not a request for the default.
+func TestNegativeApprovalTTLIsRejected(t *testing.T) {
+	_, err := gobellim.New(
+		gobellim.WithModel(testkit.NewFakeModel()),
+		gobellim.WithAuthorizer(testkit.AllowAll),
+		gobellim.WithAudit(testkit.DiscardAudit()),
+		gobellim.WithApprovalTTL(-time.Second),
+	)
+	if !errors.Is(err, gobellim.ErrInvalidConfig) {
+		t.Fatalf("err = %v, want ErrInvalidConfig", err)
+	}
+}
