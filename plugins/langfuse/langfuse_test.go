@@ -27,7 +27,7 @@ func sampleEvents(t *testing.T) []gobellim.Event {
 		},
 		{
 			Kind: gobellim.EventGateAllowed, Time: now, RunID: "run-1", Task: "triage",
-			Tool: "orders.read", Access: gobellim.AccessRead, Decision: gobellim.Allow,
+			Tool: "orders.read", Operation: gobellim.OperationRead, Decision: gobellim.Allow,
 			RuleIDs: []string{"read"}, ArgsDigest: "abc", Integrity: gobellim.Derived, Sensitivity: gobellim.Public,
 		},
 		{Kind: gobellim.EventTaskCompleted, Time: now, RunID: "run-1", Task: "triage", ModelCalls: 1, ToolCalls: 1},

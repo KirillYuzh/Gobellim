@@ -6,79 +6,79 @@ import (
 	"fmt"
 )
 
-// Access says what a tool does to the world. It is the first thing a reader
+// Operation says what a tool does to the world. It is the first thing a reader
 // should understand about a tool, so the values are verbs, not access-system
 // terms. The zero value is invalid and NewTask rejects it.
-type Access uint8
+type Operation uint8
 
 const (
-	// AccessUnknown is the zero value. It is never a valid tool access.
-	AccessUnknown Access = iota
-	// AccessRead reads application or external data. Target is required,
+	// OperationUnknown is the zero value. It is never a valid tool operation.
+	OperationUnknown Operation = iota
+	// OperationRead reads application or external data. Target is required,
 	// because the authorizer needs the object to check the ACL.
-	AccessRead
-	// AccessWrite changes application state. Target is required.
-	AccessWrite
-	// AccessSend sends data outside the trust boundary. Target must identify
+	OperationRead
+	// OperationWrite changes application state. Target is required.
+	OperationWrite
+	// OperationSend sends data outside the trust boundary. Target must identify
 	// the recipient, not just the tool.
-	AccessSend
-	// AccessDelete destroys data or performs an irreversible action. Target is
+	OperationSend
+	// OperationDelete destroys data or performs an irreversible action. Target is
 	// required.
-	AccessDelete
-	// AccessCompute is pure work with no application data and no external
+	OperationDelete
+	// OperationCompute is pure work with no application data and no external
 	// side access. Target is optional; the permission check still applies.
-	AccessCompute
+	OperationCompute
 )
 
 // Short aliases for tool declarations.
 const (
-	Read    = AccessRead
-	Write   = AccessWrite
-	Send    = AccessSend
-	Delete  = AccessDelete
-	Compute = AccessCompute
+	Read    = OperationRead
+	Write   = OperationWrite
+	Send    = OperationSend
+	Delete  = OperationDelete
+	Compute = OperationCompute
 )
 
-// String returns the tag name of the access.
-func (a Access) String() string {
+// String returns the tag name of the operation.
+func (a Operation) String() string {
 	switch a {
-	case AccessRead:
+	case OperationRead:
 		return "read"
-	case AccessWrite:
+	case OperationWrite:
 		return "write"
-	case AccessSend:
+	case OperationSend:
 		return "send"
-	case AccessDelete:
+	case OperationDelete:
 		return "delete"
-	case AccessCompute:
+	case OperationCompute:
 		return "compute"
 	default:
 		return "unknown"
 	}
 }
 
-// MarshalJSON encodes the access as its tag name.
-func (a Access) MarshalJSON() ([]byte, error) { return json.Marshal(a.String()) }
+// MarshalJSON encodes the operation as its tag name.
+func (a Operation) MarshalJSON() ([]byte, error) { return json.Marshal(a.String()) }
 
-// UnmarshalJSON decodes an access from its tag name.
-func (a *Access) UnmarshalJSON(b []byte) error {
+// UnmarshalJSON decodes an operation from its tag name.
+func (a *Operation) UnmarshalJSON(b []byte) error {
 	var s string
 	if err := json.Unmarshal(b, &s); err != nil {
 		return err
 	}
 	switch s {
 	case "read":
-		*a = AccessRead
+		*a = OperationRead
 	case "write":
-		*a = AccessWrite
+		*a = OperationWrite
 	case "send":
-		*a = AccessSend
+		*a = OperationSend
 	case "delete":
-		*a = AccessDelete
+		*a = OperationDelete
 	case "compute":
-		*a = AccessCompute
+		*a = OperationCompute
 	default:
-		return fmt.Errorf("%w: unknown access %q", ErrInvalidConfig, s)
+		return fmt.Errorf("%w: unknown operation %q", ErrInvalidConfig, s)
 	}
 	return nil
 }
@@ -155,7 +155,7 @@ const (
 	RuleSendUntrusted    = "send-untrusted"
 	RuleDelete           = "delete"
 	RuleDeleteUntrusted  = "delete-untrusted"
-	RuleUnknownAccess    = "unknown-access"
+	RuleUnknownOperation = "unknown-operation"
 	RuleApproved         = "approved"
 	RuleApprovalForged   = "approval-forged"
 	RuleApprovalDrift    = "approval-drift"

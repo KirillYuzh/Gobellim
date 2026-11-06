@@ -58,7 +58,7 @@ flow и выпускает карточку. execute запускается то
 			if err != nil {
 				return gobellim.ApprovalCard{}, err
 			}
-			return gobellim.ApprovalCard{Tool: "orders.refund", Access: gobellim.Write, Args: args}, nil
+			return gobellim.ApprovalCard{Tool: "orders.refund", Operation: gobellim.Write, Args: args}, nil
 		},
 		Target: func(_ context.Context, p gobellim.Principal, s refundCase) (gobellim.Resource, error) {
 			return gobellim.Resource{Type: "order", ID: s.OrderID, TenantID: p.Tenant}, nil
@@ -77,7 +77,7 @@ Run проходит prepare и останавливается на границ
 	}
 	notebook.Result("status: %v", res.Status)
 	notebook.Result("executed before approval: %v", res.State.Executed)
-	notebook.Result("card: %s / %s / digest=%s", res.Suspension.Card.Tool, res.Suspension.Card.Access, res.Suspension.Card.Digest)
+	notebook.Result("card: %s / %s / digest=%s", res.Suspension.Card.Tool, res.Suspension.Card.Operation, res.Suspension.Card.Digest)
 
 	notebook.Cell("4. Resume → Done", `
 Апрувер m-1 отличается от requester u-1 (Four-Eyes), права проверены,

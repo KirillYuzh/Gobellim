@@ -77,9 +77,9 @@ func buildFlow(authz gobellim.Authorizer, store gobellim.ClaimStore, opts ...Opt
 				return gobellim.ApprovalCard{}, err
 			}
 			return gobellim.ApprovalCard{
-				Tool:   "orders.refund",
-				Access: gobellim.Write,
-				Args:   args,
+				Tool:      "orders.refund",
+				Operation: gobellim.Write,
+				Args:      args,
 			}, nil
 		},
 		Target: func(_ context.Context, p gobellim.Principal, s refundState) (gobellim.Resource, error) {
@@ -117,7 +117,7 @@ func TestSuspendAndResume(t *testing.T) {
 	f := newFlow(perms(defaultPerms()))
 	res := suspended(t, f)
 	card := res.Suspension.Card
-	if card.Tool != "orders.refund" || card.Access != gobellim.Write {
+	if card.Tool != "orders.refund" || card.Operation != gobellim.Write {
 		t.Fatalf("card = %+v", card)
 	}
 	if card.RequiredPermission != "refund:approve" || !card.FourEyes || card.Digest == "" {
@@ -264,9 +264,9 @@ func TestParallelResume(t *testing.T) {
 		TTL:              time.Hour,
 		Card: func(_ context.Context, _ gobellim.Principal, s refundState) (gobellim.ApprovalCard, error) {
 			return gobellim.ApprovalCard{
-				Tool:   "orders.refund",
-				Access: gobellim.Write,
-				Args:   json.RawMessage(`{"order_id":"A-1042","cents":4900}`),
+				Tool:      "orders.refund",
+				Operation: gobellim.Write,
+				Args:      json.RawMessage(`{"order_id":"A-1042","cents":4900}`),
 			}, nil
 		},
 		Target: func(_ context.Context, p gobellim.Principal, s refundState) (gobellim.Resource, error) {
@@ -325,7 +325,7 @@ func TestResumeRejectsForeignTenantTarget(t *testing.T) {
 		Permission: "refund:approve",
 		FourEyes:   true,
 		Card: func(context.Context, gobellim.Principal, refundState) (gobellim.ApprovalCard, error) {
-			return gobellim.ApprovalCard{Tool: "orders.refund", Access: gobellim.Write}, nil
+			return gobellim.ApprovalCard{Tool: "orders.refund", Operation: gobellim.Write}, nil
 		},
 		Target: func(context.Context, gobellim.Principal, refundState) (gobellim.Resource, error) {
 			return gobellim.Resource{Type: "order", ID: "A-1", TenantID: "other"}, nil
@@ -374,7 +374,7 @@ func TestConditionalApprovalSkipped(t *testing.T) {
 	f.Approve("manager", ApproveConfig[refundState]{
 		When: func(_ context.Context, _ gobellim.Principal, s refundState) (bool, error) { return s.Cents > 0, nil },
 		Card: func(context.Context, gobellim.Principal, refundState) (gobellim.ApprovalCard, error) {
-			return gobellim.ApprovalCard{Tool: "orders.refund", Access: gobellim.Write}, nil
+			return gobellim.ApprovalCard{Tool: "orders.refund", Operation: gobellim.Write}, nil
 		},
 	})
 	f.Step("execute", func(_ context.Context, _ gobellim.Principal, s *refundState) error {
@@ -424,5 +424,98 @@ func TestDuplicateStepIDIsRejected(t *testing.T) {
 	f.Step("same", func(context.Context, gobellim.Principal, *refundState) error { return nil })
 	if f.Err() == nil {
 		t.Fatal("duplicate step id was accepted")
+	}
+}
+
+// A suspension is a bearer object unless it is signed: whoever supplies one
+// chooses the nonce, and the nonce is what makes an approval single-use.
+func TestSuspensionIsSigned(t *testing.T) {
+	f := newFlow(perms(defaultPerms()))
+	res := suspended(t, f)
+
+	forged := *res.Suspension
+	forged.Requester = gobellim.Principal{UserID: "u-2", Tenant: "acme"}
+	if _, err := f.Resume(context.Background(), approver("m-1"), forged, res.State, Approve); !errors.Is(err, ErrFlowDrift) {
+		t.Fatalf("forged requester err = %v, want ErrFlowDrift", err)
+	}
+
+	stripped := *res.Suspension
+	stripped.Proof = nil
+	if _, err := f.Resume(context.Background(), approver("m-1"), stripped, res.State, Approve); !errors.Is(err, ErrFlowDrift) {
+		t.Fatalf("missing proof err = %v, want ErrFlowDrift", err)
+	}
+
+	if _, err := f.Resume(context.Background(), approver("m-1"), *res.Suspension, res.State, Approve); err != nil {
+		t.Fatalf("an untouched suspension must resume: %v", err)
+	}
+}
+
+// A declared target must name its tenant. Filling it from the requester would
+// make the tenant comparison true by construction.
+func TestApprovalTargetWithoutTenantIsRejected(t *testing.T) {
+	f, err := New[refundState]("refund",
+		WithAuthorizer(perms(defaultPerms())),
+		WithStore(NewMemStore()),
+		WithAudit(silentAudit{}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Step("prepare", func(_ context.Context, _ gobellim.Principal, s *refundState) error {
+		s.OrderID = "A-1"
+		return nil
+	})
+	f.Approve("manager", ApproveConfig[refundState]{
+		Permission: "refund:approve",
+		Card: func(context.Context, gobellim.Principal, refundState) (gobellim.ApprovalCard, error) {
+			return gobellim.ApprovalCard{Tool: "orders.refund", Operation: gobellim.Write}, nil
+		},
+		Target: func(context.Context, gobellim.Principal, refundState) (gobellim.Resource, error) {
+			return gobellim.Resource{Type: "order", ID: "A-1"}, nil
+		},
+	})
+	res := suspended(t, f)
+	if _, err := resume(context.Background(), f, res, approver("m-1"), Approve); !errors.Is(err, ErrFlowDrift) {
+		t.Fatalf("err = %v, want ErrFlowDrift", err)
+	}
+}
+
+// stubModel satisfies gobellim.Model for tests that never reach the model.
+type stubModel struct{}
+
+func (stubModel) Chat(context.Context, gobellim.Request) (gobellim.Response, error) {
+	return gobellim.Response{}, errors.New("stub model")
+}
+
+// FromEngine exists so a flow that resumes a Task authorizes the approver with
+// the same adapter the Gate uses. A second, weaker authorizer is the kind of
+// mistake that ships quietly.
+func TestFromEngineSharesTheAuthorizer(t *testing.T) {
+	engine, err := gobellim.New(
+		gobellim.WithModel(stubModel{}),
+		gobellim.WithAuthorizer(perms(map[string]bool{})),
+		gobellim.WithAudit(silentAudit{}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := FromEngine[refundState](engine, "refund")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Step("prepare", func(_ context.Context, _ gobellim.Principal, s *refundState) error {
+		s.OrderID = "A-1"
+		s.Cents = 1
+		return nil
+	})
+	f.Approve("manager", ApproveConfig[refundState]{
+		Permission: "refund:approve",
+		Card: func(context.Context, gobellim.Principal, refundState) (gobellim.ApprovalCard, error) {
+			return gobellim.ApprovalCard{Tool: "orders.refund", Operation: gobellim.Write}, nil
+		},
+	})
+	res := suspended(t, f)
+	if _, err := resume(context.Background(), f, res, approver("m-1"), Approve); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("err = %v, want ErrUnauthorized from the engine's authorizer", err)
 	}
 }

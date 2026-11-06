@@ -74,7 +74,7 @@ func main() {
 	var executed int
 	refund := gobellim.Tool[refundArgs, refundResult]{
 		Name:       "orders.refund",
-		Access:     gobellim.Write,
+		Operation:  gobellim.Write,
 		Permission: "orders:refund",
 		Target: func(p gobellim.Principal, a refundArgs) gobellim.Resource {
 			return gobellim.Resource{Type: "order", ID: a.OrderID, TenantID: p.Tenant}
@@ -135,7 +135,7 @@ runtime ищет инструмент в закрытом реестре и от
 Write с аргументом из untrusted-поля не выполняется. Карточка содержит
 резолвнутые аргументы для апрувера, digest действия и provenance.
 В реальном сервисе карточка уходит в UI; приложение применяет ACL апрувера.`)
-		notebook.Result("tool: %s, access: %s", res.Pending.Card.Tool, res.Pending.Card.Access)
+		notebook.Result("tool: %s, operation: %s", res.Pending.Card.Tool, res.Pending.Card.Operation)
 		notebook.Result("args: %s", string(res.Pending.Card.Args))
 		notebook.Result("digest: %s", res.Pending.Card.Digest)
 		for _, p := range res.Pending.Card.Provenance {
