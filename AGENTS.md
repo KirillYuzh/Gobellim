@@ -101,7 +101,8 @@ layer and must match the current code; if code and `DESIGN.md` disagree, fix bot
 - Never log or persist prompt text, raw arguments, secrets or approval nonces.
   Audit events carry digests and labels, not values.
 - The `gobellim:"..."` tag subset is documented in `DESIGN.md` §5.3 and
-  `README.md`. Rejecting an unknown tag is intentional.
+  `README.md`. Rejecting an unknown tag is intentional. Every tag a page or a
+  notebook shows must parse: `TestDocumentedTagsParse`.
 - `source`, `ref` and `ground` apply to strings only, on opposite sides of the
   boundary: `source` and `ref` on a task input field, `ground` on a tool
   argument. A tag on the wrong side is `ErrInvalidConfig` at `NewTask`, never a

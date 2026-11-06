@@ -186,7 +186,7 @@ type TicketInput struct {
     // not be trusted merely because they appear in user text.
     TenantID string `gobellim:"source=principal"`
     TicketID string `gobellim:"source=application"`
-    Body     string `gobellim:"untrusted,sensitivity=patterns"`
+    Body     string `gobellim:"required,sensitivity=patterns"`
 }
 
 type TriageOutput struct {
