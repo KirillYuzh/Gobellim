@@ -1,6 +1,7 @@
 package gobellim
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -141,6 +142,116 @@ func redactString(s string, l Label, hs *handleSet) string {
 		return maskPII(s, l, hs)
 	default:
 		return s
+	}
+}
+
+// restoreValue replaces every handle inside a decoded output with the value it
+// was minted for. A handle this run did not mint is removed: the model can echo
+// one, and a caller must never receive an internal placeholder.
+//
+// Masking without restoration is half a feature: the customer would read
+// "order <h1> is refunded" instead of the order number.
+func restoreValue(v reflect.Value, hs *handleSet) {
+	if hs == nil || !v.IsValid() {
+		return
+	}
+	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return
+		}
+		v = v.Elem()
+	}
+	switch v.Kind() {
+	case reflect.String:
+		if v.CanSet() {
+			v.SetString(restoreString(v.String(), hs))
+		}
+	case reflect.Slice, reflect.Array:
+		if v.Type().Elem().Kind() == reflect.Uint8 {
+			return
+		}
+		for i := 0; i < v.Len(); i++ {
+			restoreValue(v.Index(i), hs)
+		}
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			if v.Type().Field(i).PkgPath != "" {
+				continue
+			}
+			restoreValue(v.Field(i), hs)
+		}
+	}
+}
+
+func restoreString(s string, hs *handleSet) string {
+	if !strings.Contains(s, "<h") {
+		return s
+	}
+	return handleTokenRE.ReplaceAllStringFunc(s, func(tok string) string {
+		if e, ok := hs.get(tok); ok {
+			return e.value
+		}
+		return ""
+	})
+}
+
+// maskArgsJSON returns the argument object with PII and secret values replaced
+// the same way the model saw them. An approver reads this copy; the executable
+// arguments stay in PendingAction.Args on the server.
+//
+// Numbers are decoded with UseNumber, so an untouched value keeps its literal
+// and the whole object is returned unchanged when nothing needs masking.
+func maskArgsJSON(raw []byte, labels map[string]Label, hs *handleSet) json.RawMessage {
+	if len(labels) == 0 || hs == nil || len(raw) == 0 {
+		return raw
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return raw
+	}
+	masked, changed := maskJSONValue(v, "", labels, hs)
+	if !changed {
+		return raw
+	}
+	// No HTML escaping: the card is read by a person, and <h1> in the stored
+	// JSON is easier to spot than \u003ch1\u003e.
+	out, err := marshalNoEscape(masked)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+func maskJSONValue(v any, path string, labels map[string]Label, hs *handleSet) (any, bool) {
+	switch x := v.(type) {
+	case map[string]any:
+		changed := false
+		for k, val := range x {
+			nv, c := maskJSONValue(val, joinPath(path, k), labels, hs)
+			x[k] = nv
+			changed = changed || c
+		}
+		return x, changed
+	case []any:
+		changed := false
+		for i := range x {
+			// Labels are keyed by field path, so every element shares one.
+			nv, c := maskJSONValue(x[i], path, labels, hs)
+			x[i] = nv
+			changed = changed || c
+		}
+		return x, changed
+	case string:
+		l, ok := labels[path]
+		if !ok || l.Sensitivity < PII || x == "" {
+			return x, false
+		}
+		m := redactString(x, l, hs)
+		return m, m != x
+	default:
+		return v, false
 	}
 }
 

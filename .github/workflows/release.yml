@@ -29,10 +29,9 @@ jobs:
           set -euo pipefail
           go install "github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@${CYCLONEDX_GOMOD_VERSION}"
           bin="$(go env GOPATH)/bin/cyclonedx-gomod"
+          # flow, store/sql, testkit, plugins/* and examples/* are packages of
+          # this module, so one SBOM describes every published package.
           "$bin" mod -json -output sbom-core.cdx.json .
-          for d in mcp webfetch flow eval kittest cmd scripts plugins/elasticsearch plugins/gigachat plugins/otel; do
-            (cd "$d" && "$bin" mod -json -output "../sbom-$d.cdx.json" .)
-          done
           ls -l sbom-*.cdx.json
 
       - uses: actions/upload-artifact@v4

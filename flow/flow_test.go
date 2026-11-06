@@ -109,8 +109,8 @@ func suspended(t *testing.T, f *Flow[refundState]) Result[refundState] {
 	return res
 }
 
-func resume(ctx context.Context, f *Flow[refundState], res Result[refundState], p gobellim.Principal, d Decision) (Result[refundState], error) {
-	return f.Resume(ctx, p, *res.Suspension, res.State, d)
+func resume(ctx context.Context, f *Flow[refundState], res Result[refundState], p gobellim.Principal, v Verdict) (Result[refundState], error) {
+	return f.Resume(ctx, p, *res.Suspension, res.State, v)
 }
 
 func TestSuspendAndResume(t *testing.T) {
@@ -127,7 +127,7 @@ func TestSuspendAndResume(t *testing.T) {
 		t.Fatal("the post-approval step ran before approval")
 	}
 
-	out, err := resume(context.Background(), f, res, approver("m-1"), Approve)
+	out, err := resume(context.Background(), f, res, approver("m-1"), VerdictApprove)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestSuspendAndResume(t *testing.T) {
 func TestReject(t *testing.T) {
 	f := newFlow(perms(defaultPerms()))
 	res := suspended(t, f)
-	out, err := resume(context.Background(), f, res, approver("m-1"), Reject)
+	out, err := resume(context.Background(), f, res, approver("m-1"), VerdictReject)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,10 +151,10 @@ func TestReject(t *testing.T) {
 func TestRejectConsumesTheNonce(t *testing.T) {
 	f := newFlow(perms(defaultPerms()))
 	res := suspended(t, f)
-	if _, err := resume(context.Background(), f, res, approver("m-1"), Reject); err != nil {
+	if _, err := resume(context.Background(), f, res, approver("m-1"), VerdictReject); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := resume(context.Background(), f, res, approver("m-2"), Approve); !errors.Is(err, ErrReplay) {
+	if _, err := resume(context.Background(), f, res, approver("m-2"), VerdictApprove); !errors.Is(err, ErrReplay) {
 		t.Fatalf("err = %v, want ErrReplay", err)
 	}
 }
@@ -166,7 +166,7 @@ func TestTamperedCard(t *testing.T) {
 	card.Args = json.RawMessage(`{"order_id":"A-999","cents":4900}`)
 	susp := *res.Suspension
 	susp.Card = card
-	_, err := f.Resume(context.Background(), approver("m-1"), susp, res.State, Approve)
+	_, err := f.Resume(context.Background(), approver("m-1"), susp, res.State, VerdictApprove)
 	if !errors.Is(err, ErrFlowDrift) {
 		t.Fatalf("err = %v, want ErrFlowDrift", err)
 	}
@@ -176,7 +176,7 @@ func TestOtherTenant(t *testing.T) {
 	f := newFlow(perms(defaultPerms()))
 	res := suspended(t, f)
 	other := gobellim.Principal{UserID: "m-1", Tenant: "other"}
-	_, err := resume(context.Background(), f, res, other, Approve)
+	_, err := resume(context.Background(), f, res, other, VerdictApprove)
 	if !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("err = %v, want ErrUnauthorized", err)
 	}
@@ -187,7 +187,7 @@ func TestExpired(t *testing.T) {
 	f := newFlow(perms(defaultPerms()), WithClock(func() time.Time { return now }), WithTTL(time.Minute))
 	res := suspended(t, f)
 	now = now.Add(2 * time.Hour)
-	out, err := resume(context.Background(), f, res, approver("m-1"), Approve)
+	out, err := resume(context.Background(), f, res, approver("m-1"), VerdictApprove)
 	if !errors.Is(err, ErrExpired) || out.Status != Expired {
 		t.Fatalf("status = %v err = %v, want Expired/ErrExpired", out.Status, err)
 	}
@@ -196,7 +196,7 @@ func TestExpired(t *testing.T) {
 func TestRevokedActionPermission(t *testing.T) {
 	f := newFlow(perms(map[string]bool{"refund:approve": true}))
 	res := suspended(t, f)
-	if _, err := resume(context.Background(), f, res, approver("m-1"), Approve); !errors.Is(err, ErrUnauthorized) {
+	if _, err := resume(context.Background(), f, res, approver("m-1"), VerdictApprove); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("err = %v, want ErrUnauthorized", err)
 	}
 }
@@ -204,7 +204,7 @@ func TestRevokedActionPermission(t *testing.T) {
 func TestApproverPermission(t *testing.T) {
 	f := newFlow(perms(map[string]bool{"orders:refund": true}))
 	res := suspended(t, f)
-	if _, err := resume(context.Background(), f, res, approver("m-1"), Approve); !errors.Is(err, ErrUnauthorized) {
+	if _, err := resume(context.Background(), f, res, approver("m-1"), VerdictApprove); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("err = %v, want ErrUnauthorized", err)
 	}
 }
@@ -212,7 +212,7 @@ func TestApproverPermission(t *testing.T) {
 func TestRejectRequiresApproverPermission(t *testing.T) {
 	f := newFlow(perms(map[string]bool{"orders:refund": true}))
 	res := suspended(t, f)
-	if _, err := resume(context.Background(), f, res, approver("m-1"), Reject); !errors.Is(err, ErrUnauthorized) {
+	if _, err := resume(context.Background(), f, res, approver("m-1"), VerdictReject); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("err = %v, want ErrUnauthorized", err)
 	}
 }
@@ -220,7 +220,7 @@ func TestRejectRequiresApproverPermission(t *testing.T) {
 func TestFourEyes(t *testing.T) {
 	f := newFlow(perms(defaultPerms()))
 	res := suspended(t, f)
-	if _, err := resume(context.Background(), f, res, requester(), Approve); !errors.Is(err, ErrUnauthorized) {
+	if _, err := resume(context.Background(), f, res, requester(), VerdictApprove); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("err = %v, want ErrUnauthorized", err)
 	}
 }
@@ -228,10 +228,10 @@ func TestFourEyes(t *testing.T) {
 func TestReplay(t *testing.T) {
 	f := newFlow(perms(defaultPerms()))
 	res := suspended(t, f)
-	if _, err := resume(context.Background(), f, res, approver("m-1"), Approve); err != nil {
+	if _, err := resume(context.Background(), f, res, approver("m-1"), VerdictApprove); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := resume(context.Background(), f, res, approver("m-2"), Approve); !errors.Is(err, ErrReplay) {
+	if _, err := resume(context.Background(), f, res, approver("m-2"), VerdictApprove); !errors.Is(err, ErrReplay) {
 		t.Fatalf("err = %v, want ErrReplay", err)
 	}
 }
@@ -286,7 +286,7 @@ func TestParallelResume(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			out, err := resume(context.Background(), f2, res2, approver("m-1"), Approve)
+			out, err := resume(context.Background(), f2, res2, approver("m-1"), VerdictApprove)
 			errs[i], statuses[i] = err, out.Status
 		}()
 	}
@@ -332,7 +332,7 @@ func TestResumeRejectsForeignTenantTarget(t *testing.T) {
 		},
 	})
 	res := suspended(t, f)
-	if _, err := f.Resume(context.Background(), approver("m-1"), *res.Suspension, res.State, Approve); !errors.Is(err, ErrUnauthorized) {
+	if _, err := f.Resume(context.Background(), approver("m-1"), *res.Suspension, res.State, VerdictApprove); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("foreign tenant target err = %v, want ErrUnauthorized", err)
 	}
 }
@@ -345,7 +345,7 @@ func TestFlowDrift(t *testing.T) {
 	badFlow.Flow = "other"
 	suspFlow := *res.Suspension
 	suspFlow.Card = badFlow
-	if _, err := f.Resume(context.Background(), approver("m-1"), suspFlow, res.State, Approve); !errors.Is(err, ErrFlowDrift) {
+	if _, err := f.Resume(context.Background(), approver("m-1"), suspFlow, res.State, VerdictApprove); !errors.Is(err, ErrFlowDrift) {
 		t.Fatalf("flow drift err = %v", err)
 	}
 
@@ -353,7 +353,7 @@ func TestFlowDrift(t *testing.T) {
 	badStep.Step = "missing"
 	suspStep := *res.Suspension
 	suspStep.Card = badStep
-	if _, err := f.Resume(context.Background(), approver("m-1"), suspStep, res.State, Approve); !errors.Is(err, ErrFlowDrift) {
+	if _, err := f.Resume(context.Background(), approver("m-1"), suspStep, res.State, VerdictApprove); !errors.Is(err, ErrFlowDrift) {
 		t.Fatalf("step drift err = %v", err)
 	}
 }
@@ -393,21 +393,21 @@ func TestConditionalApprovalSkipped(t *testing.T) {
 func TestUnknownDecisionIsNotApproval(t *testing.T) {
 	f := newFlow(perms(defaultPerms()))
 	res := suspended(t, f)
-	if _, err := resume(context.Background(), f, res, approver("m-1"), DecisionUnknown); !errors.Is(err, ErrDecision) {
-		t.Fatalf("err = %v, want ErrDecision", err)
+	if _, err := resume(context.Background(), f, res, approver("m-1"), VerdictUnknown); !errors.Is(err, ErrVerdict) {
+		t.Fatalf("err = %v, want ErrVerdict", err)
 	}
-	if out, err := resume(context.Background(), f, res, approver("m-1"), Approve); err != nil || out.Status != Done {
-		t.Fatalf("a valid approval after DecisionUnknown: status=%v err=%v", out.Status, err)
+	if out, err := resume(context.Background(), f, res, approver("m-1"), VerdictApprove); err != nil || out.Status != Done {
+		t.Fatalf("a valid approval after VerdictUnknown: status=%v err=%v", out.Status, err)
 	}
 }
 
 func TestDefaultStorePreventsReplay(t *testing.T) {
 	f := newFlow(perms(defaultPerms()))
 	res := suspended(t, f)
-	if _, err := resume(context.Background(), f, res, approver("m-1"), Approve); err != nil {
+	if _, err := resume(context.Background(), f, res, approver("m-1"), VerdictApprove); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := resume(context.Background(), f, res, approver("m-2"), Approve); !errors.Is(err, ErrReplay) {
+	if _, err := resume(context.Background(), f, res, approver("m-2"), VerdictApprove); !errors.Is(err, ErrReplay) {
 		t.Fatalf("err = %v, want ErrReplay", err)
 	}
 }
@@ -435,17 +435,17 @@ func TestSuspensionIsSigned(t *testing.T) {
 
 	forged := *res.Suspension
 	forged.Requester = gobellim.Principal{UserID: "u-2", Tenant: "acme"}
-	if _, err := f.Resume(context.Background(), approver("m-1"), forged, res.State, Approve); !errors.Is(err, ErrFlowDrift) {
+	if _, err := f.Resume(context.Background(), approver("m-1"), forged, res.State, VerdictApprove); !errors.Is(err, ErrFlowDrift) {
 		t.Fatalf("forged requester err = %v, want ErrFlowDrift", err)
 	}
 
 	stripped := *res.Suspension
 	stripped.Proof = nil
-	if _, err := f.Resume(context.Background(), approver("m-1"), stripped, res.State, Approve); !errors.Is(err, ErrFlowDrift) {
+	if _, err := f.Resume(context.Background(), approver("m-1"), stripped, res.State, VerdictApprove); !errors.Is(err, ErrFlowDrift) {
 		t.Fatalf("missing proof err = %v, want ErrFlowDrift", err)
 	}
 
-	if _, err := f.Resume(context.Background(), approver("m-1"), *res.Suspension, res.State, Approve); err != nil {
+	if _, err := f.Resume(context.Background(), approver("m-1"), *res.Suspension, res.State, VerdictApprove); err != nil {
 		t.Fatalf("an untouched suspension must resume: %v", err)
 	}
 }
@@ -475,7 +475,7 @@ func TestApprovalTargetWithoutTenantIsRejected(t *testing.T) {
 		},
 	})
 	res := suspended(t, f)
-	if _, err := resume(context.Background(), f, res, approver("m-1"), Approve); !errors.Is(err, ErrFlowDrift) {
+	if _, err := resume(context.Background(), f, res, approver("m-1"), VerdictApprove); !errors.Is(err, ErrFlowDrift) {
 		t.Fatalf("err = %v, want ErrFlowDrift", err)
 	}
 }
@@ -515,7 +515,25 @@ func TestFromEngineSharesTheAuthorizer(t *testing.T) {
 		},
 	})
 	res := suspended(t, f)
-	if _, err := resume(context.Background(), f, res, approver("m-1"), Approve); !errors.Is(err, ErrUnauthorized) {
+	if _, err := resume(context.Background(), f, res, approver("m-1"), VerdictApprove); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("err = %v, want ErrUnauthorized from the engine's authorizer", err)
+	}
+}
+
+// A shared sealer lets another replica accept a Suspension. Without a shared
+// store the same suspension would then resume once per replica, so the pair is
+// a configuration error at New.
+func TestWithSealerRequiresWithStore(t *testing.T) {
+	sealer, err := gobellim.NewSealer(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = New[refundState]("refund",
+		WithAuthorizer(perms(defaultPerms())),
+		WithAudit(silentAudit{}),
+		WithSealer(sealer),
+	)
+	if !errors.Is(err, gobellim.ErrInvalidConfig) {
+		t.Fatalf("err = %v, want ErrInvalidConfig", err)
 	}
 }

@@ -45,13 +45,17 @@ Gobellim до 1.0. Поддерживается только последний 
   ungrounded-аргументы — `Deny`.
 - Метки могут только ухудшаться. `Tool.Validate` только отказывает; потолок
   поднимает лишь одобрение вне модели конкретного действия, и оно заменяет
-  потолок access, а не метки.
+  потолок операции, а не метки.
 - Handle, выданный не в этом run, handle в non-`ground` поле и handle из чужого
   входного поля отклоняются как ungrounded.
-- Любой access, кроме `AccessCompute`, требует непустого `Target`: ACL не может
-  молча выродиться в RBAC.
+- Любая операция, кроме `OperationCompute`, требует непустого `Target`: ACL не
+  может молча выродиться в RBAC.
 - Одобрение привязано ко всей карточке и каноническим аргументам через HMAC и
   digest; изменённая карточка — `ErrApprovalDrift`.
+- Апрувер видит маскированную карточку: secret-аргумент — это handle, pii
+  замаскирован, а `PendingAction.Args` хранит исполняемые значения на сервере.
+- `Out` резолвит handle'ы этого запуска и вычищает остальные `<hN>`, так что
+  внутренний плейсхолдер не доходит до клиента.
 - Приостановка — серверный объект, а не bearer-токен: `flow.Resume` проверяет
   tenant, expiry, текущую approval-политику, пересобранный digest действия и
   атомарный claim nonce. Ключа, который надо ротировать, нет.
@@ -73,7 +77,13 @@ Gobellim до 1.0. Поддерживается только последний 
 | выдуманный handle — Deny                         | `TestFabricatedHandleIsDenied`, `TestUngroundedArgumentIsDenied`                                             |
 | `Validate` ничего не повышает                    | `TestUntrustedHandleWithValidatorStillEscalates`, `TestGroundedHandleWithoutValidatorEscalates`              |
 | `Send` требует trusted-происхождения             | `TestUntrustedHandleCannotSend`                                                                              |
-| любой access кроме `Compute` требует цель        | `TestNonReadToolRequiresResource`, `TestReadWithoutTargetIsAConfigError`, `TestWriteWithEmptyTargetIsDenied` |
+| любая операция кроме `Compute` требует цель      | `TestNonReadToolRequiresResource`, `TestReadWithoutTargetIsAConfigError`, `TestWriteWithEmptyTargetIsDenied` |
+| карточка одобрения маскирована                   | `TestApprovalCardMasksSensitiveArguments`                                                                    |
+| `Out` резолвит свои handle'ы и вычищает чужие    | `TestOutputRestoresIssuedHandleAndDropsUnknown`                                                              |
+| `ref` — адресуемость, а не конфиденциальность    | `TestRefIsAddressableWithoutBeingSecret`                                                                     |
+| `ground` привязан к объявленному полю входа      | `TestGroundSourceMustExistInTheInput`                                                                        |
+| PII-детекторы проверяют контрольные цифры        | `TestPIIChecksums`                                                                                           |
+| общий ключ требует общего claim store            | `TestSharedApprovalKeyRequiresASharedClaimStore`, `TestWithSealerRequiresWithStore`                          |
 | redaction результата fail-closed                 | `TestResultRedactionCoversMapBytesAndString`, `TestSensitivityOnScalarResultIsRejected`, `FuzzRedactResult`  |
 | отменённое одобрение не сжигает nonce            | `TestCanceledApprovalDoesNotConsumeTheNonce`                                                                 |
 | одобрение одноразово                             | `TestExecuteApprovedIsSingleUse`, `TestParallelResume`                                                       |
@@ -90,7 +100,7 @@ Gobellim до 1.0. Поддерживается только последний 
 - Компрометация процесса приложения или конфигурации.
 - Retrieval и data ACL. Приложение обязано отфильтровать документы до передачи
   их в `Task`.
-- Корректность permissions, access инструментов и resource binding, которые
+- Корректность permissions, операций инструментов и resource binding, которые
   объявило приложение.
 - Exactly-once для внешнего побочного эффекта.
 - Межрепличная одноразовость Resume без `Store`.

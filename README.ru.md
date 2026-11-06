@@ -2,24 +2,21 @@
 
 **[Русский](README.ru.md) · [English](README.md)**
 
-![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
+![Go](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ![Gobellim](./site/public/gobellim-compact-white.svg)
 
-Слой исполнения и политики для одного LLM use-case внутри существующего
-Go-сервиса. Gobellim — библиотека, а не платформа: она не поднимает сервер, БД
-или брокер, а core-модуль не имеет обязательных зависимостей.
+Gobellim — Go-библиотека: слой исполнения и политики для одного LLM use-case
+внутри существующего Go-сервиса.
 
-![Архитектура Gobellim](docs/architecture.svg)
+## Установка
 
-Главный инвариант:
+```sh
+go get github.com/KirillYuzh/Gobellim
+```
 
-> Модель может предложить текст, аргументы или действие. Она не может выдать
-> себе права, изменить policy, зарегистрировать инструмент или выполнить side
-> effect в обход Gate.
-
-## Дельта: один хендлер, сделанный безопасным
+## Один хендлер, сделанный безопасным
 
 Обычный HTTP-хендлер вызывает LLM-клиент напрямую:
 
@@ -74,37 +71,31 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 
 ## Что добавляет Gobellim
 
+![Архитектура Gobellim](docs/architecture.svg)
+
 ```mermaid
 flowchart LR
     H["ваш handler"] --> P["Principal"]
     P --> T["Task: типизированный вход<br/>labels, handles, лимиты"]
     T --> M["модель предлагает<br/>ответ или tool call"]
     M --> G{"Gate"}
-    G -->|"tenant · RBAC/ACL · grounding · Validate · access"| A["Allow"]
+    G -->|"tenant · RBAC/ACL · grounding · Validate · operation"| A["Allow"]
     G --> D["Deny"]
     G --> E["Escalate"]
     A --> X["ваш tool handler"]
     X --> R["отредактированный результат<br/>обратно в модель"]
     E --> C["PendingAction<br/>digest · nonce · expiry"]
-    C -->|"доверенное одобрение"| EA["ExecuteApproved<br/>Gate прогоняется снова"]
+    C -->|"апрувер одобрил"| EA["ExecuteApproved<br/>Gate прогоняется снова"]
     EA --> X
     G --> AU["audit: labels и digest"]
 ```
 
-- **Principal** — кто вызывает: пользователь, tenant, роли. Приходит из вашего
-  слоя аутентификации, никогда из текста модели.
-- **Gate** — одна функция, превращающая предложенное действие в `Allow`,
-  `Deny` или `Escalate`. Неизвестный инструмент, невалидные аргументы, ошибка
-  authorizer и чужой tenant никогда не становятся `Allow`.
-- **PendingAction** — сериализуемая эскалация: разрезолвленные аргументы,
-  digest, nonce, expiry и HMAC, привязывающий объект к выпустившему его engine.
-  Это единственный способ исполнить принятое апрувером действие, он
-  одноразовый, и endpoint одобрения не должен принимать его поля от клиента.
-- **Foreign approval** — решение об эскалированном действии приходит вне
-  модели: от человека или от вашей же бизнес-логики, действующей как
-  аутентифицированный `Principal`. Gate проверяет его одинаково.
-- **Audit** — labels, digest, решения и счётчики. Без prompt text, сырых
-  аргументов и секретов.
+| Гейт          | Ответственность                                                                                                                                                                                                                                                        |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Principal     | кто вызывает: пользователь, tenant, роли. Приходит из вашего слоя аутентификации, никогда из текста модели.                                                                                                                                                            |
+| Gate          | одна функция, превращающая предложенное действие в `Allow`, `Deny` или `Escalate`. Неизвестный инструмент, невалидные аргументы, ошибка authorizer и чужой tenant никогда не становятся `Allow`.                                                                       |
+| PendingAction | сериализуемая эскалация: разрезолвленные аргументы, digest, nonce, expiry и HMAC, привязывающий объект к выпустившему его engine. Это единственный способ исполнить одобренное действие, он одноразовый, и endpoint одобрения не должен принимать его поля от клиента. |
+| Audit         | labels, digest, решения и счётчики. Без prompt text, сырых аргументов и секретов.                                                                                                                                                                                      |
 
 Каждый — это гейт на пути вызова, а не хук, который можно забыть.
 
@@ -118,7 +109,7 @@ Gobellim — библиотека, а не сервис: вы сохраняет
   [`gate.go`](./gate.go); цикл в [`task.go`](./task.go) не может дойти до
   handler'а мимо него. [`internal/importrules`](./internal/importrules) — это
   build-time проверка графа пакетов.
-- **Модель не участвует в доступе.** Permission и эффект объявлены на
+- **Модель не участвует в доступе.** Permission и класс операции объявлены на
   инструменте ([`tool.go`](./tool.go)), проверяются вашим `Authorizer` и
   перепроверяются, когда одобренное действие продолжается.
 - **Сырые секреты не попадают в prompt.** Входные поля и результаты
@@ -136,12 +127,6 @@ Gobellim — библиотека, а не сервис: вы сохраняет
 них policy и guard'ом сами — и тогда владеете этой обёрткой и её тестами.
 Gobellim — это такая обёртка: Gate, approval и security-наборы идут вместе с
 ней.
-
-## Установка
-
-```sh
-go get github.com/KirillYuzh/Gobellim
-```
 
 ## Быстрый старт
 
@@ -173,7 +158,7 @@ type RefundResult struct {
 
 refund := gobellim.Tool[RefundArgs, RefundResult]{
 	Name:       "orders.refund",
-	Access:     gobellim.Write, // обязателен: zero value отклоняется
+	Operation:  gobellim.Write, // обязателен: zero value отклоняется
 	Permission: "orders:refund",
 	Target: func(p gobellim.Principal, a RefundArgs) gobellim.Resource {
 		return gobellim.Resource{Type: "order", ID: a.OrderID, TenantID: p.Tenant}
@@ -212,7 +197,7 @@ if err != nil {
 	return err
 }
 if res.Status == gobellim.TaskApprovalRequired {
-	// res.Pending — остановленное действие. После реального одобрения:
+	// res.Pending — остановленное действие. После решения апрувера:
 	//   out, rec, err := task.ExecuteApproved(ctx, requester, approver, res.Pending)
 }
 ```
@@ -224,21 +209,74 @@ audit-следа тоже. В тесте, где audit не проверяетс
 уточнить на задачу через `TaskConfig.Limits`; нулевое поле наследует значение
 `Engine`.
 
+Пример выше — тело `Example` в [`example_test.go`](./example_test.go), которое
+`go test` компилирует и запускает. Переименование, ломающее quickstart, ломает
+сборку, а не читателя.
+
+## Gate
+
+Каждый модельный вызов получает одно решение: tenant binding, grounding,
+RBAC/ACL, бизнес-валидация, затем потолок операции.
+
+| Худшая целостность аргументов | Read, Compute | Write    | Send  | Delete   |
+| ----------------------------- | ------------- | -------- | ----- | -------- |
+| `Trusted`                     | allow         | allow    | allow | escalate |
+| `Derived`                     | allow         | escalate | deny  | deny     |
+| `Untrusted` / нет меток       | allow         | escalate | deny  | deny     |
+
+- у `Operation` нет разрешающего нулевого значения; `NewTask` отклоняет
+  `OperationUnknown`;
+- `Target` обязан вернуть `Resource` с непустыми `Type`, `ID` и `TenantID`.
+  Отсутствующий tenant — это `Deny`, а не повод скопировать tenant вызывающего;
+- пустой набор меток — `Untrusted`. Ошибка `Authorizer`, неизвестный инструмент,
+  невалидные аргументы, ungrounded-аргумент и упавший `Validate` — это `Deny`;
+- `Resource.TenantID` должен совпадать с `Principal.Tenant`.
+
+Доверие даёт только handle, выпущенный для поля входа с `source=principal` или
+`source=application`. Свободный текст модели всегда `Derived`, и прошедший
+`Validate` этого не меняет: валидатор подтверждает бизнес-смысл, а не
+происхождение значения.
+
+## Теги schema
+
+| Тег                    | Смысл                                                              |
+| ---------------------- | ------------------------------------------------------------------ |
+| `required`             | значение не должно быть нулевым (нельзя на `bool`)                 |
+| `source=principal`     | строка должна совпадать с полем `Principal`                        |
+| `source=application`   | значение пришло из состояния приложения и получает `Trusted`       |
+| `ref`                  | выпустить handle, оставив значение публичным                       |
+| `sensitivity=pii`      | проверенные совпадения e-mail/телефона/карты заменяются на handles |
+| `sensitivity=secret`   | всё значение заменяется одним handle                               |
+| `sensitivity=internal` | метка без маскирования                                             |
+| `oneof=a\|b`           | строковый enum                                                     |
+| `min`, `max`           | числовой диапазон или количество элементов среза                   |
+| `ground`               | аргумент обязан быть handle для своего же пути                     |
+| `ground=TicketID`      | аргумент обязан быть handle для этого поля входа                   |
+| `ground=any`           | аргумент обязан быть handle для любого поля входа                  |
+
+`source` и `ref` ставятся на входное поле задачи, `ground` — на аргумент
+инструмента. Тег не с той стороны — `ErrInvalidConfig` на `NewTask`, а не
+молчаливый no-op.
+
+Поддерживаемые типы полей: `string`, `bool`, числа, срезы скаляров и вложенные
+структуры до двух уровней. `time.Time`, `[]byte`, `map`, указатели и более
+глубокая вложенность отклоняются намеренно: JSON Schema, отправленная модели, не
+должна описывать форму, которую рантайм не сможет декодировать.
+
+Те же `sensitivity`-теги применяются к результату инструмента перед тем, как он
+вернётся в контекст модели. Неизвестный тег на результате — ошибка, а не
+молчаливый способ отключить маскирование.
+
 ## Grounding — это handle
 
-`ground`-поле принимает только handle, созданный для этого запуска, и только из
-объявленного источника. Голый `ground` использует путь аргумента: `OrderID`
-принимает handle из входного поля `OrderID`. Если входное поле называется иначе,
-укажите `ground=RequestedOrder`. Handle в non-ground поле — `Deny`, даже если
-токен существует. `ground=any` — явное ослабление, не дефолт. Чтобы модель могла
-ссылаться на значение, пометьте входное поле `sensitivity=secret` (или
-`sensitivity=pii`). `source=application` даёт метку `Trusted`, но само по себе
-handle не создаёт.
+`ground`-поле принимает только handle, выпущенный для этого запуска. Модель не
+может выдумать ID или вставить trusted-строку, которую видела где-то ещё. Пометьте
+входное поле `ref`, чтобы публичное значение стало адресуемым: модель увидит
+handle, а карточка апрувера и audit сохранят само значение. Для
+конфиденциальных данных используйте `sensitivity=secret`.
 
-Голый `ground` привязан к пути самого аргумента, поэтому входное поле и аргумент
-должны называться одинаково. Если имена разные, укажите источник:
-`ground=TicketID`. `ground=any` принимает handle из любого входного поля и
-является явным отказом от привязки.
+Голый `ground` привязан к пути самого аргумента. `ground=TicketID` указывает
+другое поле входа. `ground=any` — явный отказ от привязки.
 
 ```go
 type TicketInput struct {
@@ -250,94 +288,66 @@ type RefundArgs struct {
 // Модель видит {"OrderID":"<h1>"} и может передать "<h1>" в orders.refund.
 ```
 
-## Foreign approval (одобрение вне модели)
+## Одобрение
 
-Одобрение не обязано приходить от человека. Это любое решение об
-эскалированном действии, принятое вне модели: менеджер в UI или ваша же
-бизнес-логика, действующая как аутентифицированный `Principal`. Gate проверяет
-такое решение одинаково, и модель не может одобрить сама себя.
+Write с аргументами из модели не выполняется. `Task.Run` возвращает
+`TaskApprovalRequired` и `PendingAction` с разрезолвленными аргументами, их
+digest, nonce, expiry и HMAC от выпустившего engine. Храните объект на сервере;
+endpoint одобрения не должен принимать эти поля от клиента.
 
-Два пути, не смешивайте их в одном действии:
+Решение приходит вне модели: от человека или от вашей же бизнес-логики,
+действующей как аутентифицированный `Principal`. Gate проверяет одно и то же
+действие в обоих случаях.
 
-- `Task` превращает эскалированный tool call в `PendingAction`, приложение
-  хранит его, доверенный апрувер решает, а `ExecuteApproved` исполняет после
-  повторной проверки tenant, RBAC/ACL, `Validate`, access и точного digest.
-- `flow` останавливает шаг workflow и возвращает серверный `Suspension`;
-  `Resume` проверяет решение и право `ActionPermission` у requester'а.
-
-`FourEyes` — опциональная проверка разделения обязанностей: апрувер обязан быть
-другим `Principal`, чем requester.
+Карточка, которую видит апрувер, маскирована: secret-аргумент — это handle,
+pii-аргумент замаскирован, а `Provenance` говорит, что где. Настоящие значения
+остаются в `PendingAction.Args` на сервере.
 
 ```go
-store, err := sqlstore.New(db) // опционально: одноразовость между репликами
-if err != nil {
-	return err
+if res.Status == gobellim.TaskApprovalRequired {
+	save(ctx, res.RunID, res.Pending)
 }
-wf, err := flow.New[RefundCase]("refund",
-	flow.WithAuthorizer(authz), // обязателен
-	flow.WithAudit(auditSink),  // обязателен
-	flow.WithStore(store),
-	flow.WithTTL(24*time.Hour),
-)
-if err != nil {
-	return err
-}
-
-wf.Step("prepare", prepareRefund).
-	Approve("manager", flow.ApproveConfig[RefundCase]{
-		Permission:       "refund:approve",
-		ActionPermission: "orders:refund",
-		FourEyes:         true,
-		Card:             refundApprovalCard, // детерминированная: Resume пересобирает её
-		Target:           refundResource,
-	}).
-	Step("execute", func(ctx context.Context, p gobellim.Principal, s *RefundCase) error {
-		// p — requester: Resume уже проверил одобрение перед этим шагом.
-		return orders.Refund(ctx, p.Tenant, s.OrderID, s.Cents)
-	})
-
-res, err := wf.Run(ctx, requester, state) // res.Status == flow.Suspended
-out, err := wf.Resume(ctx, approver, *res.Suspension, res.State, flow.Approve)
+// позже, после решения аутентифицированного апрувера:
+out, rec, err := task.ExecuteApproved(ctx, requester, approver, pending)
 ```
 
-`flow` одобряет шаг workflow. Если одобрять нужно именно tool call модели,
-используйте `Task` с `res.Pending` и `ExecuteApproved`, не оборачивая это в
-`flow`: один путь — один approval engine.
+`ExecuteApproved` заново прогоняет Gate: tenant binding, RBAC/ACL, `Validate` и
+digest ровно тех аргументов, которые исполняются. Потолок операции — единственная
+проверка, которую заменяет одобрение. Nonce фиксируется до запуска handler'а:
+второй вызов — `ErrApprovalReplay`, а падение в этом окне теряет одобрение, а не
+исполняет его дважды.
 
-`Run` возвращает `Suspension{Nonce, Card, ExpiresAt, Requester}` и состояние.
-Зашифрованного bearer-токена нет, поэтому нет и ключа, который надо ротировать:
-единственное доверие здесь — к аутентификации пользователей и к хранилищу
-приложения.
+`flow` добавляет многошаговые сценарии и границы одобрения:
 
-`Resume` принимает решение только от аутентифицированного approver'а и
-проверяет tenant, expiry, `Card.Flow`, реальность `Card.Step` для этого flow,
-совпадение `RequiredPermission`/`FourEyes` с текущей конфигурацией (`ErrFlowDrift`
-при смене политики), право апрувера, Four-Eyes, право requester'а, tenant цели,
-пересобранный `ActionDigest` и атомарный claim nonce. `Reject` тоже забирает
-nonce: сказанное «нет» нельзя позже повторить как «да». `DecisionUnknown`
-(нулевое значение) и неизвестное решение — `ErrDecision`, никогда не одобрение.
+```go
+wf, err := flow.FromEngine[RefundCase](engine, "refund")
+wf.Step("propose", proposeRefund).
+	Approve("manager", flow.ApproveConfig[RefundCase]{
+		Permission:       "refund:approve", // что можно апруверу
+		ActionPermission: "orders:refund",  // перепроверяется у requester'а
+		FourEyes:         true,
+		Card:             refundCard,
+		Target:           refundResource,
+	}).
+	Step("execute", executeRefund) // вызывает task.ExecuteApproved с flow.ApproverFrom(ctx)
 
-Без `WithStore` используется process-local `MemStore`: одноразовость только
-внутри процесса, между репликами нужен общий `Store`. SQL-адаптер умеет `Prune`
-просроченных nonce и принимает `ConflictClause` для MySQL. Nonce занимается до
-внешнего эффекта: падение в этом окне теряет одобрение, а не рискует двойным
-исполнением.
+res, _ := wf.Run(ctx, requester, RefundCase{}) // res.Status == flow.Suspended
+out, err := wf.Resume(ctx, approver, *res.Suspension, res.State, flow.VerdictApprove)
+```
 
-`Task.ExecuteApproved` исполняет `PendingAction` после реального одобрения.
-Gate заново проверяет tenant, RBAC/ACL, `Validate`, tool/access и digest ровно
-тех аргументов, которые видел апрувер; апрувер пишется в audit как
-`approval.granted`. Nonce фиксируется до запуска handler'а: второй вызов —
-`ErrApprovalReplay`, а падение в этом окне теряет одобрение, а не рискует
-двойным исполнением.
+`Resume` проверяет tenant, expiry, версию flow, id шага, право апрувера,
+four-eyes, право requester'а, пересчитанный digest и атомарный claim. Отказ тоже
+забирает nonce: сказанное «нет» нельзя позже повторить как «да».
 
-У `PendingAction` есть HMAC по всей карточке с ключом engine. Храните его на
-сервере: endpoint одобрения, который декодирует `PendingAction` из тела
-запроса, отдаёт клиенту аргументы, digest и nonce — engine отвергнет такой
-объект как `ErrApprovalDrift`. По умолчанию ключ случайный и живёт в процессе;
-`gobellim.WithApprovalKey` задаёт общий 32-байтовый ключ, если эскалация и
-исполнение происходят на разных репликах.
+`Suspension` и состояние хранит приложение. Suspension, собранный из тела
+запроса, — это `ErrFlowDrift`, потому что выпустивший flow его подписывает. Без
+`WithStore` claim store живёт в процессе; между репликами нужен общий `Store` и
+одинаковый `gobellim.WithApprovalKey` у каждого engine.
 
 ## Observability
+
+`Sink` получает labels, digest, решения, latency и счётчики токенов. Prompt text,
+сырые аргументы и секреты в него не попадают.
 
 ```go
 sink, err := langfuse.New(langfuse.Config{
@@ -358,48 +368,39 @@ engine, err := gobellim.New(
 )
 ```
 
-Sink батчами отправляет `trace-create`, `generation-create` и `span-create`.
-Уходят только labels, digest, decision, latency и токены; prompt text, сырые
-аргументы и секреты — нет. Principal id и tenant по умолчанию не отправляются;
-`SendPrincipalID` / `SendTenant` включают эту корреляцию явно. Для локального
-просмотра: `langfuse.Config{DryRun: true, Writer: os.Stdout}`.
-
-Адаптеры моделей — в отдельных пакетах. `plugins/gigachat` реализует freemium
-OAuth и маппинг `functions`/`function_call`. Запускаемые сценарии — в notebook'ах.
+`plugins/gigachat` — адаптер модели: freemium OAuth и маппинг
+`functions`/`function_call`. Запускаемые сценарии — в
+[`examples/notebooks`](./examples/notebooks/README.md).
 
 ## Гарантии и non-goals
 
 Гарантируется при корректной интеграции:
 
-- вызов инструмента от модели не доходит до handler без Gate;
-- unknown tool, невалидные аргументы, ошибка authorizer и чужой tenant не
-  становятся `Allow`;
-- пустой набор аргументов не считается доверенным;
-- handle в non-ground поле и handle из чужого входного поля отклоняются;
-- `ground`-аргумент нельзя удовлетворить сырой строкой модели;
-- свободный текст модели не становится trusted из-за JSON schema или `Validate`;
-- approval привязан к инструменту и аргументам, которые видел апрувер,
-  `ExecuteApproved` прогоняет Gate заново, одобрение одноразово, а объект,
-  который engine не выпускал, отклоняется;
-- отменённый запрос не сжигает одобрение: `ctx.Err()` проверяется до `Claim`;
-- `sensitivity` на результате инструмента не пускает секрет в контекст модели,
-  включая `map` и `[]byte`;
-- audit содержит labels и digest, а не prompt text и секреты;
-- незавершённый запуск аудируется как `task.failed`, никогда как
-  `task.completed`.
+- модельный tool call не доходит до handler'а без Gate;
+- неизвестный инструмент, невалидные аргументы, ошибка authorizer, чужой tenant
+  и ungrounded-аргумент не становятся `Allow`;
+- свободный текст модели не становится `Trusted` ни через schema, ни через
+  пересказ, ни через прошедший валидатор;
+- одобрение привязано к показанному действию, заново прогоняет Gate, исполняется
+  один раз и отклоняется, если engine его не выпускал;
+- апрувер видит маскированные значения, а `Out` резолвит handle'ы этого запуска и
+  вычищает остальные;
+- audit несёт labels и digest, а незавершённый запуск — это `task.failed`,
+  никогда `task.completed`;
+- паника в tool handler не превращается в `Deny`. Она разматывается через
+  рантайм, запуск аудируется как failed, а дальше решает `recover` вашего
+  сервера.
 
 Не гарантируется:
 
 - exactly-once для внешнего side effect: общий `Store` даёт одноразовый claim,
   идемпотентность — на стороне провайдера;
-- редактирование внутри self-marshalling типа в результате (`time.Time`,
-  `json.Marshaler`); `sensitivity` на таком типе — ошибка `NewTask`;
+- редактирование внутри `map` или self-marshalling типа в результате;
 - отсутствие вредного или ложного текста модели;
-- точный data-flow внутри модели;
 - одноразовость Resume между репликами без общего `Store`;
 - durable recovery произвольной Go-функции;
-- retrieval/RAG и data ACL — это ответственность приложения;
-- `Readers` / per-reader ACL не реализованы.
+- retrieval/RAG и per-reader data ACL. Документы фильтрует приложение до вызова
+  `Task`; `ReaderSet` не существует.
 
 ## Документация
 

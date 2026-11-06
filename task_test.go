@@ -294,14 +294,46 @@ func TestValidOutputCompletes(t *testing.T) {
 	}
 }
 
+// The first answer is invalid and the bounded repair attempt repeats it, so the
+// run fails with ErrInvalidArgs after two model calls rather than one.
 func TestInvalidOutputIsRejected(t *testing.T) {
-	model := testkit.NewFakeModel(testkit.Reply(`{"Category":"nope"}`))
+	model := testkit.NewFakeModel(
+		testkit.Reply(`{"Category":"nope"}`),
+		testkit.Reply(`{"Category":"nope"}`),
+	)
 	task := newTriageTask(t, newEngine(t, model, testkit.AllowAll, nil), nil)
 
 	if _, err := task.Run(context.Background(), principal(), ticketIn{
 		TenantID: "acme", TicketID: "t-1", Body: "hello",
 	}); !errors.Is(err, gobellim.ErrInvalidArgs) {
 		t.Fatalf("err = %v, want ErrInvalidArgs", err)
+	}
+}
+
+// A model that answers with prose or a fenced block gets one more chance, and
+// the retry is visible in the audit.
+func TestInvalidOutputIsRepaired(t *testing.T) {
+	model := testkit.NewFakeModel(
+		testkit.Reply("Sure! Here it is:\n```json\n{\"Category\":\"billing\"}\n```"),
+		testkit.Reply(validTriage),
+	)
+	rec := &testkit.Recorder{}
+	task := newTriageTask(t, newEngine(t, model, testkit.AllowAll, rec), nil)
+
+	res, err := task.Run(context.Background(), principal(), ticketIn{
+		TenantID: "acme", TicketID: "t-1", Body: "hello",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != gobellim.TaskCompleted || res.Output.Category != "billing" {
+		t.Fatalf("status = %v category = %q", res.Status, res.Output.Category)
+	}
+	if res.ModelCalls != 2 {
+		t.Fatalf("model calls = %d, want 2", res.ModelCalls)
+	}
+	if got := rec.Count(gobellim.EventModelRetried); got != 1 {
+		t.Fatalf("model.retried events = %d, want 1", got)
 	}
 }
 
@@ -575,6 +607,15 @@ func TestNestedGroundRequiresAHandle(t *testing.T) {
 	type outer struct {
 		Nested inner
 	}
+	// The task input must declare the same path the ground argument binds to:
+	// NewTask rejects a binding to a field that does not exist.
+	type nestedIn struct {
+		TenantID string `gobellim:"source=principal,required"`
+		TicketID string `gobellim:"source=application,required"`
+		Nested   struct {
+			OrderID string `gobellim:"sensitivity=secret"`
+		}
+	}
 	var executed int
 	tool := gobellim.Tool[outer, readResult]{
 		Name:      "orders.read",
@@ -589,10 +630,15 @@ func TestNestedGroundRequiresAHandle(t *testing.T) {
 		testkit.Call("orders.read", map[string]any{"Nested": map[string]any{"OrderID": "A-999"}}),
 		testkit.Reply(validTriage),
 	)
-	task := newTriageTask(t, newEngine(t, model, testkit.AllowAll, nil), []gobellim.ToolDef{tool})
+	task, err := gobellim.NewTask[nestedIn, triageOut](newEngine(t, model, testkit.AllowAll, nil), gobellim.TaskConfig{
+		Name: "triage", Instruction: "x", Tools: []gobellim.ToolDef{tool},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	res, err := task.Run(context.Background(), principal(), ticketIn{
-		TenantID: "acme", TicketID: "t-1", Body: "hello",
+	res, err := task.Run(context.Background(), principal(), nestedIn{
+		TenantID: "acme", TicketID: "t-1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1263,5 +1309,176 @@ func TestNonReadToolRequiresResource(t *testing.T) {
 		Name: "x", Instruction: "i", Tools: []gobellim.ToolDef{tool},
 	}); !errors.Is(err, gobellim.ErrInvalidConfig) {
 		t.Fatalf("err = %v, want ErrInvalidConfig", err)
+	}
+}
+
+// A ground argument binds to an input field. If that field does not exist, the
+// binding can never be satisfied, and the caller would learn it as a runtime
+// Deny for every call. It has to fail at NewTask instead.
+func TestGroundSourceMustExistInTheInput(t *testing.T) {
+	tool := gobellim.Tool[refundArgs, refundResult]{
+		Name:      "orders.refund",
+		Operation: gobellim.Write,
+		Target:    testResource[refundArgs],
+		Run: func(context.Context, gobellim.Principal, refundArgs) (refundResult, error) {
+			return refundResult{}, nil
+		},
+	}
+	// orderIn declares OrderID; refundArgs binds to RequestedOrder.
+	e := newEngine(t, testkit.NewFakeModel(testkit.Reply(validTriage)), testkit.AllowAll, nil)
+	_, err := gobellim.NewTask[orderIn, triageOut](e, gobellim.TaskConfig{
+		Name: "x", Instruction: "i", Tools: []gobellim.ToolDef{tool},
+	})
+	if !errors.Is(err, gobellim.ErrInvalidConfig) {
+		t.Fatalf("err = %v, want ErrInvalidConfig", err)
+	}
+}
+
+type maskedArgs struct {
+	OrderID string `gobellim:"required,ground=RequestedOrder"`
+	Email   string `gobellim:"sensitivity=pii"`
+}
+
+type maskedResult struct {
+	OK bool
+}
+
+// The approver decides on the masked card; the executable values stay in
+// PendingAction.Args. A card that carries the order number or the customer's
+// email is a second leak, because an approval endpoint stores and logs it.
+func TestApprovalCardMasksSensitiveArguments(t *testing.T) {
+	var got maskedArgs
+	refund := gobellim.Tool[maskedArgs, maskedResult]{
+		Name:      "orders.refund",
+		Operation: gobellim.Write,
+		Target:    testResource[maskedArgs],
+		Run: func(_ context.Context, _ gobellim.Principal, a maskedArgs) (maskedResult, error) {
+			got = a
+			return maskedResult{OK: true}, nil
+		},
+	}
+	model := testkit.NewFakeModel(
+		testkit.Call("orders.refund", map[string]any{"OrderID": "<h1>", "Email": "user@example.com"}),
+	)
+	task := newTriageTask(t, newEngine(t, model, testkit.AllowAll, nil), []gobellim.ToolDef{refund})
+
+	res, err := task.Run(context.Background(), principal(), ticketIn{
+		TenantID: "acme", TicketID: "t-1", Body: "refund please", RequestedOrder: "A-100",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != gobellim.TaskApprovalRequired || res.Pending == nil {
+		t.Fatalf("status = %v pending = %+v", res.Status, res.Pending)
+	}
+
+	card := string(res.Pending.Card.Args)
+	if strings.Contains(card, "A-100") || strings.Contains(card, "user@example.com") {
+		t.Fatalf("card carries a raw value: %s", card)
+	}
+	if !strings.Contains(card, "<h1>") {
+		t.Fatalf("card = %s, want the handle the model saw", card)
+	}
+	if raw := string(res.Pending.Args); !strings.Contains(raw, "A-100") || !strings.Contains(raw, "user@example.com") {
+		t.Fatalf("pending args = %s, want the executable values", raw)
+	}
+
+	seen := map[string]gobellim.Sensitivity{}
+	for _, p := range res.Pending.Card.Provenance {
+		seen[p.Arg] = p.Sensitivity
+	}
+	if seen["OrderID"] != gobellim.Secret || seen["Email"] != gobellim.PII {
+		t.Fatalf("provenance = %v, want secret OrderID and pii Email", seen)
+	}
+
+	approver := gobellim.Principal{UserID: "m-1", Tenant: "acme"}
+	_, rec, err := task.ExecuteApproved(context.Background(), principal(), approver, res.Pending)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rec.Executed {
+		t.Fatal("approved action did not execute")
+	}
+	if got.OrderID != "A-100" || got.Email != "user@example.com" {
+		t.Fatalf("handler args = %+v, want the resolved values", got)
+	}
+}
+
+// A handle in the answer becomes the value it stands for; one this run did not
+// mint is removed. Otherwise the first real reply to a customer reads
+// "refunded <h1>".
+func TestOutputRestoresIssuedHandleAndDropsUnknown(t *testing.T) {
+	model := testkit.NewFakeModel(
+		testkit.Reply(`{"Category":"billing","Reply":"refunded <h1>; unknown <h2> done"}`),
+	)
+	task := newTriageTask(t, newEngine(t, model, testkit.AllowAll, nil), nil)
+
+	res, err := task.Run(context.Background(), principal(), ticketIn{
+		TenantID: "acme", TicketID: "t-1", Body: "hello", RequestedOrder: "A-100",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(res.Output.Reply, "<h") {
+		t.Fatalf("reply leaks a handle: %q", res.Output.Reply)
+	}
+	if !strings.Contains(res.Output.Reply, "A-100") {
+		t.Fatalf("reply = %q, want the restored order number", res.Output.Reply)
+	}
+}
+
+type refIn struct {
+	TenantID string `gobellim:"source=principal,required"`
+	TicketID string `gobellim:"source=application,required"`
+	OrderID  string `gobellim:"ref,required"`
+}
+
+type refArgs struct {
+	OrderID string `gobellim:"required,ground"`
+}
+
+// ref makes a value addressable without labelling it confidential: the model
+// still sees a handle, but the approver card and the audit keep the public
+// value. Using sensitivity=secret for that would claim a confidentiality the
+// value does not have.
+func TestRefIsAddressableWithoutBeingSecret(t *testing.T) {
+	tool := gobellim.Tool[refArgs, refundResult]{
+		Name:      "orders.refund",
+		Operation: gobellim.Write,
+		Target:    testResource[refArgs],
+		Run: func(context.Context, gobellim.Principal, refArgs) (refundResult, error) {
+			return refundResult{RefundID: "r-1"}, nil
+		},
+	}
+	model := testkit.NewFakeModel(
+		testkit.Call("orders.refund", map[string]any{"OrderID": "<h1>"}),
+	)
+	task, err := gobellim.NewTask[refIn, triageOut](newEngine(t, model, testkit.AllowAll, nil), gobellim.TaskConfig{
+		Name: "ticket.triage", Instruction: "x", Tools: []gobellim.ToolDef{tool},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := task.Run(context.Background(), principal(), refIn{
+		TenantID: "acme", TicketID: "t-1", OrderID: "A-100",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != gobellim.TaskApprovalRequired {
+		t.Fatalf("status = %v, want approval required", res.Status)
+	}
+	prompt := model.Calls()[0].Messages[1].Content
+	if strings.Contains(prompt, "A-100") || !strings.Contains(prompt, "<h1>") {
+		t.Fatalf("prompt = %q, want the handle and not the value", prompt)
+	}
+	if card := string(res.Pending.Card.Args); !strings.Contains(card, "A-100") {
+		t.Fatalf("card = %s, want the public value readable by the approver", card)
+	}
+	for _, p := range res.Pending.Card.Provenance {
+		if p.Arg == "OrderID" && p.Sensitivity != gobellim.Public {
+			t.Fatalf("provenance = %+v, want public", p)
+		}
 	}
 }

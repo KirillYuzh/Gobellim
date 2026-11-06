@@ -2,24 +2,20 @@
 
 **[English](README.md) · [Русский](README.ru.md)**
 
-![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
+![Go](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ![Gobellim](./site/public/gobellim-compact-white.svg)
 
-Execution and policy layer for one LLM use case inside an existing Go service.
-Gobellim is a library, not a platform: it starts no server, database or broker,
-and the core module has no required dependencies.
+Gobellim is a Go library: the execution and policy layer for one LLM use case inside an existing Go service.
 
-![Gobellim architecture](docs/architecture.en.svg)
+## Install
 
-The main invariant:
+```sh
+go get github.com/KirillYuzh/Gobellim
+```
 
-> The model may propose text, arguments or an action. It cannot grant itself
-> permissions, change policy, register a tool or execute a side effect outside
-> the Gate.
-
-## The delta: one handler, made safe
+## One handler, made safe
 
 An ordinary HTTP handler calls your LLM client directly:
 
@@ -74,37 +70,31 @@ an approval resumes it.
 
 ## What Gobellim adds
 
+![Gobellim architecture](docs/architecture.en.svg)
+
 ```mermaid
 flowchart LR
     H["your handler"] --> P["Principal"]
     P --> T["Task: typed input<br/>labels, handles, limits"]
     T --> M["model proposes<br/>output or tool call"]
     M --> G{"Gate"}
-    G -->|"tenant · RBAC/ACL · grounding · Validate · access"| A["Allow"]
+    G -->|"tenant · RBAC/ACL · grounding · Validate · operation"| A["Allow"]
     G --> D["Deny"]
     G --> E["Escalate"]
     A --> X["your tool handler"]
     X --> R["redacted result<br/>back to the model"]
     E --> C["PendingAction<br/>digest · nonce · expiry"]
-    C -->|"trusted approval"| EA["ExecuteApproved<br/>Gate re-runs"]
+    C -->|"approver accepts"| EA["ExecuteApproved<br/>Gate re-runs"]
     EA --> X
     G --> AU["audit: labels and digests"]
 ```
 
-- **Principal** — who calls: user, tenant, roles. It comes from your auth layer,
-  never from model text.
-- **Gate** — one function that turns a proposed action into `Allow`, `Deny` or
-  `Escalate`. Unknown tool, invalid arguments, an authorizer error or a tenant
-  mismatch are never `Allow`.
-- **PendingAction** — a serializable escalation: resolved arguments, digest,
-  nonce, expiry, and an HMAC that ties it to the engine that issued it. It is the
-  only way to execute what an approver accepted, it is single-use, and an
-  approval endpoint must never accept its fields from a client.
-- **Foreign approval** — the decision about an escalated action comes from
-  outside the model: a person, or your own business logic acting as an
-  authenticated `Principal`. The Gate checks it the same way in both cases.
-- **Audit** — labels, digests, decisions and counters. No prompt text, no raw
-  arguments, no secrets.
+| Gate          | Responsibility                                                                                                                                                                                                                                                                      |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Principal     | who calls: user, tenant, roles. It comes from your auth layer, never from model text.                                                                                                                                                                                               |
+| Gate          | one function that turns a proposed action into `Allow`, `Deny` or `Escalate`. Unknown tool, invalid arguments, an authorizer error or a tenant mismatch are never `Allow`.                                                                                                          |
+| PendingAction | a serializable escalation: resolved arguments, digest, nonce, expiry, and an HMAC that ties it to the engine that issued it. It is the only way to execute what a trusted approver accepted, it is single-use, and an approval endpoint must never accept its fields from a client. |
+| Audit         | labels, digests, decisions and counters. No prompt text, no raw arguments, no secrets.                                                                                                                                                                                              |
 
 Each is a gate on the call path, not a hook you can forget.
 
@@ -118,17 +108,16 @@ and tests behind it.
   [`gate.go`](./gate.go); the model loop in [`task.go`](./task.go) cannot reach a
   handler without it. [`internal/importrules`](./internal/importrules) is the
   build-time guard on the package graph.
-- **The model gets no say in access.** Permissions and access are declared on
-  the tool ([`tool.go`](./tool.go)), checked by your `Authorizer`, and re-checked
-  when an approved action resumes.
+- **The model gets no say in access.** Permissions and operation classes are
+  declared on the tool ([`tool.go`](./tool.go)), checked by your `Authorizer`,
+  and re-checked when an approved action resumes.
 - **Raw secrets stay out of the prompt.** Input fields and tool results are
   masked or replaced with handles ([`handles.go`](./handles.go),
   [`redact.go`](./redact.go)); the model can only reference a handle.
 - **An approval is a bound, single-use action.** The digest covers the tool and
   its arguments; the nonce is claimed before the handler runs
   ([`claims.go`](./claims.go), [`flow/`](./flow)); and the engine's HMAC rejects
-  an action it did not issue ([`approval.go`](./approval.go)). The approver may
-  be a person or business logic, but never the model.
+  an action it did not issue ([`approval.go`](./approval.go)).
 - **Audit is not a log of everything.** Events carry labels and digests, not
   values ([`audit.go`](./audit.go)); an unfinished run is audited as a failure,
   never as success.
@@ -137,12 +126,6 @@ General-purpose Go LLM frameworks give you adapters. You can wrap one with a
 policy and a guard yourself — and then you own that wrapper and its tests.
 Gobellim is that wrapper: the Gate, the approvals and the security suites ship
 with it.
-
-## Install
-
-```sh
-go get github.com/KirillYuzh/Gobellim
-```
 
 ## Quickstart
 
@@ -174,12 +157,11 @@ type RefundResult struct {
 
 refund := gobellim.Tool[RefundArgs, RefundResult]{
 	Name:       "orders.refund",
-	Access:     gobellim.Write, // required: the zero value is rejected
+	Operation:  gobellim.Write, // required: the zero value is rejected
 	Permission: "orders:refund",
 	Target: func(p gobellim.Principal, a RefundArgs) gobellim.Resource {
 		return gobellim.Resource{Type: "order", ID: a.OrderID, TenantID: p.Tenant}
 	},
-	// Validate is a deny check. A nil result does not raise trust.
 	Validate: validateRefundAgainstBusinessRules,
 	Run: func(ctx context.Context, p gobellim.Principal, a RefundArgs) (RefundResult, error) {
 		return orders.Refund(ctx, p.Tenant, a.OrderID, a.Cents)
@@ -214,8 +196,7 @@ if err != nil {
 	return err
 }
 if res.Status == gobellim.TaskApprovalRequired {
-	// res.Pending is the escalated action. After a trusted approver — a person
-	// or your business logic — accepts it:
+	// res.Pending is the escalated action. After an approver accepts it:
 	//   out, rec, err := task.ExecuteApproved(ctx, requester, approver, res.Pending)
 }
 ```
@@ -226,17 +207,72 @@ audit trail. In a test that ignores audit, pass
 `gobellim.SlogSink{Logger: slog.New(slog.DiscardHandler)}`. Budgets can be tightened per
 task with `TaskConfig.Limits`; a zero field inherits the engine value.
 
+The snippet above is the body of `Example` in [`example_test.go`](./example_test.go),
+which `go test` compiles and runs, so a rename that breaks the quickstart breaks
+the build instead of the reader.
+
+## The Gate
+
+Every model-initiated call gets one decision: tenant binding, grounding, RBAC/ACL,
+business validation, then the operation ceiling.
+
+| Worst argument integrity | Read, Compute | Write    | Send  | Delete   |
+| ------------------------ | ------------- | -------- | ----- | -------- |
+| `Trusted`                | allow         | allow    | allow | escalate |
+| `Derived`                | allow         | escalate | deny  | deny     |
+| `Untrusted` / no labels  | allow         | escalate | deny  | deny     |
+
+- `Operation` has no permissive zero value; `NewTask` rejects `OperationUnknown`.
+- `Target` must return a `Resource` with a non-empty `Type`, `ID` and `TenantID`.
+  A missing tenant is `Deny`, not a reason to copy the caller's.
+- An empty label set is `Untrusted`. An `Authorizer` error, an unknown tool,
+  invalid arguments, an ungrounded argument or a failing `Validate` is `Deny`.
+- `Resource.TenantID` must equal `Principal.Tenant`.
+
+Trust is only ever a handle minted for an input field marked `source=principal`
+or `source=application`. Free model text is `Derived`, and a passing `Validate`
+does not change that: it confirms the business meaning, not where the value came
+from.
+
+## Schema by tags
+
+| Tag                    | Meaning                                                   |
+| ---------------------- | --------------------------------------------------------- |
+| `required`             | reject the zero value (not allowed on `bool`)             |
+| `source=principal`     | the value must equal the matching field of `Principal`    |
+| `source=application`   | the value is application state and becomes trusted        |
+| `ref`                  | mint a handle, keep the value public                      |
+| `sensitivity=pii`      | replace checked email/phone/card matches with handles     |
+| `sensitivity=secret`   | replace the whole value with one handle                   |
+| `sensitivity=internal` | label only; no masking                                    |
+| `oneof=a\|b`           | string enum                                               |
+| `min`, `max`           | numeric range, or item count for a slice                  |
+| `ground`               | the argument must be a handle for the argument's own path |
+| `ground=TicketID`      | the argument must be a handle for that input field        |
+| `ground=any`           | the argument must be a handle for any input field         |
+
+`source` and `ref` belong on a task input field, `ground` on a tool argument. A
+tag on the wrong side is `ErrInvalidConfig` at `NewTask`, not a silent no-op.
+
+Supported field types: `string`, `bool`, numbers, slices of scalars and nested
+structs up to two levels. `time.Time`, `[]byte`, maps, pointers and deeper
+nesting are rejected on purpose: the JSON Schema sent to the model must not
+describe a shape the runtime cannot decode.
+
+The same `sensitivity` tags apply to a tool result before it re-enters the model
+context. An unknown tag on a result is an error, not a silent way to turn masking
+off.
+
 ## Grounding is a handle
 
-A `ground` field accepts only a handle minted for this run, and the handle must
-come from the declared source. A bare `ground` uses the argument path, so
-`OrderID` accepts a handle from an input field named `OrderID`. If the input
-field has another name, write it explicitly: `ground=RequestedOrder`.
+A `ground` field accepts only a handle minted for this run, so the model cannot
+invent an ID or paste a trusted string it saw elsewhere. Mark the input field
+`ref` to make a public value addressable: the model sees a handle, while the
+approver card and the audit keep the value. For confidential data use
+`sensitivity=secret` instead.
 
-A bare `ground` binds to the argument's own JSON path, so the input field and the
-argument must share a name. When they do not, name the source: `ground=TicketID`.
-`ground=any` accepts a handle from any input field and is the explicit opt-out of
-the binding.
+A bare `ground` binds to the argument's own path. `ground=TicketID` names another
+input field. `ground=any` is the explicit opt-out.
 
 ```go
 type TicketInput struct {
@@ -248,30 +284,67 @@ type RefundArgs struct {
 // The model sees {"OrderID":"<h1>"} and may pass "<h1>" to orders.refund.
 ```
 
-A handle that reaches a non-`ground` field is rejected before the tool runs,
-even if the token exists. `ground=any` exists for tools that really do accept
-any handle; it is a deliberate weakening, not the default.
+## Approval
 
-## Foreign approval
+A write with model-derived arguments is not executed. `Task.Run` returns
+`TaskApprovalRequired` and a `PendingAction` with the resolved arguments, their
+digest, a nonce, an expiry and an HMAC from the issuing engine. Keep it on the
+server; an approval endpoint must never accept these fields from a client.
 
-An approval does not have to come from a person. It is any decision about an
-escalated action made outside the model: a manager in your UI, or your own
-business logic acting as an authenticated `Principal`. The Gate checks the
-decision the same way in both cases; the model never approves itself.
+The decision comes from outside the model: a person, or your own business logic
+acting as an authenticated `Principal`. The Gate checks the same action either
+way.
 
-`Task` turns an escalated tool call into a `PendingAction`; the application
-stores it, the approver decides, and `ExecuteApproved` runs the action after
-re-checking tenant, RBAC/ACL, `Validate`, access and the exact digest the
-approver saw. `flow` escalates a workflow step the same way and returns a
-server-side `Suspension` that `Resume` checks. Both are single-use, both claim
-the nonce before the effect, and both reject an object the engine did not issue.
+The card the approver sees is masked: a secret argument is a handle, a PII
+argument is masked, and `Provenance` says which field is which. The real values
+stay in `PendingAction.Args` on the server.
 
-`FourEyes` is an optional separation-of-duties check: the approver must be a
-different `Principal` from the requester. Keep it when the approver is a person;
-business logic running as its own service principal can enforce whatever
-difference your policy requires.
+```go
+if res.Status == gobellim.TaskApprovalRequired {
+	save(ctx, res.RunID, res.Pending)
+}
+// later, after an authenticated approver decides:
+out, rec, err := task.ExecuteApproved(ctx, requester, approver, pending)
+```
+
+`ExecuteApproved` re-runs the Gate: tenant binding, RBAC/ACL, `Validate` and the
+digest of the exact arguments that run. The operation ceiling is the only check
+an approval replaces. The nonce is claimed before the handler runs, so a second
+call is `ErrApprovalReplay`, and a crash in that window loses the approval
+instead of executing it twice.
+
+`flow` adds multi-step workflows and approval boundaries:
+
+```go
+wf, err := flow.FromEngine[RefundCase](engine, "refund")
+wf.Step("propose", proposeRefund).
+	Approve("manager", flow.ApproveConfig[RefundCase]{
+		Permission:       "refund:approve", // what the approver may do
+		ActionPermission: "orders:refund",  // re-checked for the requester
+		FourEyes:         true,
+		Card:             refundCard,
+		Target:           refundResource,
+	}).
+	Step("execute", executeRefund) // calls task.ExecuteApproved with flow.ApproverFrom(ctx)
+
+res, _ := wf.Run(ctx, requester, RefundCase{}) // res.Status == flow.Suspended
+out, err := wf.Resume(ctx, approver, *res.Suspension, res.State, flow.VerdictApprove)
+```
+
+`Resume` checks the tenant, expiry, workflow version, step id, the approver's
+permission, four-eyes, the requester's action permission, the recomputed digest
+and an atomic claim. A rejection claims the nonce too, so a "no" cannot be
+replayed as a "yes".
+
+The `Suspension` and the state are yours to store. A suspension built from a
+request body is `ErrFlowDrift`, because the issuing flow signs it. Without
+`WithStore` the claim store is process-local; between replicas, share a `Store`
+and give every engine the same `gobellim.WithApprovalKey`.
 
 ## Observability
+
+`Sink` gets labels, digests, decisions, latency and token counts. Prompt text,
+raw arguments and secrets never reach it.
 
 ```go
 sink, err := langfuse.New(langfuse.Config{
@@ -292,57 +365,39 @@ engine, err := gobellim.New(
 )
 ```
 
-The sink batches `trace-create`, `generation-create` and `span-create` events. It
-sends only what an audit event already contains: labels, digests, decisions,
-latency and token counts. Prompt text, raw arguments and secrets are never sent.
-Principal id and tenant are off by default; `SendPrincipalID` / `SendTenant`
-opt in when a deployment needs that correlation. For a local walkthrough, use
-`langfuse.Config{DryRun: true, Writer: os.Stdout}`.
-
-Model adapters live in optional packages. `plugins/gigachat` implements the
-freemium OAuth flow and maps GigaChat's `functions`/`function_call` shape. See
-the runnable notebooks.
+`plugins/gigachat` is a model adapter: freemium OAuth and the
+`functions`/`function_call` mapping. Runnable scenarios live in
+[`examples/notebooks`](./examples/notebooks/README.md).
 
 ## Guarantees and non-goals
 
-Guaranteed when the application integrates correctly:
+Guaranteed when the integration is correct:
 
-- a model tool call never reaches a handler without the Gate;
-- unknown tool, invalid arguments, authorizer error and a tenant mismatch do not
-  become `Allow`;
-- an empty argument set is not treated as trusted;
-- a `ground` argument cannot be satisfied by a raw model string;
-- a handle is rejected outside a `ground` field, and a `ground` field accepts
-  only a handle from its declared source;
-- free model text does not become trusted through a JSON schema, a `Validate`
-  call or a paraphrase;
-- an approval is bound to the tool and arguments it was shown,
-  `ExecuteApproved` re-runs the Gate, the approval is single-use, and an action
-  the engine did not issue is rejected;
-- `sensitivity` on a string, `[]string`, `[]byte` or `map[string]string` result
-  keeps that value out of the model context; a tag on another type is a
-  configuration error;
-- audit events carry labels and digests, not prompt text or secrets;
-- an unfinished run is audited as `task.failed`, never as `task.completed`;
-- a tool handler that panics is not converted to `Deny`: the panic unwinds
-  through the runtime, the run is audited as failed, and your server's
-  `recover` decides what happens next.
+- a model tool call cannot reach a handler without the Gate;
+- unknown tool, invalid arguments, an authorizer error, a foreign tenant and an
+  ungrounded argument never become `Allow`;
+- free model text never becomes `Trusted` through a schema, a paraphrase or a
+  passing validator;
+- an approval is bound to the action it showed, re-checks the Gate, runs once,
+  and is rejected when the engine did not issue it;
+- the approver sees masked values, and `Out` resolves handles this run minted and
+  drops the rest;
+- audit events carry labels and digests, and an unfinished run is `task.failed`,
+  never `task.completed`;
+- a panic in a tool handler is not turned into `Deny`. It unwinds through the
+  runtime, the run is audited as failed, and your server's `recover` decides what
+  happens next.
 
 Not guaranteed:
 
-- handles are resolved or stripped in `Out`: a `<hN>` the model echoed reaches
-  the caller as text;
 - exactly-once for an external side effect: a shared `Store` gives a single-use
-  claim, idempotency belongs to the provider;
-- redaction inside a `time.Time` or a self-marshalling type in a tool result;
+  claim, and idempotency belongs to the provider;
+- redaction inside a map or a self-marshalling type in a tool result;
 - that the model produces no harmful or false text;
-- exact data-flow tracking inside the model;
 - cross-replica single-use resume without a shared `Store`;
 - durable recovery of an arbitrary Go function;
-- retrieval/RAG. The library does not fetch or filter documents; the
-  application applies its data ACL before it calls `Task`;
-- `ReaderSet` / per-reader data ACL. It is not implemented; the application owns
-  its data ACL.
+- retrieval/RAG and per-reader data ACL. The application filters documents before
+  it calls `Task`; `ReaderSet` does not exist.
 
 ## Documentation
 

@@ -149,7 +149,7 @@ PendingAction, Flow остановился на границе «manager», tool
 	notebook.Cell("3. Resume → Done, действие выполнено один раз", `
 Апрувер m-1 отличается от requester u-1, права проверены, Suspension подписан,
 nonce занят. ExecuteApproved заново прогоняет Gate и сверяет digest.`)
-	out, err := wf.Resume(ctx, approver, *res.Suspension, res.State, flow.Approve)
+	out, err := wf.Resume(ctx, approver, *res.Suspension, res.State, flow.VerdictApprove)
 	if err != nil {
 		panic(err)
 	}
@@ -157,7 +157,7 @@ nonce занят. ExecuteApproved заново прогоняет Gate и све
 
 	notebook.Cell("4. Повторный Resume → ErrReplay", `
 Тот же nonce второй раз не выполнит шаг.`)
-	_, err = wf.Resume(ctx, approver, *res.Suspension, res.State, flow.Approve)
+	_, err = wf.Resume(ctx, approver, *res.Suspension, res.State, flow.VerdictApprove)
 	notebook.Result("replay detected: %v (errors.Is(ErrReplay)=%v)", err, errors.Is(err, flow.ErrReplay))
 
 	notebook.Cell("5. Подделанная Suspension → ErrFlowDrift", `
@@ -166,7 +166,7 @@ Suspension подписан ключом Engine. Объект, который fl
 одноразово ли действие.`)
 	forged := *res.Suspension
 	forged.Proof = nil
-	_, err = wf.Resume(ctx, approver, forged, out.State, flow.Approve)
+	_, err = wf.Resume(ctx, approver, forged, out.State, flow.VerdictApprove)
 	notebook.Result("forged suspension: %v", err)
 
 	fmt.Println()

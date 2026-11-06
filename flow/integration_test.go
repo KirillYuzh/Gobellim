@@ -151,11 +151,11 @@ func TestTaskEscalatesInsideFlowAndExecutesOnce(t *testing.T) {
 	if got := h.runs.Load(); got != 0 {
 		t.Fatalf("the tool ran %d times before approval", got)
 	}
-	if res.State.Pending.Digest == "" || res.State.Pending.Digest != res.Suspension.Card.ActionDigest() {
+	if res.State.Pending.Digest == "" || res.State.Pending.Digest != res.Suspension.Card.Digest {
 		t.Fatal("the approver would decide on a different action than the one the task escalated")
 	}
 
-	out, err := wf.Resume(ctx, approver(), *res.Suspension, res.State, flow.Approve)
+	out, err := wf.Resume(ctx, approver(), *res.Suspension, res.State, flow.VerdictApprove)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestTaskEscalatesInsideFlowAndExecutesOnce(t *testing.T) {
 		t.Fatalf("the tool ran %d times, want 1", got)
 	}
 
-	if _, err := wf.Resume(ctx, approver(), *res.Suspension, res.State, flow.Approve); !errors.Is(err, flow.ErrReplay) {
+	if _, err := wf.Resume(ctx, approver(), *res.Suspension, res.State, flow.VerdictApprove); !errors.Is(err, flow.ErrReplay) {
 		t.Fatalf("second resume err = %v, want ErrReplay", err)
 	}
 	if got := h.runs.Load(); got != 1 {
@@ -184,7 +184,7 @@ func TestSuspensionResumesOnAnotherFlowWithTheSameEngine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := h.flow(t).Resume(ctx, approver(), *res.Suspension, res.State, flow.Approve)
+	out, err := h.flow(t).Resume(ctx, approver(), *res.Suspension, res.State, flow.VerdictApprove)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -28,7 +28,23 @@ jobs:
       - run: go build ./...
       - run: go vet ./...
       - run: go test ./... -race -shuffle=on -count=1
+      - run: go test . -run '^$' -bench . -benchtime=1x
       - run: go test ./internal/importrules/ -v
+
+  minimum:
+    name: minimum go version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          # The go directive in go.mod: a library that needs the newest
+          # toolchain loses integrations for nothing.
+          go-version: "1.24.x"
+          cache: true
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test . ./flow ./store/sql ./internal/... -race -shuffle=on -count=1
 
   tidy:
     name: tidy

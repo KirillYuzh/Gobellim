@@ -2,7 +2,6 @@ package gobellim
 
 import (
 	"context"
-	"encoding/json"
 	"sort"
 )
 
@@ -97,9 +96,9 @@ func (e *Engine) execute(ctx context.Context, p Principal, c prepared) (any, err
 }
 
 func (e *Engine) card(runID, task string, c prepared, d Decision, fourEyes bool) *ApprovalCard {
-	args, err := json.Marshal(c.args)
-	if err != nil {
-		args = nil
+	args := c.masked
+	if len(args) == 0 {
+		args = c.raw
 	}
 
 	paths := make([]string, 0, len(c.labels))
@@ -117,7 +116,9 @@ func (e *Engine) card(runID, task string, c prepared, d Decision, fourEyes bool)
 				source += ":" + l.Sources[0].ID
 			}
 		}
-		prov = append(prov, Provenance{Arg: path, Source: source, Integrity: l.Integrity})
+		prov = append(prov, Provenance{
+			Arg: path, Source: source, Integrity: l.Integrity, Sensitivity: l.Sensitivity,
+		})
 	}
 
 	card := ApprovalCard{

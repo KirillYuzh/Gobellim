@@ -21,8 +21,9 @@ var (
 	ErrFlowDrift = errors.New("flow: flow or step changed")
 	// ErrUnauthorized reports a missing principal or a policy denial.
 	ErrUnauthorized = errors.New("flow: unauthorized")
-	// ErrDecision reports a Decision that is neither Approve nor Reject.
-	ErrDecision = errors.New("flow: unknown decision")
+	// ErrVerdict reports an approver's answer that is neither VerdictApprove nor
+	// VerdictReject.
+	ErrVerdict = errors.New("flow: unknown verdict")
 )
 
 // Status is the explicit outcome of a flow run.
@@ -63,17 +64,18 @@ func (s Status) String() string {
 	}
 }
 
-// Decision is an approver's answer to an approval card. The zero value is not an
-// approval.
-type Decision uint8
+// Verdict is an approver's answer to an approval card: VerdictApprove or
+// VerdictReject. The zero value approves nothing. The name keeps it apart from
+// the Gate's Decision and from the Approve step.
+type Verdict uint8
 
 const (
-	// DecisionUnknown is the zero value. It never approves anything.
-	DecisionUnknown Decision = iota
-	// Approve accepts the action.
-	Approve
-	// Reject refuses the action. A rejection is final for this nonce.
-	Reject
+	// VerdictUnknown is the zero value. It never approves anything.
+	VerdictUnknown Verdict = iota
+	// VerdictApprove accepts the action.
+	VerdictApprove
+	// VerdictReject refuses the action. A rejection is final for this nonce.
+	VerdictReject
 )
 
 // Suspension describes the approval a flow is waiting for. The application
@@ -199,6 +201,11 @@ func New[S any](name string, opts ...Option) (*Flow[S], error) {
 		return nil, fmt.Errorf("%w: TTL must be positive", gobellim.ErrInvalidConfig)
 	case cfg.maxWallTime <= 0:
 		return nil, fmt.Errorf("%w: max wall time must be positive", gobellim.ErrInvalidConfig)
+	case cfg.sealer != nil && cfg.store == nil:
+		// A shared signing key lets another replica accept a Suspension, but the
+		// default store is per-process: the same suspension could then resume once
+		// on every replica. The pair belongs together.
+		return nil, fmt.Errorf("%w: WithSealer needs WithStore: a shared signing key without a shared store allows one approval on every replica", gobellim.ErrInvalidConfig)
 	}
 	if cfg.store == nil {
 		store := NewMemStore()
@@ -422,7 +429,7 @@ func (f *Flow[S]) Resume(
 	approver gobellim.Principal,
 	susp Suspension,
 	state S,
-	d Decision,
+	v Verdict,
 ) (Result[S], error) {
 	var zero Result[S]
 	if f.err != nil {
@@ -504,8 +511,8 @@ func (f *Flow[S]) Resume(
 			fmt.Errorf("%w: approver lacks %s", ErrUnauthorized, a.permission)
 	}
 
-	switch d {
-	case Reject:
+	switch v {
+	case VerdictReject:
 		claimed, err := f.cfg.store.Claim(ctx, nonce, card.ExpiresAt)
 		if err != nil {
 			return Result[S]{Status: Failed, State: state}, fmt.Errorf("flow: store claim: %w", err)
@@ -518,9 +525,9 @@ func (f *Flow[S]) Resume(
 			PrincipalID: approver.UserID, Tenant: approver.Tenant,
 		})
 		return Result[S]{Status: Rejected, State: state}, nil
-	case Approve:
+	case VerdictApprove:
 	default:
-		return Result[S]{Status: Failed, State: state}, fmt.Errorf("%w: %d", ErrDecision, d)
+		return Result[S]{Status: Failed, State: state}, fmt.Errorf("%w: %d", ErrVerdict, v)
 	}
 
 	if a.fourEyes && approver.UserID == requester.UserID {
