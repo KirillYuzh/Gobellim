@@ -71,8 +71,9 @@ const (
 	Public Sensitivity = iota
 	// Internal is disclosed inside the tenant.
 	Internal
-	// PII is personal data and needs masking.
-	PII
+	// Patterns masks the personal-data shapes the detector knows: email, phone,
+	// card and Russian document numbers. It is not a classifier.
+	Patterns
 	// Secret must not reach the model or a log in clear text.
 	Secret
 )
@@ -84,8 +85,8 @@ func (s Sensitivity) String() string {
 		return "public"
 	case Internal:
 		return "internal"
-	case PII:
-		return "pii"
+	case Patterns:
+		return "patterns"
 	case Secret:
 		return "secret"
 	default:
@@ -116,8 +117,8 @@ func parseSensitivity(s string) (Sensitivity, bool) {
 		return Public, true
 	case "internal":
 		return Internal, true
-	case "pii":
-		return PII, true
+	case "patterns":
+		return Patterns, true
 	case "secret":
 		return Secret, true
 	default:

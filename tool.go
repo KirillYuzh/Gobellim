@@ -51,7 +51,7 @@ type prepared struct {
 	target Resource
 	digest string
 	// raw is the resolved argument object the handler receives; masked is the
-	// same object with secret and PII fields replaced, and it is what an
+	// same object with secret and patterns fields replaced, and it is what an
 	// approver is shown.
 	raw         json.RawMessage
 	masked      json.RawMessage

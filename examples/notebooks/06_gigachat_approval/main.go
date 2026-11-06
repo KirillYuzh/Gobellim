@@ -22,7 +22,7 @@ import (
 type refundIn struct {
 	TenantID string `gobellim:"source=principal,required"`
 	OrderID  string `gobellim:"sensitivity=secret,required"`
-	Request  string `gobellim:"required,sensitivity=pii"`
+	Request  string `gobellim:"required,sensitivity=patterns"`
 }
 
 type refundOut struct {
@@ -106,7 +106,7 @@ func main() {
 
 	notebook.Cell("1. Вход", `
 OrderID помечен sensitivity=secret: модель видит handle <h1>.
-Request помечен sensitivity=pii: e-mail/телефоны маскируются.
+Request помечен sensitivity=patterns: e-mail/телефоны маскируются.
 Приложение передаёт настоящий OrderID только через handle set.`)
 	input := refundIn{
 		TenantID: "acme",

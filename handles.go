@@ -34,7 +34,8 @@ func newHandleSet() *handleSet {
 }
 
 // put stores value and returns its handle. Identical values with identical
-// labels share a handle so repeated PII does not inflate the context. The key
+// labels share a handle so a repeated sensitive value does not inflate the
+// context. The key
 // includes integrity and sources: two equal strings with different provenance
 // must never collapse into one label.
 func (h *handleSet) put(value string, l Label) string {

@@ -166,7 +166,7 @@ func (f *fieldSchema) sensitivity() Sensitivity {
 	return Public
 }
 
-// redact hides a value according to its declared sensitivity. PII is masked by
+// redact hides a value according to its declared sensitivity. A patterns field is masked by
 // the narrow regex set; a secret is replaced by one opaque handle. A trusted
 // source keeps its trusted label, so a model may reference the value through a
 // handle.
@@ -182,8 +182,8 @@ func (f *fieldSchema) redact(value string, l Label, hs *handleSet) string {
 	switch f.sensitivity() {
 	case Secret:
 		return hs.put(value, l)
-	case PII:
-		return maskPII(value, l, hs)
+	case Patterns:
+		return maskPatterns(value, l, hs)
 	default:
 		return value
 	}

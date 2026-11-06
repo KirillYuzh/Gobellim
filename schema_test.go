@@ -12,7 +12,7 @@ import (
 type schemaInput struct {
 	TenantID string `gobellim:"source=principal,required"`
 	TicketID string `gobellim:"source=application,required"`
-	Body     string `gobellim:"required,sensitivity=pii"`
+	Body     string `gobellim:"required,sensitivity=patterns"`
 	Topic    string `gobellim:"oneof=billing|technical"`
 	Count    int    `gobellim:"min=1,max=5"`
 }
@@ -141,7 +141,7 @@ func TestPrepareInputMasksAndLabels(t *testing.T) {
 	}
 	body, _ := masked["Body"].(string)
 	if strings.Contains(body, "alice@example.com") {
-		t.Fatalf("PII was not masked: %q", body)
+		t.Fatalf("patterns value was not masked: %q", body)
 	}
 	if !strings.Contains(body, "<h") {
 		t.Fatalf("masked body has no handle: %q", body)
@@ -149,8 +149,8 @@ func TestPrepareInputMasksAndLabels(t *testing.T) {
 	if labels["TenantID"].Integrity != Trusted {
 		t.Fatalf("TenantID integrity = %v, want Trusted", labels["TenantID"].Integrity)
 	}
-	if labels["Body"].Sensitivity != PII {
-		t.Fatalf("Body sensitivity = %v, want PII", labels["Body"].Sensitivity)
+	if labels["Body"].Sensitivity != Patterns {
+		t.Fatalf("Body sensitivity = %v, want patterns", labels["Body"].Sensitivity)
 	}
 
 	in.TenantID = "other"

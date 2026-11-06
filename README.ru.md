@@ -137,7 +137,7 @@ Gobellim фиксирует вокруг них модельный цикл.
 type TicketInput struct {
 	TenantID string `gobellim:"source=principal,required"`
 	TicketID string `gobellim:"source=application,required"`
-	Body     string `gobellim:"required,sensitivity=pii"`
+	Body     string `gobellim:"required,sensitivity=patterns"`
 	OrderID  string `gobellim:"sensitivity=secret"`
 }
 
@@ -245,8 +245,7 @@ RBAC/ACL, бизнес-валидация, затем потолок опера�
 | `source=principal`     | строка должна совпадать с полем `Principal`                        |
 | `source=application`   | значение пришло из состояния приложения и получает `Trusted`       |
 | `ref`                  | выпустить handle, оставив значение публичным                       |
-| `resolve`              | (только выход) handle в строке снова становится значением          |
-| `sensitivity=pii`      | проверенные совпадения e-mail/телефона/карты заменяются на handles |
+| `sensitivity=patterns` | проверенные совпадения e-mail/телефона/карты заменяются на handles |
 | `sensitivity=secret`   | всё значение заменяется одним handle                               |
 | `sensitivity=internal` | метка без маскирования                                             |
 | `oneof=a\|b`           | строковый enum                                                     |
@@ -268,7 +267,7 @@ RBAC/ACL, бизнес-валидация, затем потолок опера�
 вернётся в контекст модели. Неизвестный тег на результате — ошибка, а не
 молчаливый способ отключить маскирование.
 
-`sensitivity=pii` — это регулярное выражение с контрольной суммой, а не
+`sensitivity=patterns` — это регулярное выражение с контрольной суммой, а не
 классификатор. Паспорт, адрес или ФИО оно не распознаёт, а промах ничем не
 сигнализируется. Оно сокращает то, что видит модель, но не заменяет data ACL и
 DLP.

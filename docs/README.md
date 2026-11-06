@@ -20,7 +20,7 @@ Core не требует внешних зависимостей. `flow`, `store
 type TicketInput struct {
 	TenantID string `gobellim:"source=principal,required"`
 	TicketID string `gobellim:"source=application,required"`
-	Body     string `gobellim:"required,sensitivity=pii"`
+	Body     string `gobellim:"required,sensitivity=patterns"`
 	OrderID  string `gobellim:"sensitivity=secret"`
 }
 
@@ -94,8 +94,7 @@ Sealed-токена нет. `flow.VerdictReject` тоже забирает nonce
 | `source=principal`     | строка должна совпадать с полем `Principal`                  |
 | `source=application`   | значение пришло из состояния приложения и получает `Trusted` |
 | `ref`                  | выпустить handle, оставив значение публичным                 |
-| `resolve`              | (только выход) handle в строке снова становится значением    |
-| `sensitivity=pii`      | совпадения e-mail/телефона/карты заменяются на handles       |
+| `sensitivity=patterns` | совпадения e-mail/телефона/карты заменяются на handles       |
 | `sensitivity=secret`   | всё значение заменяется одним handle                         |
 | `sensitivity=internal` | метка без маскирования                                       |
 | `oneof=a\|b`           | строковый enum                                               |
@@ -157,7 +156,7 @@ tenant — `Deny`, никогда `Allow`.
 Модель не может «подтвердить» ID строкой. `ground`-поле принимает только
 handle, созданный рантаймом для этого запуска. Пометьте входное поле `ref`, если
 значение публичное, но модель должна ссылаться на него; `sensitivity=secret`
-нужен для конфиденциальных данных, `sensitivity=pii` — для полей вроде e-mail.
+нужен для конфиденциальных данных, `sensitivity=patterns` — для полей вроде e-mail.
 `source=application` само по себе даёт метку `Trusted`, но не создаёт handle.
 
 ```go
