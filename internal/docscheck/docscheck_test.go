@@ -57,7 +57,9 @@ func TestDocsDoNotNameRetiredAPI(t *testing.T) {
 		if err != nil {
 			rel = path
 		}
-		b, err := os.ReadFile(path)
+		// The path is a fixed repository file or a Markdown file found under
+		// docs/; no caller supplies it.
+		b, err := os.ReadFile(path) //nolint:gosec // G304: fixed repository paths
 		if err != nil {
 			t.Fatalf("%s: %v", rel, err)
 		}
