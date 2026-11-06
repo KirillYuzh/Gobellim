@@ -25,7 +25,7 @@ Trusted:
 
 - application code, configuration and registered tool handlers;
 - the `Principal` produced by the application's authentication layer;
-- policy sources and the continuation key;
+- policy sources;
 - the decision of an authenticated approver, within the action shown to them.
 
 Untrusted:
@@ -43,21 +43,54 @@ The full model and the invariants are in [`DESIGN.md`](./DESIGN.md) §2–§3.
 - Every model-initiated tool call goes through `gate.go`.
 - Unknown tool, invalid arguments, authorizer error and ungrounded arguments are
   `Deny`.
-- Labels only worsen; free model text is `Derived`.
-- A handle that was not issued in this run is rejected as ungrounded.
-- An approval is bound to the tool and canonical arguments by a digest.
-- Continuations use AES-GCM with a key ID and tenant/flow AAD; a tampered,
-  expired or foreign token is rejected.
+- Labels only worsen. `Tool.Validate` is deny-only; only an approval outside the
+  model of one action can raise the ceiling, and it replaces the access ceiling,
+  not the labels.
+- A handle that was not issued in this run, a handle in a non-`ground` field,
+  and a handle from a different input field are rejected as ungrounded.
+- Every access except `AccessCompute` requires a non-empty `Target`, so the ACL
+  check cannot silently degrade to RBAC.
+- An approval is bound to the whole card and the canonical arguments by an
+  HMAC and a digest; a changed card is `ErrApprovalDrift`.
+- A suspension is a server-side object, not a bearer token: `flow.Resume`
+  checks tenant, expiry, the current approval policy, the rebuilt action digest
+  and the atomic nonce claim. There is no key to rotate.
+- A cancelled `ExecuteApproved` request does not consume the nonce.
 - Audit events carry digests and labels, not prompt text, raw arguments, secrets
-  or tokens.
+  or approval nonces.
+
+## Guarantee to test
+
+Each guarantee above is enforced by a test, so a refactor that removes the
+check fails CI instead of silently weakening the library.
+
+| Guarantee                                           | Test                                                                                                         |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| every call goes through the Gate                    | `TestUngroundedCallDoesNotReachTheAuthorizer`, `TestRBACDenyDoesNotExecute`                                  |
+| unknown tool or bad args are denied                 | `TestUnknownToolIsDenied`, `TestInvalidOutputIsRejected`                                                     |
+| a handle outside `ground` is denied                 | `TestHandleIsRejectedOutsideGroundField`                                                                     |
+| a handle from another field is denied               | `TestGroundRejectsHandleFromAnotherField`                                                                    |
+| a fabricated handle is denied                       | `TestFabricatedHandleIsDenied`, `TestUngroundedArgumentIsDenied`                                             |
+| `Validate` promotes nothing                         | `TestUntrustedHandleWithValidatorStillEscalates`, `TestGroundedHandleWithoutValidatorEscalates`              |
+| `Send` needs a trusted origin                       | `TestUntrustedHandleCannotSend`                                                                              |
+| every non-`Compute` access needs a target           | `TestNonReadToolRequiresResource`, `TestReadWithoutTargetIsAConfigError`, `TestWriteWithEmptyTargetIsDenied` |
+| result redaction is fail-closed                     | `TestResultRedactionCoversMapBytesAndString`, `TestSensitivityOnScalarResultIsRejected`, `FuzzRedactResult`  |
+| a cancelled approval keeps its nonce                | `TestCanceledApprovalDoesNotConsumeTheNonce`                                                                 |
+| an approval is single-use                           | `TestExecuteApprovedIsSingleUse`, `TestParallelResume`                                                       |
+| an approval target is tenant-bound                  | `TestResumeRejectsForeignTenantTarget`                                                                       |
+| a tampered card is rejected                         | `TestTamperedCard`                                                                                           |
+| `MaxTokens` is bounded                              | `TestRequestCarriesBoundedMaxTokens`                                                                         |
+| the claim store is bounded                          | `TestMemClaimsIsBounded`                                                                                     |
+| one Engine and Task are race-free                   | `TestTaskRunIsConcurrentSafe` (with `-race`)                                                                 |
+| the tag parser and redactor hold on arbitrary input | `FuzzParseTag`, `FuzzDecodeStrict`, `FuzzResolveHandles`, `FuzzRedactResult`                                 |
 
 ## Not covered
 
 - Behaviour of the model provider and its network path.
-- A compromised application process, configuration or continuation key.
+- A compromised application process or configuration.
 - Retrieval and data ACL. The application must filter documents before it puts
   them into a `Task`.
-- Correctness of business permissions, tool effects and resource bindings
+- Correctness of business permissions, tool access and resource bindings
   declared by the application.
 - Exactly-once delivery of an external side effect.
 - Cross-replica single-use resume without a `Store`.
