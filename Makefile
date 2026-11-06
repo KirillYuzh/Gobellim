@@ -1,5 +1,5 @@
 GO       ?= go
-GOFMT    ?= gofmt
+GOFUMPT  ?= gofumpt
 GOLANGCI ?= golangci-lint
 
 .PHONY: check check-full build vet test lint fmt fmt-check tidy tidy-check vuln
@@ -25,10 +25,10 @@ vuln:
 	@$(GO) run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 fmt:
-	@$(GOFMT) -w .
+	@$(GOFUMPT) -w .
 
 fmt-check:
-	@out="$$($(GOFMT) -l .)"; \
+	@out="$$($(GOFUMPT) -l .)"; \
 	if [ -n "$$out" ]; then \
 		echo "gofmt: the following files need formatting:"; \
 		echo "$$out"; \
