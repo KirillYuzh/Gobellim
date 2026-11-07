@@ -7,59 +7,63 @@ import (
 	"time"
 )
 
-// Config holds the Engine's dependencies.
-type Config struct {
-	Model         Model
-	Authorizer    Authorizer
-	Audit         Sink
-	Limits        Limits
-	PolicyVersion string
-	// Claims makes an approved action single-use. A nil value uses an
+// config holds the Engine's dependencies. It is unexported because every field
+// has an option: a caller that builds one directly bypasses the validation in
+// New, and a caller that needs a new knob needs an option that can validate it.
+type config struct {
+	model         Model
+	authorizer    Authorizer
+	audit         Sink
+	limits        Limits
+	policyVersion string
+	// claims makes an approved action single-use. A nil value uses an
 	// in-process store; a shared store is needed between replicas.
-	Claims      ClaimStore
-	ApprovalTTL time.Duration
-	// ApprovalKey signs a PendingAction. A nil value generates a random
+	claims      ClaimStore
+	approvalTTL time.Duration
+	// approvalKey signs a PendingAction. A nil value generates a random
 	// per-process key, so an action escalated on one replica can be approved
 	// only on that replica. Set a shared 32-byte key together with a shared
 	// ClaimStore; the key alone lets one approval execute once per replica.
-	ApprovalKey []byte
-	Now         func() time.Time
+	approvalKey []byte
+	now         func() time.Time
 }
 
 // Option configures an Engine.
-type Option func(*Config)
+type Option func(*config)
 
 // WithModel sets the model adapter. It is required.
-func WithModel(m Model) Option { return func(c *Config) { c.Model = m } }
+func WithModel(m Model) Option { return func(c *config) { c.model = m } }
 
 // WithAuthorizer sets the RBAC/ACL adapter. It is required.
-func WithAuthorizer(a Authorizer) Option { return func(c *Config) { c.Authorizer = a } }
+func WithAuthorizer(a Authorizer) Option { return func(c *config) { c.authorizer = a } }
 
-// WithAudit sets the audit sink.
-func WithAudit(s Sink) Option { return func(c *Config) { c.Audit = s } }
+// WithAudit sets the audit sink. It is required.
+func WithAudit(s Sink) Option { return func(c *config) { c.audit = s } }
 
 // WithLimits overrides the default budgets.
-func WithLimits(l Limits) Option { return func(c *Config) { c.Limits = l } }
+func WithLimits(l Limits) Option { return func(c *config) { c.limits = l } }
 
 // WithPolicyVersion stamps audit events with the active policy version.
-func WithPolicyVersion(v string) Option { return func(c *Config) { c.PolicyVersion = v } }
+func WithPolicyVersion(v string) Option { return func(c *config) { c.policyVersion = v } }
 
 // WithClaimStore makes approved actions single-use across replicas.
-func WithClaimStore(s ClaimStore) Option { return func(c *Config) { c.Claims = s } }
+func WithClaimStore(s ClaimStore) Option { return func(c *config) { c.claims = s } }
 
 // WithApprovalTTL sets how long a PendingAction stays executable. A zero value
 // uses the default of 1 hour; a negative value is ErrInvalidConfig. An approval
 // that sits unused for a day is a stale decision.
-func WithApprovalTTL(d time.Duration) Option { return func(c *Config) { c.ApprovalTTL = d } }
+func WithApprovalTTL(d time.Duration) Option { return func(c *config) { c.approvalTTL = d } }
 
 // WithApprovalKey sets the HMAC key that authenticates a PendingAction. It must
 // be 32 bytes. Use it together with WithClaimStore when an action escalated on
 // one replica may be approved on another; a shared key without a shared claim
 // store is ErrInvalidConfig.
-func WithApprovalKey(key []byte) Option { return func(c *Config) { c.ApprovalKey = key } }
+func WithApprovalKey(key []byte) Option {
+	return func(c *config) { c.approvalKey = key }
+}
 
 // WithClock overrides the clock. It exists for tests.
-func WithClock(fn func() time.Time) Option { return func(c *Config) { c.Now = fn } }
+func WithClock(fn func() time.Time) Option { return func(c *config) { c.now = fn } }
 
 // Engine is the configured runtime: one model, one authorizer, one audit sink
 // and the default budgets.
@@ -97,33 +101,33 @@ func isNil(v any) bool {
 
 // New validates the configuration and builds an Engine.
 func New(opts ...Option) (*Engine, error) {
-	var cfg Config
+	var cfg config
 	for _, o := range opts {
 		o(&cfg)
 	}
-	if isNil(cfg.Model) {
+	if isNil(cfg.model) {
 		return nil, fmt.Errorf("%w: model is required", ErrInvalidConfig)
 	}
-	if isNil(cfg.Authorizer) {
+	if isNil(cfg.authorizer) {
 		return nil, fmt.Errorf("%w: authorizer is required", ErrInvalidConfig)
 	}
-	if isNil(cfg.Audit) {
+	if isNil(cfg.audit) {
 		// A run without an audit trail cannot be explained afterwards, and a
 		// forgotten option is not a decision to have no trail.
 		return nil, fmt.Errorf("%w: audit sink is required", ErrInvalidConfig)
 	}
-	limits := cfg.Limits.withFallback(DefaultLimits())
+	limits := cfg.limits.withFallback(DefaultLimits())
 	if err := limits.validate(); err != nil {
 		return nil, err
 	}
-	if len(cfg.ApprovalKey) > 0 && cfg.Claims == nil {
+	if len(cfg.approvalKey) > 0 && cfg.claims == nil {
 		// A shared key moves a PendingAction between replicas, but the default
 		// claim store is per-process: the same approval could then execute once
 		// on every replica. The pair belongs together.
 		return nil, fmt.Errorf("%w: WithApprovalKey needs WithClaimStore: a shared key without a shared claim store allows one approval to run on every replica", ErrInvalidConfig)
 	}
-	audit := cfg.Audit
-	ttl := cfg.ApprovalTTL
+	audit := cfg.audit
+	ttl := cfg.approvalTTL
 	if ttl < 0 {
 		// A missing option is a zero value, but a negative duration was written on
 		// purpose. Defaulting it would hide a typo behind a working approval.
@@ -132,17 +136,17 @@ func New(opts ...Option) (*Engine, error) {
 	if ttl == 0 {
 		ttl = defaultApprovalTTL
 	}
-	now := cfg.Now
+	now := cfg.now
 	if now == nil {
 		now = time.Now
 	}
-	claims := cfg.Claims
+	claims := cfg.claims
 	if claims == nil {
 		mem := NewMemClaims()
 		mem.Now = now
 		claims = mem
 	}
-	key := cfg.ApprovalKey
+	key := cfg.approvalKey
 	if len(key) == 0 {
 		// randomHex(16) is 32 bytes of ASCII, which is the length NewSealer
 		// requires: a default key and an explicit one behave the same way.
@@ -153,11 +157,11 @@ func New(opts ...Option) (*Engine, error) {
 		return nil, err
 	}
 	return &Engine{
-		model:         cfg.Model,
-		authz:         cfg.Authorizer,
+		model:         cfg.model,
+		authz:         cfg.authorizer,
 		audit:         audit,
 		limits:        limits,
-		policyVersion: cfg.PolicyVersion,
+		policyVersion: cfg.policyVersion,
 		claims:        claims,
 		approvalTTL:   ttl,
 		sealer:        sealer,
