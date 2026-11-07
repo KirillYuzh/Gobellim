@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"time"
 
@@ -86,7 +87,12 @@ const (
 // Proof is an HMAC over every field, so a Resume cannot accept a suspension this
 // process did not issue. Losing it, or editing any other field, is ErrFlowDrift.
 type Suspension struct {
-	Nonce     string
+	Nonce string
+	// Version is the flow version that issued this suspension. Resume rejects a
+	// suspension from another version with ErrFlowDrift: stored state is
+	// interpreted by the steps of the flow that runs now, and a changed set of
+	// steps would read it under the wrong assumptions.
+	Version   int
 	Card      gobellim.ApprovalCard
 	ExpiresAt time.Time
 	Requester gobellim.Principal
@@ -197,9 +203,9 @@ func New[S any](name string, opts ...Option) (*Flow[S], error) {
 	switch {
 	case name == "":
 		return nil, fmt.Errorf("%w: flow name is required", gobellim.ErrInvalidConfig)
-	case cfg.authz == nil:
+	case isNil(cfg.authz):
 		return nil, fmt.Errorf("%w: authorizer is required", gobellim.ErrInvalidConfig)
-	case cfg.audit == nil:
+	case isNil(cfg.audit):
 		return nil, fmt.Errorf("%w: audit sink is required", gobellim.ErrInvalidConfig)
 	case cfg.version < 1:
 		return nil, fmt.Errorf("%w: flow version must be positive", gobellim.ErrInvalidConfig)
@@ -207,13 +213,13 @@ func New[S any](name string, opts ...Option) (*Flow[S], error) {
 		return nil, fmt.Errorf("%w: TTL must be positive", gobellim.ErrInvalidConfig)
 	case cfg.maxWallTime <= 0:
 		return nil, fmt.Errorf("%w: max wall time must be positive", gobellim.ErrInvalidConfig)
-	case cfg.sealer != nil && cfg.store == nil:
+	case cfg.sealer != nil && isNil(cfg.store):
 		// A shared signing key lets another replica accept a Suspension, but the
 		// default store is per-process: the same suspension could then resume once
 		// on every replica. The pair belongs together.
 		return nil, fmt.Errorf("%w: WithSealer needs WithStore: a shared signing key without a shared store allows one approval on every replica", gobellim.ErrInvalidConfig)
 	}
-	if cfg.store == nil {
+	if isNil(cfg.store) {
 		store := NewMemStore()
 		store.Now = cfg.now
 		cfg.store = store
@@ -400,12 +406,18 @@ func (f *Flow[S]) runFrom(ctx context.Context, p gobellim.Principal, s S, from i
 		card.Step = st.id
 		card.RequiredPermission = st.approve.permission
 		card.FourEyes = st.approve.fourEyes
-		card.ExpiresAt = f.cfg.now().Add(f.ttlFor(st.approve))
+		if card.ExpiresAt.IsZero() {
+			// A card that already carries an expiry came from a Task, whose approval
+			// is bound to that deadline. Overwriting it would give one approval two
+			// lifetimes: flow would accept a decision the engine has already expired.
+			card.ExpiresAt = f.cfg.now().Add(f.ttlFor(st.approve))
+		}
 		if card.Digest == "" {
 			card.Digest = card.ActionDigest()
 		}
 		suspension := &Suspension{
 			Nonce:     newID("n_"),
+			Version:   f.cfg.version,
 			Card:      card,
 			ExpiresAt: card.ExpiresAt,
 			Requester: p,
@@ -458,6 +470,12 @@ func (f *Flow[S]) Resume(
 		// check the struct is a bearer token: the nonce inside it decides
 		// single-use, so a caller able to supply one could replay an approval.
 		return zero, fmt.Errorf("%w: suspension was not issued by this flow", ErrFlowDrift)
+	}
+	if susp.Version != f.cfg.version {
+		// The signature covers the version, so this is a decision, not tampering:
+		// a suspension issued by another revision of the flow is interpreted by
+		// steps that may no longer mean the same thing.
+		return zero, fmt.Errorf("%w: suspension is version %d, want %d", ErrFlowDrift, susp.Version, f.cfg.version)
 	}
 	if requester.Tenant != approver.Tenant {
 		return zero, fmt.Errorf("%w: approver tenant does not match requester", ErrUnauthorized)
@@ -559,7 +577,13 @@ func (f *Flow[S]) Resume(
 	if err != nil {
 		return Result[S]{Status: Failed, State: state}, err
 	}
-	if rebuilt.ActionDigest() != card.ActionDigest() {
+	if rebuilt.Digest == "" {
+		rebuilt.Digest = rebuilt.ActionDigest()
+	}
+	// Compare the digest that binds the approval, not a value recomputed from the
+	// card's masked arguments. A card issued by a Task carries the digest of the
+	// executable arguments, and ActionDigest would compare two different facts.
+	if rebuilt.Digest != card.Digest {
 		return Result[S]{Status: Failed, State: state},
 			fmt.Errorf("%w: pending action changed", ErrFlowDrift)
 	}
@@ -638,6 +662,8 @@ func suspensionMessage(s *Suspension) []byte {
 		b = append(b, 0)
 	}
 	add(s.Nonce)
+	b = strconv.AppendInt(b, int64(s.Version), 10)
+	b = append(b, 0)
 	add(s.Requester.UserID)
 	add(s.Requester.Tenant)
 	for _, r := range s.Requester.Roles {
@@ -674,6 +700,22 @@ func newID(prefix string) string {
 	var b [12]byte
 	_, _ = rand.Read(b[:])
 	return prefix + hex.EncodeToString(b[:])
+}
+
+// isNil reports whether v is nil or a nil value wrapped in an interface. A
+// dependency declared as `var a *MyAuthorizer` is not nil as an interface, and
+// without this check the mistake surfaces as a panic on the first Resume.
+func isNil(v any) bool {
+	if v == nil {
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return rv.IsNil()
+	default:
+		return false
+	}
 }
 
 // Err reports the first configuration error recorded by Step or Approve. Run and

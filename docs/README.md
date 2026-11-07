@@ -63,7 +63,7 @@ res, err := task.Run(ctx, principalFromRequest(r), in)
 write-действие, но оно **не выполнено**. В `res.Pending` лежит сериализуемое
 описание действия: digest, provenance, expiry, nonce, HMAC-подпись engine и
 карточка `res.Pending.Card`. `Card.Args` — маскированное представление: `secret`
-уже заменён handle, `pii` замаскирован, а `Provenance` несёт `Sensitivity`
+уже заменён handle, `patterns` замаскирован, а `Provenance` несёт `Sensitivity`
 каждого поля. Исполняемые значения лежат в `PendingAction.Args` и остаются на
 сервере.
 
@@ -114,7 +114,7 @@ Sealed-токена нет. `flow.VerdictReject` тоже забирает nonce
 `NewTask`: лучше fail на старте, чем schema, которая врёт модели.
 
 Те же `sensitivity`-теги применяются к **результату** инструмента перед тем,
-как он попадёт обратно в контекст модели: `secret` становится handle, `pii`
+как он попадёт обратно в контекст модели: `secret` становится handle, `patterns`
 маскируется. Неизвестный `gobellim`-тег на результирующей структуре — ошибка
 `NewTask`, чтобы опечатка не отключала маскирование молча.
 
@@ -125,22 +125,31 @@ Sealed-токена нет. `flow.VerdictReject` тоже забирает nonce
 1. `Resource.TenantID` обязателен для всего, кроме `Compute`, и должен
    совпадать с tenant принципала. Пустой tenant — `Deny` с `target-unbound`, а
    не повод подставить значение из принципала.
-2. `Authorizer` (ошибка — `Deny`).
-3. `ground`-поля.
+2. `ground`-поля: handle, созданный в этом запуске, и только для объявленного поля входа.
+3. `Authorizer` (ошибка — `Deny`).
 4. бизнес-валидация `Tool.Validate`.
 5. потолок доступа.
 
-| Худшая целостность аргументов | Read, Compute | Write    | Send  | Delete   |
-| ----------------------------- | ------------- | -------- | ----- | -------- |
-| `Trusted`                     | allow         | allow    | allow | escalate |
-| `Derived`                     | allow         | escalate | deny  | deny     |
-| `Untrusted` / нет меток       | allow         | escalate | deny  | deny     |
+Grounding идёт раньше `Authorizer` намеренно: id, придуманный моделью, не должен
+доходить до ACL приложения и попадать в его аудит.
+
+| Худшая целостность аргументов | Read, Compute | Write    | Send     | Delete   |
+| ----------------------------- | ------------- | -------- | -------- | -------- |
+| `Trusted`                     | allow         | allow    | allow    | escalate |
+| `Derived`                     | allow         | escalate | escalate | deny     |
+| `Untrusted` / нет меток       | allow         | escalate | deny     | deny     |
 
 Нулевой `Operation` — `OperationUnknown`, а не `Read`: забыть объявление нельзя.
 Для `Write`/`Send`/`Delete` `Target` обязателен и должен вернуть непустые
 `Type`, `ID` и `TenantID`: без цели ACL проверялся бы только по RBAC.
 Неизвестный инструмент, невалидные аргументы, ошибка authorizer и чужой
-tenant — `Deny`, никогда `Allow`.
+tenant — `Deny`, никогда `Allow`. Такой отказ не валит запуск: он пишется в
+audit как `gate.denied` и считается в `TaskResult.Denied`, включая вызовы,
+которые не дошли до Gate.
+
+`Send` с текстом, который написал модель, уходит в `Escalate`: `Deny` там был бы
+решением, которое не может отменить даже человек, а сгенерированный ответ —
+обычный случай этой операции. Без одобрения извне он не выполняется.
 
 **Как аргумент становится `Trusted`.** Доверие не зарабатывается внутри Gate.
 Аргумент `Trusted` только тогда, когда значение пришло через handle, выпущенный
@@ -215,7 +224,9 @@ Four-Eyes, право requester'а, digest действия, пересчита�
 процесс не подписывал, это `ErrFlowDrift` (`DESIGN.md` §8.5). Без `WithStore`
 flow использует process-local `MemStore`: повторный resume в том же процессе
 невозможен, между репликами нужен общий `Store`. SQL-адаптер также умеет
-`Prune` просроченных nonce и принимает `ConflictClause` для MySQL.
+`Prune` просроченных nonce, а для MySQL — `InsertPrefix("INSERT IGNORE")`
+с пустым `ConflictClause` (с `ON DUPLICATE KEY UPDATE` флаг `clientFoundRows`
+превращает дубликат в выигранный claim).
 Claim ставится до внешнего эффекта: падение в этом окне теряет одобрение, а не
 рискует двойным исполнением; восстановление — сверка с провайдером.
 

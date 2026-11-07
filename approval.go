@@ -39,8 +39,11 @@ type ApprovalCard struct {
 	ExpiresAt          time.Time       `json:"expires_at,omitempty"`
 }
 
-// ActionDigest is the stable digest of the tool name and canonical arguments.
-// Changing either invalidates an earlier approval.
+// ActionDigest is the digest of the tool name and the arguments this card
+// carries. Card.Digest is the digest the issuing engine bound to the action.
+// They are not always equal, because a card shows the masked arguments while
+// Digest covers the executable ones. Compare Digest; call ActionDigest only to
+// fill a card that carries none.
 func (c ApprovalCard) ActionDigest() string {
 	return actionDigest(c.Tool, c.Args)
 }

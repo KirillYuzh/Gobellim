@@ -144,7 +144,7 @@ PendingAction, Flow остановился на границе «manager», tool
 	notebook.Result("card: %s / %s / digest=%s",
 		res.Suspension.Card.Tool, res.Suspension.Card.Operation, res.Suspension.Card.Digest)
 	notebook.Result("task digest == card digest: %v",
-		res.Suspension.Card.ActionDigest() == res.State.Pending.Digest)
+		res.Suspension.Card.Digest == res.State.Pending.Digest)
 
 	notebook.Cell("3. Resume → Done, действие выполнено один раз", `
 Апрувер m-1 отличается от requester u-1, права проверены, Suspension подписан,

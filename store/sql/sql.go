@@ -11,8 +11,16 @@
 //	CREATE INDEX gobellim_claims_expires_at ON gobellim_claims (expires_at);
 //
 // MySQL and SQLite accept the same columns; use DATETIME(6) and VARCHAR(128) on
-// MySQL, and pass ConflictClause("ON DUPLICATE KEY UPDATE nonce = nonce"). The
-// index on expires_at keeps Prune from scanning the table.
+// MySQL.
+//
+// On MySQL build the store with InsertPrefix("INSERT IGNORE") and
+// ConflictClause(""). Do not use ConflictClause("ON DUPLICATE KEY UPDATE
+// nonce = nonce"): with the clientFoundRows=true connection flag, which some
+// drivers and ORMs enable, MySQL reports one affected row for a duplicate, and
+// Claim would treat an already-used nonce as freshly claimed. INSERT IGNORE
+// reports zero affected rows for a duplicate regardless of that flag.
+//
+// The index on expires_at keeps Prune from scanning the table.
 package sqlstore
 
 import (
@@ -35,6 +43,7 @@ type Execer interface {
 type Store struct {
 	db          Execer
 	table       string
+	insert      string
 	placeholder func(int) string
 	conflict    string
 }
@@ -66,12 +75,26 @@ func Placeholder(fn func(int) string) Option {
 }
 
 // ConflictClause overrides the clause appended to the INSERT. The default
-// "ON CONFLICT DO NOTHING" fits PostgreSQL and SQLite; MySQL uses
-// "ON DUPLICATE KEY UPDATE nonce = nonce". An empty clause makes a duplicate
-// nonce an error instead of a lost claim.
+// "ON CONFLICT DO NOTHING" fits PostgreSQL and SQLite. An empty clause makes a
+// duplicate nonce a database error instead of a lost claim. On MySQL combine an
+// empty clause with InsertPrefix("INSERT IGNORE").
 func ConflictClause(sql string) Option {
 	return func(s *Store) error {
 		s.conflict = sql
+		return nil
+	}
+}
+
+// InsertPrefix overrides the verb the statement starts with. The default is
+// "INSERT"; MySQL needs "INSERT IGNORE" so that a duplicate nonce reports zero
+// affected rows even when the connection sets clientFoundRows. No other value
+// is accepted: the verb is concatenated into the statement.
+func InsertPrefix(verb string) Option {
+	return func(s *Store) error {
+		if verb != "INSERT" && verb != "INSERT IGNORE" {
+			return fmt.Errorf("sqlstore: insert prefix must be INSERT or INSERT IGNORE, got %q", verb)
+		}
+		s.insert = verb
 		return nil
 	}
 }
@@ -81,6 +104,7 @@ func New(db Execer, opts ...Option) (*Store, error) {
 	s := &Store{
 		db:          db,
 		table:       "gobellim_claims",
+		insert:      "INSERT",
 		placeholder: func(int) string { return "?" },
 		conflict:    "ON CONFLICT DO NOTHING",
 	}
@@ -100,8 +124,8 @@ func New(db Execer, opts ...Option) (*Store, error) {
 // workflow treats as a failed claim.
 func (s *Store) Claim(ctx context.Context, nonce string, expiresAt time.Time) (bool, error) {
 	query := fmt.Sprintf(
-		"INSERT INTO %s (nonce, expires_at) VALUES (%s, %s)",
-		s.table, s.placeholder(1), s.placeholder(2),
+		"%s INTO %s (nonce, expires_at) VALUES (%s, %s)",
+		s.insert, s.table, s.placeholder(1), s.placeholder(2),
 	)
 	if s.conflict != "" {
 		query += " " + s.conflict

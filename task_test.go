@@ -135,7 +135,8 @@ func TestUngroundedArgumentIsDenied(t *testing.T) {
 		testkit.Call("orders.refund", map[string]any{"OrderID": "A-100", "Cents": 500}),
 		testkit.Reply(validTriage),
 	)
-	task := newTriageTask(t, newEngine(t, model, testkit.AllowAll, nil), []gobellim.ToolDef{refund})
+	rec := &testkit.Recorder{}
+	task := newTriageTask(t, newEngine(t, model, testkit.AllowAll, rec), []gobellim.ToolDef{refund})
 
 	res, err := task.Run(context.Background(), principal(), ticketIn{
 		TenantID: "acme", TicketID: "A-100", Body: "please refund", RequestedOrder: "A-100",
@@ -151,6 +152,14 @@ func TestUngroundedArgumentIsDenied(t *testing.T) {
 	}
 	if res.Status != gobellim.TaskCompleted {
 		t.Fatalf("status = %v", res.Status)
+	}
+	// A denial is the fingerprint of an injection attempt. It has to be visible
+	// in the audit trail and in the result, not only inside a ToolCallRecord.
+	if got := rec.Count(gobellim.EventGateDenied); got != 1 {
+		t.Fatalf("gate.denied events = %d, events = %+v", got, rec.Events())
+	}
+	if res.Denied != 1 {
+		t.Fatalf("denied = %d, want 1", res.Denied)
 	}
 }
 
@@ -450,7 +459,8 @@ func TestUnknownToolIsDenied(t *testing.T) {
 		testkit.Call("orders.refund", map[string]any{"OrderID": "A-100", "Cents": 500}),
 		testkit.Reply(validTriage),
 	)
-	task := newTriageTask(t, newEngine(t, model, testkit.AllowAll, nil), nil)
+	rec := &testkit.Recorder{}
+	task := newTriageTask(t, newEngine(t, model, testkit.AllowAll, rec), nil)
 
 	res, err := task.Run(context.Background(), principal(), ticketIn{
 		TenantID: "acme", TicketID: "A-100", Body: "please refund",
@@ -463,6 +473,48 @@ func TestUnknownToolIsDenied(t *testing.T) {
 	}
 	if res.ToolCalls[0].Decision.RuleIDs[0] != "unknown-tool" {
 		t.Fatalf("rules = %v", res.ToolCalls[0].Decision.RuleIDs)
+	}
+	if got := rec.Count(gobellim.EventGateDenied); got != 1 {
+		t.Fatalf("gate.denied events = %d, events = %+v", got, rec.Events())
+	}
+	if res.Denied != 1 {
+		t.Fatalf("denied = %d, want 1", res.Denied)
+	}
+}
+
+// A rejected call must tell the model which constraint it broke. Without the
+// detail the model repeats the same call until the tool budget ends.
+func TestInvalidArgumentsReachTheModel(t *testing.T) {
+	refund := gobellim.Tool[refundArgs, refundResult]{
+		Name:       "orders.refund",
+		Operation:  gobellim.Write,
+		Target:     testResource[refundArgs],
+		Permission: "orders:refund",
+		Run: func(context.Context, gobellim.Principal, refundArgs) (refundResult, error) {
+			t.Fatal("an invalid call reached the handler")
+			return refundResult{}, nil
+		},
+	}
+	model := testkit.NewFakeModel(
+		testkit.Call("orders.refund", map[string]any{"OrderID": "<h1>", "Cents": 0}),
+		testkit.Reply(validTriage),
+	)
+	task := newTriageTask(t, newEngine(t, model, testkit.AllowAll, nil), []gobellim.ToolDef{refund})
+
+	res, err := task.Run(context.Background(), principal(), ticketIn{
+		TenantID: "acme", TicketID: "A-100", Body: "please refund", RequestedOrder: "A-1042",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ToolCalls[0].Decision.RuleIDs[0] != "invalid-args" {
+		t.Fatalf("rules = %v", res.ToolCalls[0].Decision.RuleIDs)
+	}
+	calls := model.Calls()
+	last := calls[len(calls)-1].Messages
+	body := last[len(last)-1]
+	if body.Role != gobellim.RoleTool || !strings.Contains(body.Content, "min") {
+		t.Fatalf("the model saw no reason: %+v", body)
 	}
 }
 
@@ -690,6 +742,12 @@ type handleOnlyArgs struct {
 	OrderID string `gobellim:"required,ground=RequestedOrder"`
 }
 
+// sendArgs has no ground: a reply body is exactly the argument the model is
+// allowed to invent, so a Send tool has to decide what to do with model text.
+type sendArgs struct {
+	OrderID string `gobellim:"required"`
+}
+
 type secretResult struct {
 	Card  string `gobellim:"sensitivity=secret"`
 	Email string `gobellim:"sensitivity=patterns"`
@@ -790,6 +848,53 @@ func TestUntrustedHandleCannotSend(t *testing.T) {
 	}
 	if executed != 0 || res.ToolCalls[0].Decision.Kind != gobellim.Deny {
 		t.Fatalf("executed=%d decision=%+v", executed, res.ToolCalls)
+	}
+}
+
+// A reply the model wrote is the ordinary Send case. It cannot be Allow, because
+// the text is untrusted, and it must not be Deny: a Deny is unappealable, which
+// would make the operation unusable. Escalate keeps the human in the loop.
+func TestModelDerivedSendEscalatesAndCanBeApproved(t *testing.T) {
+	var executed int
+	send := gobellim.Tool[sendArgs, refundResult]{
+		Name:      "mail.send",
+		Operation: gobellim.Send,
+		Target:    testResource[sendArgs],
+		Run: func(context.Context, gobellim.Principal, sendArgs) (refundResult, error) {
+			executed++
+			return refundResult{RefundID: "mail-1", Status: "sent"}, nil
+		},
+	}
+	model := testkit.NewFakeModel(
+		testkit.Call("mail.send", map[string]any{"OrderID": "A-1042"}),
+	)
+	task := newTriageTask(t, newEngine(t, model, testkit.AllowAll, nil), []gobellim.ToolDef{send})
+
+	res, err := task.Run(context.Background(), principal(), ticketIn{
+		TenantID: "acme", TicketID: "t-1", Body: "reply to the customer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != gobellim.TaskApprovalRequired || res.Pending == nil {
+		t.Fatalf("status=%v pending=%v", res.Status, res.Pending)
+	}
+	if res.ToolCalls[0].Decision.Kind != gobellim.Escalate {
+		t.Fatalf("decision = %+v, want escalate", res.ToolCalls[0].Decision)
+	}
+	if executed != 0 {
+		t.Fatal("a send ran before approval")
+	}
+	if res.Denied != 0 {
+		t.Fatalf("denied = %d, want 0", res.Denied)
+	}
+
+	approver := gobellim.Principal{UserID: "m-1", Tenant: "acme"}
+	if _, _, err := task.ExecuteApproved(context.Background(), principal(), approver, res.Pending); err != nil {
+		t.Fatal(err)
+	}
+	if executed != 1 {
+		t.Fatalf("executed = %d, want 1", executed)
 	}
 }
 

@@ -70,6 +70,12 @@ func (e *Engine) decide(ctx context.Context, p Principal, c *prepared) Decision 
 		if c.worst == Trusted {
 			return Decision{Kind: Allow, RuleIDs: []string{RuleSend}, Reason: "send arguments come from trusted state"}
 		}
+		if c.worst == Derived {
+			// A reply the model wrote is the ordinary case for Send, and a Deny
+			// there is unappealable: no approver can override it. Escalate keeps the
+			// action outside the model while leaving a human a way to accept it.
+			return Decision{Kind: Escalate, RuleIDs: []string{RuleSendDerived}, Reason: "send arguments are model-derived"}
+		}
 		return Decision{Kind: Deny, RuleIDs: []string{RuleSendUntrusted}, Reason: "send arguments are not trusted"}
 	case OperationDelete:
 		if c.worst == Trusted {
@@ -95,11 +101,13 @@ func (e *Engine) execute(ctx context.Context, p Principal, c prepared) (any, err
 	return c.tool.run(ctx, p, c.args)
 }
 
+// card builds the approval card. masked is the only view an approver may see:
+// a secret argument is a handle and a patterns argument is masked. The fallback
+// to raw is deliberately absent. An empty mask is a bug, and showing the
+// executable values to an approver endpoint that stores and renders them is the
+// failure this field exists to prevent.
 func (e *Engine) card(runID, task string, c prepared, d Decision, fourEyes bool) *ApprovalCard {
 	args := c.masked
-	if len(args) == 0 {
-		args = c.raw
-	}
 
 	paths := make([]string, 0, len(c.labels))
 	for path := range c.labels {
