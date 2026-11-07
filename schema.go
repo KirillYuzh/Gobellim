@@ -469,7 +469,10 @@ func (f *fieldSchema) validate(fv reflect.Value) error {
 				return nil
 			}
 		}
-		return fmt.Errorf("%w: %s=%q is not one of %v", ErrInvalidArgs, f.jsonName, got, f.spec.oneof)
+		// The rejected value is deliberately absent: this error can reach the
+		// model as the detail of a denied tool call, and a ground field may have
+		// held a resolved secret.
+		return fmt.Errorf("%w: %s is not one of %v", ErrInvalidArgs, f.jsonName, f.spec.oneof)
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		return checkRange(f.jsonName, float64(fv.Int()), f.spec)
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:

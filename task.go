@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 )
 
@@ -62,11 +63,20 @@ type ToolCallRecord struct {
 
 // TaskResult is the result of one task run.
 type TaskResult[Out any] struct {
-	RunID      string
-	Status     TaskStatus
-	Output     Out
-	Pending    *PendingAction
-	ToolCalls  []ToolCallRecord
+	RunID  string
+	Status TaskStatus
+	Output Out
+	// Pending is the escalated action when Status is TaskApprovalRequired.
+	Pending *PendingAction
+	// ToolCalls is the trace of every tool call the model requested.
+	ToolCalls []ToolCallRecord
+	// Denied counts tool calls the Gate refused, including a call that never
+	// reached it: an unknown tool, an invented handle or invalid arguments. A
+	// run that ends Completed can still carry denials, and a denial is usually
+	// the fingerprint of an injection attempt. The runtime never treats a
+	// denial as a failure of the run; the application decides what to do with
+	// the answer.
+	Denied     int
 	Usage      Usage
 	ModelCalls int
 }
@@ -331,6 +341,9 @@ func (t *Task[In, Out]) Run(ctx context.Context, p Principal, in In) (result Tas
 			}
 			rec, content, escalation := t.runToolCall(runCtx, p, runID, tc, hs)
 			result.ToolCalls = append(result.ToolCalls, rec)
+			if rec.Decision.Kind == Deny {
+				result.Denied++
+			}
 			if escalation != nil {
 				result.Status = TaskApprovalRequired
 				result.Pending = escalation
@@ -421,6 +434,15 @@ func (t *Task[In, Out]) ExecuteApproved(ctx context.Context, requester, approved
 	prep, err := ct.def.prepare(ctx, requester, pending.Args, nil, t.limits.MaxArgBytes)
 	if err != nil {
 		rec.Decision = Decision{Kind: Deny, RuleIDs: []string{RuleInvalidArgs}, Reason: err.Error()}
+		// A refused approval is a Gate decision, so it leaves a record like every
+		// other one. Without this a corrupted approved action is invisible in the
+		// audit trail.
+		t.engine.emit(ctx, Event{
+			Kind: EventGateDenied, RunID: pending.RunID, Task: t.cfg.Name,
+			PrincipalID: requester.UserID, Tenant: requester.Tenant,
+			Tool: ct.spec.name, Operation: ct.spec.operation,
+			Decision: Deny, RuleIDs: rec.Decision.RuleIDs,
+		})
 		return nil, rec, fmt.Errorf("%w: %w", ErrApprovalInvalid, err)
 	}
 	prep.spec = ct.spec
@@ -509,7 +531,15 @@ func (t *Task[In, Out]) runToolCall(
 	ct, ok := t.tools[tc.Name]
 	if !ok {
 		rec.Decision = Decision{Kind: Deny, RuleIDs: []string{RuleUnknownTool}, Reason: "unknown tool"}
-		return rec, toolError("unknown tool"), nil
+		// The model tried a tool the application never registered. That is a
+		// control-flow escape attempt, and it is the single most useful anomaly
+		// signal in the run, so it must not be the one decision that is silent.
+		t.engine.emit(ctx, Event{
+			Kind: EventGateDenied, RunID: runID, Task: t.cfg.Name,
+			PrincipalID: p.UserID, Tenant: p.Tenant,
+			Tool: tc.Name, Decision: Deny, RuleIDs: rec.Decision.RuleIDs,
+		})
+		return rec, toolError("unknown tool", ""), nil
 	}
 	rec.Operation = ct.spec.operation
 
@@ -520,7 +550,15 @@ func (t *Task[In, Out]) runToolCall(
 			rule = RuleUngrounded
 		}
 		rec.Decision = Decision{Kind: Deny, RuleIDs: []string{rule}, Reason: err.Error()}
-		return rec, toolError("invalid arguments"), nil
+		t.engine.emit(ctx, Event{
+			Kind: EventGateDenied, RunID: runID, Task: t.cfg.Name,
+			PrincipalID: p.UserID, Tenant: p.Tenant,
+			Tool: ct.spec.name, Operation: ct.spec.operation,
+			Decision: Deny, RuleIDs: rec.Decision.RuleIDs,
+		})
+		// The reason names the field and the constraint, which is what lets the
+		// model correct its own call instead of repeating it until the budget ends.
+		return rec, toolError("invalid arguments", err.Error()), nil
 	}
 	prep.spec = ct.spec
 
@@ -545,7 +583,7 @@ func (t *Task[In, Out]) runToolCall(
 				PrincipalID: p.UserID, Tenant: p.Tenant, Tool: ct.spec.name,
 				Operation: ct.spec.operation, Latency: t.engine.elapsed(start), Error: "tool-failed",
 			})
-			return rec, toolError("tool failed"), nil
+			return rec, toolError("tool failed", ""), nil
 		}
 		rec.Executed = true
 		// A tool result re-enters the model context, so sensitivity tags on the
@@ -554,7 +592,7 @@ func (t *Task[In, Out]) runToolCall(
 		body, err := marshalNoEscape(redactResult(out, ct.spec.name, hs))
 		if err != nil {
 			rec.Error = err.Error()
-			return rec, toolError("tool result is not serializable"), nil
+			return rec, toolError("tool result is not serializable", ""), nil
 		}
 		if len(body) > t.limits.MaxOutputBytes {
 			rec.Error = "tool result exceeds the output budget"
@@ -563,7 +601,7 @@ func (t *Task[In, Out]) runToolCall(
 				PrincipalID: p.UserID, Tenant: p.Tenant, Tool: ct.spec.name,
 				Operation: ct.spec.operation, Latency: t.engine.elapsed(start), Error: "output-budget",
 			})
-			return rec, toolError("tool result exceeds budget"), nil
+			return rec, toolError("tool result exceeds budget", ""), nil
 		}
 		t.engine.emit(ctx, Event{
 			Kind: EventToolCompleted, RunID: runID, Task: t.cfg.Name,
@@ -576,7 +614,7 @@ func (t *Task[In, Out]) runToolCall(
 		return rec, "", t.pending(runID, p, prep, decision)
 
 	default:
-		return rec, toolError("denied"), nil
+		return rec, toolError("denied", decision.Reason), nil
 	}
 }
 
@@ -676,8 +714,26 @@ func systemPrompt(instruction, guard string) string {
 // answer failed, and nothing about the run leaks into the prompt.
 const repairInstruction = "<repair>\nYour previous reply was rejected. It must be a single JSON object that matches the schema, with no prose and no code fence.\n</repair>"
 
-func toolError(msg string) string {
-	b, err := json.Marshal(map[string]string{"error": msg})
+// maxToolErrorBytes bounds the detail the model reads. The message is schema
+// constants and field names, so the cap is about cost, not disclosure.
+const maxToolErrorBytes = 512
+
+// toolError is the message a rejected tool call returns to the model. detail
+// names the field and the constraint that failed; without it the model can only
+// repeat the same call until the tool-call budget ends. It is built from schema
+// constants and from the model's own output, and a resolved argument value never
+// enters it.
+func toolError(msg, detail string) string {
+	body := map[string]string{"error": msg}
+	if detail != "" {
+		if len(detail) > maxToolErrorBytes {
+			// Cut on a rune boundary: a half-encoded rune in a JSON string would
+			// reach the model as a replacement character.
+			detail = strings.ToValidUTF8(detail[:maxToolErrorBytes], "")
+		}
+		body["detail"] = detail
+	}
+	b, err := json.Marshal(body)
 	if err != nil {
 		return `{"error":"tool error"}`
 	}

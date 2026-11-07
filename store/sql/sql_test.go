@@ -111,17 +111,42 @@ func TestPlaceholder(t *testing.T) {
 	}
 }
 
-func TestConflictClause(t *testing.T) {
+func TestMySQLInsertIgnore(t *testing.T) {
 	db := newFakeExecer()
-	s, err := New(db, ConflictClause("ON DUPLICATE KEY UPDATE nonce = nonce"))
+	s, err := New(db, InsertPrefix("INSERT IGNORE"), ConflictClause(""))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Claim(context.Background(), "nonce-1", time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(db.queries[0], "ON DUPLICATE KEY UPDATE nonce = nonce") {
+	if !strings.HasPrefix(db.queries[0], "INSERT IGNORE INTO gobellim_claims") {
 		t.Fatalf("query = %q", db.queries[0])
+	}
+}
+
+// A duplicate must lose the claim whatever the driver reports for an unchanged
+// row. The store trusts a zero affected-rows count, so the INSERT verb has to
+// produce one on MySQL too, which is why INSERT IGNORE exists here.
+func TestDuplicateLosesTheClaim(t *testing.T) {
+	db := newFakeExecer()
+	db.rows = 0
+	s, err := New(db, InsertPrefix("INSERT IGNORE"), ConflictClause(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok, err := s.Claim(context.Background(), "nonce-1", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("a duplicate nonce was claimed")
+	}
+}
+
+func TestInsertPrefixIsValidated(t *testing.T) {
+	if _, err := New(newFakeExecer(), InsertPrefix("INSERT INTO other; --")); err == nil {
+		t.Fatal("expected an error for a statement smuggled through the insert verb")
 	}
 }
 

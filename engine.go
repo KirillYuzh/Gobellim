@@ -3,6 +3,7 @@ package gobellim
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"time"
 )
 
@@ -76,19 +77,37 @@ type Engine struct {
 
 const defaultApprovalTTL = time.Hour
 
+// isNil reports whether v is nil or a nil pointer, map, slice, channel or
+// function wrapped in an interface. A dependency declared as
+// `var m *MyModel` and passed through WithModel is not nil as an interface, and
+// the difference shows up as a panic on the first call instead of a
+// configuration error at startup.
+func isNil(v any) bool {
+	if v == nil {
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return rv.IsNil()
+	default:
+		return false
+	}
+}
+
 // New validates the configuration and builds an Engine.
 func New(opts ...Option) (*Engine, error) {
 	var cfg Config
 	for _, o := range opts {
 		o(&cfg)
 	}
-	if cfg.Model == nil {
+	if isNil(cfg.Model) {
 		return nil, fmt.Errorf("%w: model is required", ErrInvalidConfig)
 	}
-	if cfg.Authorizer == nil {
+	if isNil(cfg.Authorizer) {
 		return nil, fmt.Errorf("%w: authorizer is required", ErrInvalidConfig)
 	}
-	if cfg.Audit == nil {
+	if isNil(cfg.Audit) {
 		// A run without an audit trail cannot be explained afterwards, and a
 		// forgotten option is not a decision to have no trail.
 		return nil, fmt.Errorf("%w: audit sink is required", ErrInvalidConfig)

@@ -152,6 +152,7 @@ const (
 	RuleWrite            = "write"
 	RuleWriteUntrusted   = "write-untrusted"
 	RuleSend             = "send"
+	RuleSendDerived      = "send-derived"
 	RuleSendUntrusted    = "send-untrusted"
 	RuleDelete           = "delete"
 	RuleDeleteUntrusted  = "delete-untrusted"

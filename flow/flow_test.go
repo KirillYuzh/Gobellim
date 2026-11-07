@@ -358,6 +358,58 @@ func TestFlowDrift(t *testing.T) {
 	}
 }
 
+// A suspension is signed with the flow version, so a stored one cannot resume
+// against a flow whose steps have changed since it was issued.
+func TestResumeRejectsAnotherVersion(t *testing.T) {
+	store := NewMemStore()
+	sealer, err := gobellim.NewSealer([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1 := buildFlow(perms(defaultPerms()), store, WithSealer(sealer), Version(1))
+	res := suspended(t, v1)
+	if res.Suspension.Version != 1 {
+		t.Fatalf("suspension version = %d, want 1", res.Suspension.Version)
+	}
+
+	v2 := buildFlow(perms(defaultPerms()), store, WithSealer(sealer), Version(2))
+	if _, err := resume(context.Background(), v2, res, approver("m-1"), VerdictApprove); !errors.Is(err, ErrFlowDrift) {
+		t.Fatalf("err = %v, want ErrFlowDrift", err)
+	}
+}
+
+// A card that already carries a deadline belongs to a Task, whose approval is
+// bound to that deadline. Overwriting it would give one approval two lifetimes.
+func TestCardExpiryIsNotOverwritten(t *testing.T) {
+	fixed := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	f, err := New[refundState]("refund",
+		WithAuthorizer(perms(defaultPerms())),
+		WithAudit(silentAudit{}),
+		WithTTL(24*time.Hour),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Step("prepare", func(_ context.Context, _ gobellim.Principal, s *refundState) error {
+		s.OrderID = "A-1"
+		return nil
+	})
+	f.Approve("manager", ApproveConfig[refundState]{
+		Permission: "refund:approve",
+		Card: func(context.Context, gobellim.Principal, refundState) (gobellim.ApprovalCard, error) {
+			return gobellim.ApprovalCard{
+				Tool:      "orders.refund",
+				Operation: gobellim.Write,
+				ExpiresAt: fixed,
+			}, nil
+		},
+	})
+	res := suspended(t, f)
+	if !res.Suspension.Card.ExpiresAt.Equal(fixed) {
+		t.Fatalf("expires at %s, want %s", res.Suspension.Card.ExpiresAt, fixed)
+	}
+}
+
 func TestConditionalApprovalSkipped(t *testing.T) {
 	f, err := New[refundState]("refund",
 		WithAuthorizer(perms(defaultPerms())),

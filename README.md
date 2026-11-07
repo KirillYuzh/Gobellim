@@ -216,11 +216,11 @@ the build instead of the reader.
 Every model-initiated call gets one decision: tenant binding, grounding, RBAC/ACL,
 business validation, then the operation ceiling.
 
-| Worst argument integrity | Read, Compute | Write    | Send  | Delete   |
-| ------------------------ | ------------- | -------- | ----- | -------- |
-| `Trusted`                | allow         | allow    | allow | escalate |
-| `Derived`                | allow         | escalate | deny  | deny     |
-| `Untrusted` / no labels  | allow         | escalate | deny  | deny     |
+| Worst argument integrity | Read, Compute | Write    | Send     | Delete   |
+| ------------------------ | ------------- | -------- | -------- | -------- |
+| `Trusted`                | allow         | allow    | allow    | escalate |
+| `Derived`                | allow         | escalate | escalate | deny     |
+| `Untrusted` / no labels  | allow         | escalate | deny     | deny     |
 
 - `Operation` has no permissive zero value; `NewTask` rejects `OperationUnknown`.
 - `Target` must return a `Resource` with a non-empty `Type`, `ID` and `TenantID`.
@@ -228,6 +228,9 @@ business validation, then the operation ceiling.
 - An empty label set is `Untrusted`. An `Authorizer` error, an unknown tool,
   invalid arguments, an ungrounded argument or a failing `Validate` is `Deny`.
 - `Resource.TenantID` must equal `Principal.Tenant`.
+- `Send` with model-written text escalates. A `Deny` there could not be
+  overridden by anyone, and a generated reply is the ordinary case of that
+  operation.
 
 Trust is only ever a handle minted for an input field marked `source=principal`
 or `source=application`. Free model text is `Derived`, and a passing `Validate`
@@ -278,8 +281,8 @@ approver card and the audit keep the value. For confidential data use
 `sensitivity=secret` instead.
 
 `ref` mints one handle for the whole value, `secret` hides the whole value and
-mints the same handle, and `pii` masks only the fragments it detects. Pick by
-what the model needs to reference, not by how secret the value feels.
+mints the same handle, and `patterns` masks only the fragments it detects. Pick
+by what the model needs to reference, not by how secret the value feels.
 
 A bare `ground` binds to the argument's own path. `ground=TicketID` names another
 input field. `ground=any` is the explicit opt-out.
@@ -410,6 +413,8 @@ Guaranteed when the integration is correct:
   but only in fields tagged `resolve`; everywhere else the tokens are dropped;
 - audit events carry labels and digests, and an unfinished run is `task.failed`,
   never `task.completed`;
+- a denial does not fail the run: it is audited as `gate.denied` and counted in
+  `TaskResult.Denied`, including a call that never reached the Gate;
 - a panic in a tool handler is not turned into `Deny`. It unwinds through the
   runtime, the run is audited as failed, and your server's `recover` decides what
   happens next.
