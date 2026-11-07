@@ -871,35 +871,42 @@ func marshalNoEscape(v any) ([]byte, error) {
 }
 
 // prepareInput validates In, redacts what must be redacted and returns the JSON
-// the model may see plus the provenance of each field. Run does not need the
-// provenance itself, but it is the only observable record of how an input value
-// was labelled before masking.
-func (s *structSchema) prepareInput(in any, p Principal, hs *handleSet) (map[string]any, map[string]Label, error) {
+// the model may see, the provenance of each field, and the label of everything
+// the model is shown. Run does not need the map itself, but it is the only
+// observable record of how an input value was labelled before masking.
+//
+// The aggregate skips empty values: a field declared sensitivity=secret that is
+// blank cannot leak anything, and counting it would make every answer of a
+// struct with one optional secret field look confidential.
+func (s *structSchema) prepareInput(in any, p Principal, hs *handleSet) (map[string]any, map[string]Label, Label, error) {
 	rv := reflect.ValueOf(in)
 	for rv.Kind() == reflect.Pointer {
 		if rv.IsNil() {
-			return nil, nil, fmt.Errorf("%w: nil input", ErrInvalidArgs)
+			return nil, nil, Label{}, fmt.Errorf("%w: nil input", ErrInvalidArgs)
 		}
 		rv = rv.Elem()
 	}
 	if rv.Kind() != reflect.Struct {
-		return nil, nil, fmt.Errorf("%w: input must be a struct", ErrInvalidConfig)
+		return nil, nil, Label{}, fmt.Errorf("%w: input must be a struct", ErrInvalidConfig)
 	}
 	if err := s.validate(rv); err != nil {
-		return nil, nil, err
+		return nil, nil, Label{}, err
 	}
 	labels := make(map[string]Label)
-	out, err := s.prepareFields(rv, "", p, hs, labels)
+	// The model's own text is Derived: a schema constrains its shape, not its
+	// truth. Inputs can only lower that integrity and raise the sensitivity.
+	seen := Label{Integrity: Derived, Sources: []SourceRef{{Kind: "model"}}}
+	out, err := s.prepareFields(rv, "", p, hs, labels, &seen)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, Label{}, err
 	}
-	return out, labels, nil
+	return out, labels, seen, nil
 }
 
-func (s *structSchema) prepareFields(v reflect.Value, prefix string, p Principal, hs *handleSet, labels map[string]Label) (map[string]any, error) {
+func (s *structSchema) prepareFields(v reflect.Value, prefix string, p Principal, hs *handleSet, labels map[string]Label, seen *Label) (map[string]any, error) {
 	out := make(map[string]any, len(s.fields))
 	for _, f := range s.fields {
-		val, err := f.prepareValue(v.Field(f.index), joinPath(prefix, f.jsonName), p, hs, labels)
+		val, err := f.prepareValue(v.Field(f.index), joinPath(prefix, f.jsonName), p, hs, labels, seen)
 		if err != nil {
 			return nil, err
 		}
@@ -908,9 +915,9 @@ func (s *structSchema) prepareFields(v reflect.Value, prefix string, p Principal
 	return out, nil
 }
 
-func (f *fieldSchema) prepareValue(fv reflect.Value, path string, p Principal, hs *handleSet, labels map[string]Label) (any, error) {
+func (f *fieldSchema) prepareValue(fv reflect.Value, path string, p Principal, hs *handleSet, labels map[string]Label, seen *Label) (any, error) {
 	if f.nested != nil {
-		return f.nested.prepareFields(fv, path, p, hs, labels)
+		return f.nested.prepareFields(fv, path, p, hs, labels, seen)
 	}
 
 	switch fv.Kind() {
@@ -946,6 +953,9 @@ func (f *fieldSchema) prepareValue(fv reflect.Value, path string, p Principal, h
 			}
 		}
 		labels[path] = l
+		if value != "" {
+			mergeLabel(seen, l)
+		}
 		return f.redact(value, l, hs), nil
 
 	case reflect.Slice, reflect.Array:
@@ -955,6 +965,9 @@ func (f *fieldSchema) prepareValue(fv reflect.Value, path string, p Principal, h
 			Sensitivity: f.sensitivity(),
 		}
 		labels[path] = l
+		if fv.Len() > 0 {
+			mergeLabel(seen, l)
+		}
 		out := make([]any, 0, fv.Len())
 		for i := 0; i < fv.Len(); i++ {
 			ev := fv.Index(i)
@@ -967,11 +980,13 @@ func (f *fieldSchema) prepareValue(fv reflect.Value, path string, p Principal, h
 		return out, nil
 
 	default:
-		labels[path] = Label{
+		l := Label{
 			Integrity:   Untrusted,
 			Sources:     []SourceRef{{Kind: "input", ID: path}},
 			Sensitivity: f.sensitivity(),
 		}
+		labels[path] = l
+		mergeLabel(seen, l)
 		return fv.Interface(), nil
 	}
 }

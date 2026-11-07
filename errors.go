@@ -31,4 +31,7 @@ var (
 	// ErrApprovalDrift signals a pending action that changed since approval, or
 	// a tool whose operation or identity changed under the same arguments.
 	ErrApprovalDrift = errors.New("gobellim: approved action changed")
+	// ErrEgressDenied signals an answer the application refused to return,
+	// through TaskConfig.Egress, because of what the model saw.
+	ErrEgressDenied = errors.New("gobellim: answer refused by egress policy")
 )

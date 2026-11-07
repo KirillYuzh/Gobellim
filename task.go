@@ -31,6 +31,12 @@ type TaskConfig struct {
 	// while here the application is responsible for authenticating both
 	// principals.
 	FourEyes bool
+	// Egress, when set, runs once on a completed answer, before Run returns it,
+	// with the label of everything the model was shown. A non-nil error fails the
+	// run and discards the output: a denied answer must not reach the caller.
+	// nil returns the answer, and TaskResult.Label still carries the label, so an
+	// application that checks it at the response boundary does not need a hook.
+	Egress func(ctx context.Context, p Principal, l Label) error
 	// Limits tightens the engine budgets for this task. A zero field inherits
 	// the engine value.
 	Limits *Limits
@@ -66,6 +72,13 @@ type TaskResult[Out any] struct {
 	RunID  string
 	Status TaskStatus
 	Output Out
+	// Label is what the answer inherits from the run: the weakest integrity and
+	// the highest sensitivity among the input fields, the tool results and the
+	// model's own text. A reply written by a model that saw a secret is Secret
+	// even though the model only ever saw a handle; a reply written after an
+	// untrusted input is Untrusted. TaskConfig.Egress can refuse the answer on
+	// this label.
+	Label Label
 	// Pending is the escalated action when Status is TaskApprovalRequired.
 	Pending *PendingAction
 	// ToolCalls is the trace of every tool call the model requested.
@@ -258,10 +271,11 @@ func (t *Task[In, Out]) Run(ctx context.Context, p Principal, in In) (result Tas
 	})
 
 	hs := newHandleSet()
-	masked, _, err := t.in.prepareInput(in, p, hs)
+	masked, _, answer, err := t.in.prepareInput(in, p, hs)
 	if err != nil {
 		return result, err
 	}
+	result.Label = answer
 	payload, err := marshalNoEscape(masked)
 	if err != nil {
 		return result, err
@@ -313,6 +327,9 @@ func (t *Task[In, Out]) Run(ctx context.Context, p Principal, in In) (result Tas
 		if len(resp.Message.ToolCalls) == 0 {
 			out, derr := t.decodeOutput(resp, hs)
 			if derr == nil {
+				if err := t.egress(runCtx, p, result.Label); err != nil {
+					return result, err
+				}
 				result.Status = TaskCompleted
 				result.Output = out
 				return result, nil
@@ -339,7 +356,7 @@ func (t *Task[In, Out]) Run(ctx context.Context, p Principal, in In) (result Tas
 			if toolCalls > t.limits.MaxToolCalls {
 				return result, fmt.Errorf("%w: %d tool calls, cap is %d", ErrMaxSteps, toolCalls, t.limits.MaxToolCalls)
 			}
-			rec, content, escalation := t.runToolCall(runCtx, p, runID, tc, hs)
+			rec, content, escalation := t.runToolCall(runCtx, p, runID, tc, hs, &result.Label)
 			result.ToolCalls = append(result.ToolCalls, rec)
 			if rec.Decision.Kind == Deny {
 				result.Denied++
@@ -525,6 +542,7 @@ func (t *Task[In, Out]) runToolCall(
 	runID string,
 	tc ToolCall,
 	hs *handleSet,
+	seen *Label,
 ) (ToolCallRecord, string, *PendingAction) {
 	rec := ToolCallRecord{Name: tc.Name}
 
@@ -588,8 +606,10 @@ func (t *Task[In, Out]) runToolCall(
 		rec.Executed = true
 		// A tool result re-enters the model context, so sensitivity tags on the
 		// result struct are honoured here: a secret becomes a handle, a patterns
-		// field is masked.
-		body, err := marshalNoEscape(redactResult(out, ct.spec.name, hs))
+		// field is masked. The result also labels the answer: the model has now
+		// seen this data, and the answer can repeat it.
+		redacted, resultLabel := redactResult(out, ct.spec.name, hs)
+		body, err := marshalNoEscape(redacted)
 		if err != nil {
 			rec.Error = err.Error()
 			return rec, toolError("tool result is not serializable", ""), nil
@@ -603,6 +623,9 @@ func (t *Task[In, Out]) runToolCall(
 			})
 			return rec, toolError("tool result exceeds budget", ""), nil
 		}
+		// The budget check comes first: a result the model never saw must not
+		// label the answer.
+		mergeLabel(seen, resultLabel)
 		t.engine.emit(ctx, Event{
 			Kind: EventToolCompleted, RunID: runID, Task: t.cfg.Name,
 			PrincipalID: p.UserID, Tenant: p.Tenant, Tool: ct.spec.name,
@@ -638,6 +661,19 @@ func (t *Task[In, Out]) abandoned(ctx context.Context, runID string, p Principal
 		})
 	}
 	return out
+}
+
+// egress applies the task's egress policy. A nil policy returns the answer; the
+// label is still on TaskResult for an application that checks it at its own
+// response boundary.
+func (t *Task[In, Out]) egress(ctx context.Context, p Principal, l Label) error {
+	if t.cfg.Egress == nil {
+		return nil
+	}
+	if err := t.cfg.Egress(ctx, p, l); err != nil {
+		return fmt.Errorf("%w: %w", ErrEgressDenied, err)
+	}
+	return nil
 }
 
 func (t *Task[In, Out]) pending(runID string, p Principal, c prepared, d Decision) *PendingAction {
@@ -782,6 +818,8 @@ func errorClass(err error) string {
 		return "budget"
 	case errors.Is(err, ErrMaxSteps):
 		return "max-steps"
+	case errors.Is(err, ErrEgressDenied):
+		return "egress"
 	case errors.Is(err, ErrInvalidArgs):
 		return "invalid-args"
 	case errors.Is(err, ErrUnauthorized):

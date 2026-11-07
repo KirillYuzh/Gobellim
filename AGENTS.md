@@ -61,6 +61,12 @@ layer and must match the current code; if code and `DESIGN.md` disagree, fix bot
   not. Do not pass an unresolved handle to the caller, do not restore a handle
   the run did not mint, and do not make restoration the default: a model that
   types `<h3>` must not make the runtime paste a secret into a reply.
+- `TaskResult.Label` is the worst integrity and the highest sensitivity among the
+  non-empty input values, the tool results and the model's own text. The model's
+  text sets the ceiling at `Derived`, and an empty input value never counts.
+  `TaskConfig.Egress` runs once on a completed answer and may refuse it with
+  `ErrEgressDenied`; a refused answer is `TaskFailed` and `Out` is not returned.
+  Do not add a path that returns `Out` before the hook runs.
 - `WithApprovalKey` requires `WithClaimStore` (and `flow.WithSealer` requires
   `flow.WithStore`): a shared signing key with a per-process claim store lets one
   approval execute once per replica. Both `New`s reject that combination.

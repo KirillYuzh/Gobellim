@@ -14,9 +14,11 @@ var (
 	timeType      = reflect.TypeOf(time.Time{})
 )
 
-// redactResult prepares a tool result for the model context. A field tagged
-// sensitivity=secret becomes a handle, a field tagged sensitivity=patterns is
-// masked, and every other value is passed through unchanged.
+// redactResult prepares a tool result for the model context and reports the
+// label the result carries. A field tagged sensitivity=secret becomes a handle, a
+// field tagged sensitivity=patterns is masked, and every other value is passed
+// through unchanged. The label is Untrusted, because a tool result is external
+// data, raised to the highest sensitivity any field declares.
 //
 // Without this, a single read tool would put the same secrets back into the
 // prompt that the input side carefully masked.
@@ -24,19 +26,21 @@ var (
 // Redaction understands structs, slices, arrays, maps and pointers. A type
 // that marshals itself (time.Time, json.Marshaler) is opaque: the runtime
 // cannot inspect its fields, so NewTask rejects a sensitivity tag on one.
-func redactResult(v any, tool string, hs *handleSet) any {
-	if hs == nil {
-		return v
-	}
+func redactResult(v any, tool string, hs *handleSet) (any, Label) {
 	base := Label{
 		Integrity:   Untrusted,
 		Sensitivity: Public,
 		Sources:     []SourceRef{{Kind: "tool", ID: tool}},
 	}
-	return redactValue(reflect.ValueOf(v), base, hs)
+	if hs == nil {
+		return v, base
+	}
+	seen := base
+	out := redactValue(reflect.ValueOf(v), base, hs, &seen)
+	return out, seen
 }
 
-func redactValue(v reflect.Value, base Label, hs *handleSet) any {
+func redactValue(v reflect.Value, base Label, hs *handleSet, seen *Label) any {
 	if !v.IsValid() {
 		return nil
 	}
@@ -67,21 +71,21 @@ func redactValue(v reflect.Value, base Label, hs *handleSet) any {
 			}
 			if sf.Anonymous && !hasExplicitJSONName(sf) {
 				// encoding/json flattens an embedded struct; keep the wire shape.
-				if inner, ok := redactValue(fv, base, hs).(map[string]any); ok {
+				if inner, ok := redactValue(fv, base, hs, seen).(map[string]any); ok {
 					for k, val := range inner {
 						out[k] = val
 					}
 					continue
 				}
 			}
-			out[name] = redactField(fv, base, sf, hs)
+			out[name] = redactField(fv, base, sf, hs, seen)
 		}
 		return out
 	case reflect.Map:
 		out := make(map[string]any, v.Len())
 		iter := v.MapRange()
 		for iter.Next() {
-			out[fmt.Sprint(iter.Key().Interface())] = redactValue(iter.Value(), base, hs)
+			out[fmt.Sprint(iter.Key().Interface())] = redactValue(iter.Value(), base, hs, seen)
 		}
 		return out
 	case reflect.Slice, reflect.Array:
@@ -93,7 +97,7 @@ func redactValue(v reflect.Value, base Label, hs *handleSet) any {
 		}
 		out := make([]any, 0, v.Len())
 		for i := 0; i < v.Len(); i++ {
-			out = append(out, redactValue(v.Index(i), base, hs))
+			out = append(out, redactValue(v.Index(i), base, hs, seen))
 		}
 		return out
 	default:
@@ -101,13 +105,14 @@ func redactValue(v reflect.Value, base Label, hs *handleSet) any {
 	}
 }
 
-func redactField(v reflect.Value, base Label, sf reflect.StructField, hs *handleSet) any {
+func redactField(v reflect.Value, base Label, sf reflect.StructField, hs *handleSet, seen *Label) any {
 	spec, err := parseTag(sf.Tag.Get("gobellim"))
 	if err != nil {
 		spec = tagSpec{}
 	}
 	if spec.hasSensitivity {
 		base.Sensitivity = spec.sensitivity
+		seen.Sensitivity = maxSensitivity(seen.Sensitivity, spec.sensitivity)
 	}
 	switch {
 	case v.Kind() == reflect.String:
@@ -128,7 +133,9 @@ func redactField(v reflect.Value, base Label, sf reflect.StructField, hs *handle
 		}
 		return out
 	}
-	return redactValue(v, base, hs)
+	// A nested struct or slice carries no tag of its own; its fields do, and
+	// redactValue reads them with the updated base.
+	return redactValue(v, base, hs, seen)
 }
 
 func redactString(s string, l Label, hs *handleSet) string {

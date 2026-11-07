@@ -152,3 +152,23 @@ func maxSensitivity(a, b Sensitivity) Sensitivity {
 	}
 	return b
 }
+
+// mergeLabel folds one value's label into an aggregate. Levels only worsen, and
+// every source is kept once, so the aggregate answers "what did this answer see"
+// without inventing a trust level none of the inputs had.
+func mergeLabel(into *Label, l Label) {
+	into.Integrity = worseIntegrity(into.Integrity, l.Integrity)
+	into.Sensitivity = maxSensitivity(into.Sensitivity, l.Sensitivity)
+	for _, s := range l.Sources {
+		into.Sources = appendSource(into.Sources, s)
+	}
+}
+
+func appendSource(list []SourceRef, s SourceRef) []SourceRef {
+	for _, have := range list {
+		if have == s {
+			return list
+		}
+	}
+	return append(list, s)
+}
