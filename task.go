@@ -705,7 +705,7 @@ func (t *Task[In, Out]) decodeOutput(resp Response, hs *handleSet) (Out, error) 
 	if len(content) > t.limits.MaxOutputBytes {
 		return out, fmt.Errorf("%w: output is %d bytes, cap is %d", ErrBudget, len(content), t.limits.MaxOutputBytes)
 	}
-	decoded, err := decodeStrict[Out]([]byte(content), t.limits.MaxOutputBytes)
+	decoded, err := decodeAnswer[Out]([]byte(content), t.limits.MaxOutputBytes)
 	if err != nil {
 		return out, err
 	}

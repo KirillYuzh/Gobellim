@@ -505,8 +505,23 @@ func checkRange(name string, got float64, spec tagSpec) error {
 }
 
 // decodeStrict decodes one JSON object into T. It rejects unknown fields,
-// duplicate keys, trailing data, excessive nesting and oversized input.
+// duplicate keys, trailing data, excessive nesting and oversized input. Tool
+// arguments use it: an argument the tool silently ignores is a rule the model
+// believes it followed.
 func decodeStrict[T any](raw []byte, maxBytes int) (T, error) {
+	return decodeObject[T](raw, maxBytes, true)
+}
+
+// decodeAnswer decodes a model answer. An unknown field on the way out is not a
+// security problem, and rejecting the whole answer for one costs a model call
+// and a repair round; the shape that matters, the required fields and the
+// declared constraints, is still checked. Duplicate keys and trailing data stay
+// errors.
+func decodeAnswer[T any](raw []byte, maxBytes int) (T, error) {
+	return decodeObject[T](raw, maxBytes, false)
+}
+
+func decodeObject[T any](raw []byte, maxBytes int, strict bool) (T, error) {
 	var out T
 	if len(raw) == 0 {
 		return out, fmt.Errorf("%w: empty JSON", ErrInvalidArgs)
@@ -521,7 +536,9 @@ func decodeStrict[T any](raw []byte, maxBytes int) (T, error) {
 		return out, err
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
+	if strict {
+		dec.DisallowUnknownFields()
+	}
 	if err := dec.Decode(&out); err != nil {
 		return out, fmt.Errorf("%w: %w", ErrInvalidArgs, err)
 	}
