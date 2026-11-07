@@ -415,6 +415,9 @@ Guaranteed when the integration is correct:
   never `task.completed`;
 - a denial does not fail the run: it is audited as `gate.denied` and counted in
   `TaskResult.Denied`, including a call that never reached the Gate;
+- a completed answer carries `TaskResult.Label`, the weakest integrity and the
+  highest sensitivity of everything the model saw, and `TaskConfig.Egress` can
+  refuse it before it reaches the caller;
 - a panic in a tool handler is not turned into `Deny`. It unwinds through the
   runtime, the run is audited as failed, and your server's `recover` decides what
   happens next.

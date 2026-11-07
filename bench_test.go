@@ -87,7 +87,8 @@ func BenchmarkRedactResult(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := marshalNoEscape(redactResult(res, "orders.read", hs)); err != nil {
+		out, _ := redactResult(res, "orders.read", hs)
+		if _, err := marshalNoEscape(out); err != nil {
 			b.Fatal(err)
 		}
 	}

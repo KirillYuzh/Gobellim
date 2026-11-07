@@ -135,7 +135,7 @@ func TestPrepareInputMasksAndLabels(t *testing.T) {
 		Topic:    "billing",
 		Count:    2,
 	}
-	masked, labels, err := s.prepareInput(in, p, hs)
+	masked, labels, seen, err := s.prepareInput(in, p, hs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,9 +152,12 @@ func TestPrepareInputMasksAndLabels(t *testing.T) {
 	if labels["Body"].Sensitivity != Patterns {
 		t.Fatalf("Body sensitivity = %v, want patterns", labels["Body"].Sensitivity)
 	}
+	if seen.Sensitivity != Patterns {
+		t.Fatalf("input label sensitivity = %v, want patterns", seen.Sensitivity)
+	}
 
 	in.TenantID = "other"
-	if _, _, err := s.prepareInput(in, p, hs); !errors.Is(err, ErrInvalidArgs) {
+	if _, _, _, err := s.prepareInput(in, p, hs); !errors.Is(err, ErrInvalidArgs) {
 		t.Fatalf("principal mismatch err = %v", err)
 	}
 }
@@ -169,7 +172,7 @@ func TestTrustedSecretBecomesTrustedHandle(t *testing.T) {
 	}
 	hs := newHandleSet()
 	p := Principal{UserID: "u-1", Tenant: "acme"}
-	masked, labels, err := s.prepareInput(in{OrderID: "A-1042"}, p, hs)
+	masked, labels, seen, err := s.prepareInput(in{OrderID: "A-1042"}, p, hs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,6 +192,12 @@ func TestTrustedSecretBecomesTrustedHandle(t *testing.T) {
 	}
 	if labels["OrderID"].Integrity != Trusted {
 		t.Fatalf("field integrity = %v, want Trusted", labels["OrderID"].Integrity)
+	}
+	// A trusted secret still marks the answer Secret: the model saw a handle, but
+	// the answer can paste the value back in a resolve field. The answer itself is
+	// never Trusted, because a model wrote it.
+	if seen.Integrity != Derived || seen.Sensitivity != Secret {
+		t.Fatalf("input label = %+v, want derived/secret", seen)
 	}
 }
 
@@ -251,7 +260,8 @@ func FuzzRedactResult(f *testing.F) {
 			B []byte            `gobellim:"sensitivity=secret"`
 		}
 		hs := newHandleSet()
-		body, err := marshalNoEscape(redactResult(res{S: s, M: map[string]string{"k": s}, B: []byte(s)}, "t", hs))
+		redacted, _ := redactResult(res{S: s, M: map[string]string{"k": s}, B: []byte(s)}, "t", hs)
+		body, err := marshalNoEscape(redacted)
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
 		}
