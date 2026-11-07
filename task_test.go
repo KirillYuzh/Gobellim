@@ -337,6 +337,28 @@ func TestInvalidOutputIsRepaired(t *testing.T) {
 	}
 }
 
+// A provider that adds a field to an answer must not cost a repair round. The
+// output is decoded with unknown fields ignored; arguments stay strict.
+func TestUnknownOutputFieldIsIgnored(t *testing.T) {
+	model := testkit.NewFakeModel(
+		testkit.Reply(`{"Category":"billing","Reply":"ok","Confidence":0.9}`),
+	)
+	task := newTriageTask(t, newEngine(t, model, testkit.AllowAll, nil), nil)
+
+	res, err := task.Run(context.Background(), principal(), ticketIn{
+		TenantID: "acme", TicketID: "t-1", Body: "hello",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != gobellim.TaskCompleted || res.Output.Category != "billing" {
+		t.Fatalf("status = %v category = %q", res.Status, res.Output.Category)
+	}
+	if res.ModelCalls != 1 {
+		t.Fatalf("a stray output field cost %d model calls, want 1", res.ModelCalls)
+	}
+}
+
 func TestInputPIIIsMaskedBeforeTheModel(t *testing.T) {
 	model := testkit.NewFakeModel(testkit.Reply(validTriage))
 	task := newTriageTask(t, newEngine(t, model, testkit.AllowAll, nil), nil)
