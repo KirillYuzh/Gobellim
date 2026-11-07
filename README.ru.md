@@ -335,18 +335,23 @@ digest ровно тех аргументов, которые исполняют
 ```go
 wf, err := flow.FromEngine[RefundCase](engine, "refund")
 wf.Step("propose", proposeRefund).
-	Approve("manager", flow.ApproveConfig[RefundCase]{
+	ApproveTask("manager", task, flow.ApproveTaskConfig[RefundCase]{
+		Pending:          func(s RefundCase) *gobellim.PendingAction { return &s.Pending },
 		Permission:       "refund:approve", // что можно апруверу
 		ActionPermission: "orders:refund",  // перепроверяется у requester'а
 		FourEyes:         true,
-		Card:             refundCard,
-		Target:           refundResource,
 	}).
-	Step("execute", executeRefund) // вызывает task.ExecuteApproved с flow.ApproverFrom(ctx)
+	Step("notify", notifyCustomer)
 
 res, _ := wf.Run(ctx, requester, RefundCase{}) // res.Status == flow.Suspended
 out, err := wf.Resume(ctx, approver, *res.Suspension, res.State, flow.VerdictApprove)
 ```
+
+`ApproveTask` берёт карточку, digest и разрешённые аргументы из
+`PendingAction` и сам добавляет шаг с `ExecuteApproved`. Копировать аргументы в
+состояние руками не нужно, поэтому апрувер решает ровно про то действие, которое
+исполнится. Если после одобрения нужно больше одного вызова, остаётся `Approve`
+со своим шагом и `flow.ApproverFrom(ctx)`.
 
 `Resume` проверяет tenant, expiry, версию flow, id шага, право апрувера,
 four-eyes, право requester'а, пересчитанный digest и атомарный claim. Отказ тоже

@@ -332,18 +332,23 @@ instead of executing it twice.
 ```go
 wf, err := flow.FromEngine[RefundCase](engine, "refund")
 wf.Step("propose", proposeRefund).
-	Approve("manager", flow.ApproveConfig[RefundCase]{
+	ApproveTask("manager", task, flow.ApproveTaskConfig[RefundCase]{
+		Pending:          func(s RefundCase) *gobellim.PendingAction { return &s.Pending },
 		Permission:       "refund:approve", // what the approver may do
 		ActionPermission: "orders:refund",  // re-checked for the requester
 		FourEyes:         true,
-		Card:             refundCard,
-		Target:           refundResource,
 	}).
-	Step("execute", executeRefund) // calls task.ExecuteApproved with flow.ApproverFrom(ctx)
+	Step("notify", notifyCustomer)
 
 res, _ := wf.Run(ctx, requester, RefundCase{}) // res.Status == flow.Suspended
 out, err := wf.Resume(ctx, approver, *res.Suspension, res.State, flow.VerdictApprove)
 ```
+
+`ApproveTask` takes the card, the digest and the resolved arguments from the
+`PendingAction`, and adds the step that calls `ExecuteApproved` with the
+authenticated approver. Nothing is copied into the state by hand, so the
+approver decides on the action that will run. Use `Approve` plus your own step
+when the post-approval work is more than that one call.
 
 `Resume` checks the tenant, expiry, workflow version, step id, the approver's
 permission, four-eyes, the requester's action permission, the recomputed digest

@@ -186,32 +186,28 @@ type RefundArgs struct {
 `flow` — для нескольких шагов и границ одобрения.
 
 ```go
-wf, err := flow.FromEngine[RefundCase](engine, "refund",
-	flow.WithTTL(24*time.Hour), // опционально; по умолчанию 1h из Engine
-)
+wf, err := flow.FromEngine[RefundCase](engine, "refund")
 
 wf.Step("prepare", prepareRefund).
-	Approve("manager", flow.ApproveConfig[RefundCase]{
+	ApproveTask("manager", task, flow.ApproveTaskConfig[RefundCase]{
+		Pending:          func(s RefundCase) *gobellim.PendingAction { return &s.Pending },
 		Permission:       "refund:approve",
 		ActionPermission: "orders:refund",
 		FourEyes:         true,
-		Card:             refundApprovalCard, // строит карточку из состояния
-		Target:           refundResource,     // tenant binding для ACL апрувера
 	}).
-	Step("execute", func(ctx context.Context, p gobellim.Principal, s *RefundCase) error {
-		// p — requester: после Resume шаги идут от его имени.
-		approver, ok := flow.ApproverFrom(ctx)
-		if !ok {
-			return errors.New("no approver")
-		}
-		_, _, err := task.ExecuteApproved(ctx, p, approver, &s.Pending)
-		return err
-	})
+	Step("notify", notifyCustomer)
 
 res, err := wf.Run(ctx, requester, RefundCase{})
 // res.Status == flow.Suspended. Сохраните res.Suspension и res.State.
 out, err := wf.Resume(ctx, approver, *res.Suspension, res.State, flow.VerdictApprove)
 ```
+
+`ApproveTask` берёт карточку, digest и уже разрешённые аргументы из
+`PendingAction` и сам добавляет шаг, который вызывает `ExecuteApproved` с
+аутентифицированным апрувером. Ничего не копируется в состояние руками, поэтому
+апрувер решает про то действие, которое исполнится. Когда после одобрения нужно
+больше, чем один вызов, остаётся `Approve` со своим шагом (`ApproverFrom(ctx)`
+даёт апрувера).
 
 `flow.FromEngine` берёт authorizer, audit, claim store, часы и ключ подписи у
 `Engine`: flow проверяет апрувера тем же адаптером, что и Gate.
