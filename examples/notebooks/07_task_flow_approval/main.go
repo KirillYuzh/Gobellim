@@ -34,10 +34,9 @@ type refundResult struct {
 }
 
 // refundCase is the workflow state the application stores between Run and
-// Resume. PendingAction is plain JSON, so it travels with the state.
+// Resume. PendingAction is plain JSON, so it travels with the state, and the
+// arguments stay in it instead of being copied into another field.
 type refundCase struct {
-	OrderID  string
-	Cents    int
 	Pending  gobellim.PendingAction
 	Executed bool
 }
@@ -99,36 +98,23 @@ Engine. Двух разных authorizer в одном use-case быть не д
 		if res.Pending == nil {
 			return errors.New("the task did not escalate")
 		}
-		// Карточка задачи становится карточкой шага: апрувер видит ровно то,
-		// что Gate остановил.
+		// The escalated action is the whole decision: card, digest and resolved
+		// arguments travel with it.
 		s.Pending = *res.Pending
-		s.OrderID = "A-1042"
-		s.Cents = 4900
 		return nil
 	})
-	wf.Approve("manager", flow.ApproveConfig[refundCase]{
+	// ApproveTask builds the card from the PendingAction and adds the step that
+	// executes it after the approval. Nothing is copied by hand, so the approver
+	// sees exactly the action ExecuteApproved will run.
+	wf.ApproveTask("manager", task, flow.ApproveTaskConfig[refundCase]{
+		Pending:          func(s refundCase) *gobellim.PendingAction { return &s.Pending },
 		Permission:       "refund:approve",
 		ActionPermission: "orders:refund",
 		FourEyes:         true,
-		Card: func(_ context.Context, _ gobellim.Principal, s refundCase) (gobellim.ApprovalCard, error) {
-			return s.Pending.Card, nil
+		OnResult: func(_ context.Context, s *refundCase, _ any, rec gobellim.ToolCallRecord) error {
+			s.Executed = rec.Executed
+			return nil
 		},
-		Target: func(_ context.Context, p gobellim.Principal, s refundCase) (gobellim.Resource, error) {
-			return gobellim.Resource{Type: "order", ID: s.OrderID, TenantID: p.Tenant}, nil
-		},
-	})
-	wf.Step("execute", func(ctx context.Context, p gobellim.Principal, s *refundCase) error {
-		// p — requester: шаги после Resume идут от его имени.
-		approvedBy, ok := flow.ApproverFrom(ctx)
-		if !ok {
-			return errors.New("no approver in the context")
-		}
-		_, rec, err := task.ExecuteApproved(ctx, p, approvedBy, &s.Pending)
-		if err != nil {
-			return err
-		}
-		s.Executed = rec.Executed
-		return nil
 	})
 
 	notebook.Cell("2. Run → Suspended", `
@@ -144,7 +130,7 @@ PendingAction, Flow остановился на границе «manager», tool
 	notebook.Result("card: %s / %s / digest=%s",
 		res.Suspension.Card.Tool, res.Suspension.Card.Operation, res.Suspension.Card.Digest)
 	notebook.Result("task digest == card digest: %v",
-		res.Suspension.Card.ActionDigest() == res.State.Pending.Digest)
+		res.Suspension.Card.Digest == res.State.Pending.Digest)
 
 	notebook.Cell("3. Resume → Done, действие выполнено один раз", `
 Апрувер m-1 отличается от requester u-1, права проверены, Suspension подписан,

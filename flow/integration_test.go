@@ -201,3 +201,85 @@ func TestFromEngineRequiresAnEngine(t *testing.T) {
 		t.Fatalf("err = %v, want ErrInvalidConfig", err)
 	}
 }
+
+// ApproveTask removes the manual wiring: the card, the digest and the resolved
+// arguments stay the ones the Gate produced, so the state does not copy them.
+func TestApproveTaskWiresTheEscalatedAction(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	wf, err := flow.FromEngine[caseState](h.engine, "refund")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf.Step("propose", func(ctx context.Context, p gb.Principal, s *caseState) error {
+		res, err := h.task.Run(ctx, p, refundIn{TenantID: p.Tenant, OrderID: "A-1042"})
+		if err != nil {
+			return err
+		}
+		if res.Pending == nil {
+			return errors.New("the task did not escalate")
+		}
+		s.Pending = *res.Pending
+		return nil
+	})
+	var got any
+	wf.ApproveTask("manager", h.task, flow.ApproveTaskConfig[caseState]{
+		Pending:          func(s caseState) *gb.PendingAction { return &s.Pending },
+		Permission:       "refund:approve",
+		ActionPermission: "orders:refund",
+		FourEyes:         true,
+		OnResult: func(_ context.Context, s *caseState, out any, rec gb.ToolCallRecord) error {
+			got = out
+			s.Executed = rec.Executed
+			return nil
+		},
+	})
+	if err := wf.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := wf.Run(ctx, requester(), caseState{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != flow.Suspended || res.Suspension == nil {
+		t.Fatalf("status = %v, want Suspended", res.Status)
+	}
+	if h.runs.Load() != 0 {
+		t.Fatalf("the tool ran %d times before approval", h.runs.Load())
+	}
+	// The approver decides on the action the Task escalated, not a copy.
+	if res.Suspension.Card.Digest != res.State.Pending.Digest {
+		t.Fatal("the card and the pending action disagree")
+	}
+
+	out, err := wf.Resume(ctx, approver(), *res.Suspension, res.State, flow.VerdictApprove)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Status != flow.Done || !out.State.Executed {
+		t.Fatalf("status = %v executed = %v", out.Status, out.State.Executed)
+	}
+	if h.runs.Load() != 1 {
+		t.Fatalf("the tool ran %d times, want 1", h.runs.Load())
+	}
+	if got == nil {
+		t.Fatal("OnResult did not receive the tool output")
+	}
+
+	if _, err := wf.Resume(ctx, approver(), *res.Suspension, res.State, flow.VerdictApprove); !errors.Is(err, flow.ErrReplay) {
+		t.Fatalf("second resume err = %v, want ErrReplay", err)
+	}
+}
+
+func TestApproveTaskRequiresPending(t *testing.T) {
+	h := newHarness(t)
+	wf, err := flow.FromEngine[caseState](h.engine, "refund")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf.ApproveTask("manager", h.task, flow.ApproveTaskConfig[caseState]{Permission: "refund:approve"})
+	if !errors.Is(wf.Err(), gb.ErrInvalidConfig) {
+		t.Fatalf("err = %v, want ErrInvalidConfig", wf.Err())
+	}
+}
